@@ -39,10 +39,10 @@
 
 ## 7. Test
 - [x] Google search
-- [ ] Google search → open first result
-- [ ] Wikipedia question
-- [ ] Fill a form
-- [ ] Sort by price
+- [x] Google search → open first result
+- [x] Wikipedia question
+- [x] Fill a form
+- [x] Sort by price
 
 ## Later
 - [ ] Tabs, hover, screenshots, safety prompts

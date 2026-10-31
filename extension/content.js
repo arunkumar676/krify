@@ -68,7 +68,9 @@ if (!window.__krify) {
       const lines = [];
       let id = 0;
       for (const el of document.querySelectorAll(SELECTOR)) {
-        if (!isVisible(el) || el.disabled) continue;
+        // Some sites (e.g. Amazon's "Sort by") hide the real <select> under a custom button.
+        const visible = isVisible(el) || (el.tagName === "SELECT" && el.parentElement && isVisible(el.parentElement));
+        if (!visible || el.disabled) continue;
         const text = describe(el);
         if (/"\s*"/.test(text) && !/input|textarea|select/.test(text)) continue; // skip unlabeled
         id += 1;

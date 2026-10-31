@@ -1,12 +1,15 @@
 """The agent loop: ask the AI → run the operation in the browser → show it the new page → repeat."""
 
 import json
+import logging
 import re
 
 from app.agent.prompt import SYSTEM_PROMPT
 from app.agent.tools import TOOLS
 from app.config import MAX_STEPS
 from app.llm.groq_client import ask_ai
+
+log = logging.getLogger("krify")
 
 READ_OPS = {"get_page_info", "get_elements", "read_text"}
 OLD_PAGE = "\n[older page view removed to save space]"
@@ -17,13 +20,18 @@ def clean_text_reply(text):
 
     Returns (kind, message) where kind is "done" or "ask".
     """
-    match = re.search(r"\b(done|ask_user)\s*\(\s*(\{.*\})\s*\)", text or "", re.DOTALL)
-    if match:
+    text = (text or "").strip()
+    # Forms seen: done({"summary": ...}), ask_user({"question": ...}), or a bare {"summary": ...}
+    match = re.search(r"\b(?:done|ask_user)\s*\(\s*(\{.*\})\s*\)", text, re.DOTALL)
+    candidate = match.group(1) if match else text
+    if candidate.startswith("{"):
         try:
-            args = json.loads(match.group(2))
-            if match.group(1) == "ask_user":
-                return "ask", args.get("question", text)
-            return "done", args.get("summary", text)
+            args = json.loads(candidate)
+            if isinstance(args, dict):
+                if "question" in args:
+                    return "ask", str(args["question"])
+                if "summary" in args:
+                    return "done", str(args["summary"])
         except json.JSONDecodeError:
             pass
     return "done", text or "Done."
@@ -51,7 +59,12 @@ class Agent:
 
     def __init__(self, browser, ui):
         self.browser = browser  # async (name, args) -> str, raises on failure
-        self.ui = ui  # async (type, text) -> None
+
+        async def ui_and_log(kind, text):
+            log.info("[%s] %s", kind, text)
+            await ui(kind, text)
+
+        self.ui = ui_and_log  # async (type, text) -> None
         self.messages = [{"role": "system", "content": SYSTEM_PROMPT}]
         self.page_views = []  # (message, text_before_page_view) – trimmed later to save tokens
         self.stopped = False
@@ -79,6 +92,7 @@ class Agent:
 
     async def run(self, task):
         self.stopped = False
+        self.recent_actions = []
         self.add_with_page({"role": "user"}, task, await self.page_view())
 
         for _ in range(MAX_STEPS):
@@ -130,6 +144,12 @@ class Agent:
                 else:
                     await self.ui("step", describe(name, args))
                     result = await self.safe_run(name, args)
+                    self.recent_actions = (self.recent_actions + [name])[-4:]
+                    if self.recent_actions == ["scroll"] * 4:
+                        result = (
+                            f"{result}\nNote: you have scrolled 4 times in a row without progress. "
+                            "Stop scrolling: look for another element that does the job, or call ask_user."
+                        )
                     # Show the AI the page after every action, so it can check the result.
                     self.add_with_page(tool_msg, str(result), await self.page_view())
 

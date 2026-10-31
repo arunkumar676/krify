@@ -13,11 +13,20 @@ let ws = null;
 
 // ---------- step log ----------
 
+// Escape HTML, then turn **text** into bold. Nothing else from the AI becomes HTML.
+function formatText(text) {
+  const escaped = String(text)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+  return escaped.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+}
+
 function addEntry(kind, text) {
   logEl.querySelector(".hint")?.remove();
   const el = document.createElement("div");
   el.className = `entry ${kind}`;
-  el.textContent = text;
+  el.innerHTML = formatText(text);
   logEl.append(el);
   logEl.scrollTop = logEl.scrollHeight;
 }
