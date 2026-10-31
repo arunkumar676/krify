@@ -33,6 +33,11 @@ h2 { font-size: 12px; color: #666; margin: 10px 0 4px; font-weight: 600; }
 .entry.done { background: #e6f6ea; color: #14532d; }
 .entry.ask { background: #fff6dd; color: #6b4e00; }
 .entry.error, .entry.stopped { background: #fdeaea; color: #8a1c1c; }
+.entry.confirm { background: #fff3e0; border: 2px solid #f0a020; color: #5a3a00; display: flex; flex-direction: column; gap: 6px; }
+.entry.confirm.allowed { border-color: #1a8a3a; }
+.entry.confirm.blocked { border-color: #c93c3c; }
+.entry.confirm button.allow { background: #1a8a3a; color: #fff; border-color: #1a8a3a; font-weight: 600; }
+.entry.confirm button.block { background: #fff; color: #c93c3c; border-color: #c93c3c; font-weight: 600; }
 
 /* task box */
 .composer { display: flex; flex-direction: column; gap: 6px; }
@@ -46,6 +51,8 @@ textarea {
 textarea:focus { outline: 2px solid #5b5bd6; outline-offset: -1px; }
 .row { display: flex; gap: 6px; align-items: center; }
 .spacer { flex: 1; }
+.model-row { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #444; }
+.model-row select { flex: 1; font: inherit; padding: 4px 6px; border: 1px solid #c9ccd4; border-radius: 6px; background: #fff; }
 .switch { display: flex; align-items: center; gap: 4px; font-size: 12px; color: #444; cursor: pointer; user-select: none; }
 
 button {

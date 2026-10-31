@@ -44,5 +44,15 @@
 - [x] Fill a form
 - [x] Sort by price
 
+## 8. Extras
+- [x] Visible cursor (on/off switch)
+- [x] Safety prompts: Allow / Block before risky actions
+- [x] Model picker + auto-switch when a free limit runs out
+- [x] Stop works instantly
+- [x] Fewer tokens per task
+
 ## Later
-- [ ] Tabs, hover, screenshots, safety prompts
+- [ ] Tabs
+- [ ] Hover
+- [ ] Screenshots
+- [ ] More AI providers (Gemini, Cerebras, OpenRouter)

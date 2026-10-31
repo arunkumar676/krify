@@ -3,7 +3,7 @@
 
 if (!window.__krify) {
   const MAX_ELEMENTS = 150;
-  const MAX_TEXT = 8000;
+  const MAX_TEXT = 4000; // keep AI requests small (free token limits)
 
   const SELECTOR = [
     "a[href]", "button", "input:not([type=hidden])", "textarea", "select", "summary",
@@ -11,7 +11,7 @@ if (!window.__krify) {
     "[role=option]", "[role=switch]", "[contenteditable=true]", "[onclick]",
   ].join(",");
 
-  const clean = (s, max = 80) => {
+  const clean = (s, max = 60) => {
     s = (s || "").replace(/\s+/g, " ").trim();
     return s.length > max ? s.slice(0, max) + "…" : s;
   };
@@ -42,7 +42,7 @@ if (!window.__krify) {
     const label = labelOf(el);
     if (tag === "select") {
       const current = el.options[el.selectedIndex]?.text || "";
-      const options = [...el.options].slice(0, 15).map((o) => clean(o.text, 40)).join(", ");
+      const options = [...el.options].slice(0, 12).map((o) => clean(o.text, 30)).join(", ");
       return `select "${label}" = "${clean(current, 40)}" (options: ${options})`;
     }
     if (tag === "input" || tag === "textarea") {

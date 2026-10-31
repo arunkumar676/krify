@@ -18,11 +18,11 @@ def _tool(name, description, properties=None, required=None):
 
 ELEMENT = {"type": "integer", "description": "Element number from the page list, e.g. 7 for [7]"}
 
+# The page (URL, title, numbered elements) is sent automatically after every action,
+# so there are no "look at the page" tools – that saves tokens and wasted steps.
 TOOLS = [
     # See the page
-    _tool("get_page_info", "Get the current page URL and title."),
-    _tool("get_elements", "List the visible buttons, links, inputs and dropdowns, each with a number."),
-    _tool("read_text", "Read the main text of the current page."),
+    _tool("read_text", "Read the page's text (articles, prices, answers). Elements are already given to you."),
     # Navigate
     _tool(
         "open_url",

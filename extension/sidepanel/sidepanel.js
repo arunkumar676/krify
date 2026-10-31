@@ -56,6 +56,9 @@ function connect() {
   ws.onmessage = async (event) => {
     const msg = JSON.parse(event.data);
     switch (msg.type) {
+      case "models":
+        fillModels(msg.models);
+        break;
       case "run": // the agent wants a browser operation
         try {
           const value = await runOperation(msg.name, msg.args);
@@ -63,6 +66,9 @@ function connect() {
         } catch (err) {
           send({ type: "result", id: msg.id, ok: false, error: err.message });
         }
+        break;
+      case "confirm":
+        showConfirm(msg.id, msg.text);
         break;
       case "step":
         addEntry("step", msg.text);
@@ -77,6 +83,8 @@ function connect() {
         taskInput.focus();
         break;
       case "stopped":
+        // Any open Allow / Block question no longer matters.
+        logEl.querySelectorAll(".entry.confirm .row").forEach((row) => row.remove());
         addEntry("stopped", "⛔ Stopped.");
         setBusy(false);
         break;
@@ -86,6 +94,38 @@ function connect() {
         break;
     }
   };
+}
+
+// Risky action: ask the user before Krify does it.
+function showConfirm(id, text) {
+  logEl.querySelector(".hint")?.remove();
+  const box = document.createElement("div");
+  box.className = "entry confirm";
+
+  const title = document.createElement("div");
+  title.innerHTML = `<strong>⚠️ Krify wants to:</strong>`;
+  const what = document.createElement("div");
+  what.textContent = text;
+  const buttons = document.createElement("div");
+  buttons.className = "row";
+  const allow = document.createElement("button");
+  allow.className = "allow";
+  allow.textContent = "✅ Allow";
+  const block = document.createElement("button");
+  block.className = "block";
+  block.textContent = "⛔ Block";
+  buttons.append(allow, block);
+  box.append(title, what, buttons);
+  logEl.append(box);
+  logEl.scrollTop = logEl.scrollHeight;
+
+  const answer = (ok) => {
+    send({ type: "confirm_result", id, allow: ok });
+    buttons.remove();
+    box.classList.add(ok ? "allowed" : "blocked");
+  };
+  allow.onclick = () => answer(true);
+  block.onclick = () => answer(false);
 }
 
 function send(msg) {
@@ -100,8 +140,28 @@ function start() {
   addEntry("user", text);
   taskInput.value = "";
   setBusy(true);
-  send({ type: "task", text });
+  send({ type: "task", text, model: modelSelect.value });
 }
+
+// ---------- model picker (list comes from the server, choice is remembered) ----------
+
+const modelSelect = $("modelSelect");
+
+async function fillModels(models) {
+  const { model: saved } = await chrome.storage.local.get("model");
+  modelSelect.innerHTML = "";
+  for (const m of models) {
+    const option = document.createElement("option");
+    option.value = m.id;
+    option.textContent = m.label;
+    modelSelect.append(option);
+  }
+  if (models.some((m) => m.id === saved)) modelSelect.value = saved;
+}
+
+modelSelect.addEventListener("change", () => {
+  chrome.storage.local.set({ model: modelSelect.value });
+});
 
 startBtn.onclick = start;
 stopBtn.onclick = () => send({ type: "stop" });
