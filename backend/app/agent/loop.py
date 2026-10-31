@@ -14,6 +14,16 @@ log = logging.getLogger("krify")
 
 READ_OPS = {"get_page_info", "get_elements", "read_text"}
 OLD_PAGE = "\n[older page view removed to save space]"
+OLD_SCREEN = "[older screen text removed to save space – use your notes]"
+
+# Stuck detector: these always count as progress; clicks/keys count only if the page changed.
+PROGRESS_OPS = {"read_text", "note", "type", "select_option", "open_url", "new_tab"}
+IDLE_LIMIT = 5
+STUCK_NOTE = (
+    "\nWarning: the last 5 steps made no progress (only scrolling, switching or clicking without "
+    "the page changing). Stop wandering: read_text to see what's on screen, try a different "
+    "element, or call ask_user."
+)
 
 
 def clean_text_reply(text):
@@ -61,7 +71,7 @@ def describe(name, args):
         case "reload": return "🔄 Reload"
         case "wait": return f"⏳ Wait {args.get('seconds')}s"
         case "get_page_info" | "get_elements": return "👀 Look at the page"
-        case "read_text": return "📖 Read the page"
+        case "read_text": return "📖 Read the whole page" if args.get("scope") == "page" else "📖 Read the screen"
         case _: return f"{name} {args}"
 
 
@@ -82,12 +92,32 @@ class Agent:
         self.messages = [{"role": "system", "content": SYSTEM_PROMPT}]
         self.page_views = []  # (message, text_before_page_view) – trimmed later to save tokens
         self.last_page = None
+        self.screen_reads = []  # read_text results – only the newest is kept in full
         self.tokens = 0
 
     def reset(self):
         self.messages = self.messages[:1]
         self.page_views = []
         self.last_page = None
+        self.screen_reads = []
+
+    def add_screen_read(self, message, text):
+        """Keep only the newest screen text in full. Facts worth keeping go into notes,
+        which stay in the chat (as the note calls themselves)."""
+        for old in self.screen_reads:
+            old["content"] = OLD_SCREEN
+        message["content"] = text
+        self.messages.append(message)
+        self.screen_reads = [message]
+
+    def check_progress(self, name, page_changed):
+        """Stuck detector: count steps that don't move the task forward."""
+        progress = name in PROGRESS_OPS or (name in ("click", "press_key", "go_back") and page_changed)
+        self.idle_steps = 0 if progress else self.idle_steps + 1
+        if self.idle_steps >= IDLE_LIMIT:
+            self.idle_steps = 0
+            return STUCK_NOTE
+        return ""
 
     def close_open_calls(self):
         """After Stop, answer any tool calls left open, so the next request is valid."""
@@ -133,7 +163,7 @@ class Agent:
         await self.ui(kind, text)
 
     async def run(self, task, model):
-        self.recent_actions = []
+        self.idle_steps = 0
         self.tokens = 0
         nudged = False
         self.add_with_page({"role": "user"}, task, await self.page_view())
@@ -185,12 +215,19 @@ class Agent:
                     self.messages.append({**tool_msg, "content": "Question shown. The user's answer comes next."})
                     await self.finish("ask", args.get("question", "Can you tell me more?"))
                     finished = True
+                elif name == "note":
+                    await self.ui("step", f"📝 {args.get('text', '')}")
+                    self.messages.append({**tool_msg, "content": "Saved."})
+                    self.check_progress(name, False)
                 elif name in READ_OPS:
                     await self.ui("step", describe(name, args))
                     result = await self.safe_run(name, args)
+                    self.check_progress(name, False)
                     if name == "get_elements":
                         self.elements = str(result)
                         self.add_with_page(tool_msg, "Elements:", result)
+                    elif name == "read_text":
+                        self.add_screen_read(tool_msg, f"{result}\n(Save facts you'll need later with note.)")
                     else:
                         self.messages.append({**tool_msg, "content": str(result)})
                 else:
@@ -211,14 +248,10 @@ class Agent:
                     if name == "type":
                         self.last_typed_line = safety.element_line(self.elements, args.get("element"))
                     result = await self.safe_run(name, args)
-                    self.recent_actions = (self.recent_actions + [name])[-4:]
-                    if self.recent_actions == ["scroll"] * 4:
-                        result = (
-                            f"{result}\nNote: you have scrolled 4 times in a row without progress. "
-                            "Stop scrolling: look for another element that does the job, or call ask_user."
-                        )
                     # Show the AI the page after every action, so it can check the result.
-                    self.add_with_page(tool_msg, str(result), await self.page_view())
+                    page = await self.page_view()
+                    result = f"{result}{self.check_progress(name, page != self.last_page)}"
+                    self.add_with_page(tool_msg, result, page)
 
             if finished:
                 return

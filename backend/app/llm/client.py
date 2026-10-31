@@ -1,5 +1,5 @@
 """Talks to the AI providers. Retries broken replies, and switches model when one is out of
-free quota or unavailable."""
+free quota or unavailable. Prefers waiting a little for a strong model over using a backup one."""
 
 import asyncio
 import logging
@@ -15,16 +15,14 @@ from app.config import MODELS, PROVIDERS, model_name, provider_of
 log = logging.getLogger("krify")
 
 _clients = {
-    p: AsyncOpenAI(base_url=cfg["base_url"], api_key=os.environ[cfg["key"]], timeout=45, max_retries=0)
+    p: AsyncOpenAI(base_url=cfg["base_url"], api_key=os.environ[cfg["key"]], timeout=20, max_retries=0)
     for p, cfg in PROVIDERS.items()
     if os.getenv(cfg["key"])
 }
 _blocked_until = {}  # model -> time when it can be tried again
 
-
-def _label(model):
-    return f"{PROVIDERS[provider_of(model)]['name']} {MODELS[model]['label']}"
-
+MAX_WAIT_FOR_STRONG = 60  # seconds: wait this long for a strong model before using a backup one
+BROKEN_REPLY_CODES = {"tool_use_failed", "output_parse_failed"}
 
 # Gemini attaches a "thought signature" to each tool call and refuses a chat whose earlier tool
 # calls lack one (e.g. calls made by a Groq model before a switch). Google documents this
@@ -32,13 +30,18 @@ def _label(model):
 GEMINI_PLACEHOLDER = {"google": {"thought_signature": "skip_thought_signature_validator"}}
 
 
+def _label(model):
+    return f"{PROVIDERS[provider_of(model)]['name']} {MODELS[model]['label']}"
+
+
 def _retry_seconds(err):
     """How long the provider asks us to wait. Groq sends a retry-after header; Gemini puts
-    'retryDelay': '20s' (or 'retry in 20s') in the error text. Unknown = 60s."""
+    'retryDelay': '20s' (or 'retry in 20s') in the error. Unknown = 60s."""
     header = err.response.headers.get("retry-after")
     if header:
         return float(header)
-    match = re.search(r"retry(?:Delay[\"']?\s*:\s*[\"']?| in )(\d+(?:\.\d+)?)\s*s", str(err), re.IGNORECASE)
+    text = f"{err} {err.body}"
+    match = re.search(r"retry(?:Delay[\"']?\s*:\s*[\"']?| in )(\d+(?:\.\d+)?)\s*s", text, re.IGNORECASE)
     return float(match.group(1)) if match else 60.0
 
 
@@ -60,49 +63,80 @@ def _for_provider(messages, provider):
     return out
 
 
+def _blocked_for(model):
+    return _blocked_until.get(model, 0) - time.time()
+
+
+async def _try_model(model, messages, tools, on_note):
+    """One model, with in-place retries. Returns (message, tokens) or None (model now blocked)."""
+    provider = provider_of(model)
+    chat = _for_provider(messages, provider)
+    for attempt in range(3):
+        try:
+            response = await _clients[provider].chat.completions.create(
+                model=model_name(model), messages=chat, tools=tools, tool_choice="auto", **MODELS[model]["extra"]
+            )
+            usage = response.usage
+            return response.choices[0].message, (usage.total_tokens if usage else 0) or 0
+        except openai.RateLimitError as err:
+            wait = _retry_seconds(err)
+            if wait <= 20 and attempt < 2:  # short per-minute limit: just wait
+                if on_note:
+                    await on_note(f"⏳ Busy, waiting {wait:.0f}s…")
+                await asyncio.sleep(wait)
+                continue
+            _blocked_until[model] = time.time() + wait
+            reason = "limit reached"
+        except openai.BadRequestError as err:
+            # Some models now and then produce a malformed tool call; asking again usually fixes it.
+            if getattr(err, "code", None) in BROKEN_REPLY_CODES and attempt < 2:
+                log.info("%s sent a broken reply, asking again", model)
+                continue
+            log.warning("%s rejected the request: %s", model, str(err.body)[:300])
+            _blocked_until[model] = time.time() + 30
+            reason = "had a problem"
+        except (openai.APITimeoutError, openai.APIConnectionError, openai.InternalServerError,
+                openai.PermissionDeniedError, openai.NotFoundError) as err:
+            log.warning("%s unavailable: %s", model, str(err)[:200])
+            _blocked_until[model] = time.time() + 120  # busy/down: skip it for 2 minutes
+            reason = "is busy"
+        if on_note:
+            await on_note(f"🔁 {_label(model)} {reason} – switching model")
+        return None
+    return None
+
+
 async def ask_ai(messages, tools, preferred, on_note=None):
-    """Return (message, model_used, tokens_used). Tries the preferred model first, then the others."""
-    order = [preferred] + [m for m in MODELS if m != preferred]
+    """Return (message, model_used, tokens_used).
 
-    for model in order:
-        if _blocked_until.get(model, 0) > time.time():
-            continue
-        provider = provider_of(model)
-        client = _clients[provider]
-        chat = _for_provider(messages, provider)
-        for attempt in range(3):
-            try:
-                response = await client.chat.completions.create(
-                    model=model_name(model), messages=chat, tools=tools, tool_choice="auto",
-                    **MODELS[model]["extra"],
-                )
-                usage = response.usage
-                return response.choices[0].message, model, (usage.total_tokens if usage else 0) or 0
-            except openai.RateLimitError as err:
-                wait = _retry_seconds(err)
-                if wait <= 30 and attempt < 2:  # per-minute limit: wait for the better model
-                    if on_note:
-                        await on_note(f"⏳ Busy, waiting {wait:.0f}s…")
-                    await asyncio.sleep(wait)
-                    continue
-                _blocked_until[model] = time.time() + wait  # daily limit: park it, use the next model
-                reason = "limit reached"
-            except openai.BadRequestError as err:
-                # Some models now and then produce a malformed tool call; asking again usually fixes it.
-                broken = "tool_use_failed" in str(err) or "output_parse_failed" in str(err)
-                if broken and attempt < 2:
-                    continue
-                log.warning("%s rejected the request: %s", model, str(err.body)[:300])
-                reason = "had a problem"
-            except (openai.APITimeoutError, openai.APIConnectionError, openai.InternalServerError,
-                    openai.PermissionDeniedError, openai.NotFoundError) as err:
-                log.warning("%s unavailable: %s", model, str(err)[:200])
-                _blocked_until[model] = time.time() + 120  # busy/down: skip it for 2 minutes
-                reason = "is busy"
+    Order: the model you picked, then strong models. If all strong models are busy for less than
+    a minute, wait for one. Backup models are used only when the strong ones are out for longer.
+    """
+    strong = [m for m in MODELS if MODELS[m]["tier"] == "strong"]
+    backup = [m for m in MODELS if MODELS[m]["tier"] == "backup"]
+    first = [preferred] + [m for m in strong if m != preferred]
+
+    for _ in range(5):
+        for model in first:
+            if _blocked_for(model) <= 0:
+                result = await _try_model(model, messages, tools, on_note)
+                if result:
+                    return result[0], model, result[1]
+
+        soonest = min((_blocked_for(m) for m in strong), default=None)
+        if soonest is not None and 0 < soonest <= MAX_WAIT_FOR_STRONG:
             if on_note:
-                await on_note(f"🔁 {_label(model)} {reason} – switching model")
-            break
+                await on_note(f"⏳ Strong models busy, waiting {soonest:.0f}s…")
+            await asyncio.sleep(soonest)
+            continue
 
-    soonest = min((_blocked_until.get(m, 0) for m in order), default=0) - time.time()
+        for model in backup:
+            if model != preferred and _blocked_for(model) <= 0:
+                result = await _try_model(model, messages, tools, on_note)
+                if result:
+                    return result[0], model, result[1]
+        break
+
+    soonest = min((_blocked_for(m) for m in MODELS), default=60)
     minutes = max(1, round(soonest / 60))
     raise RuntimeError(f"All free models are busy or at their limit. Try again in about {minutes} minute(s).")

@@ -18,18 +18,19 @@ PROVIDERS = {
     "openrouter": {"name": "OpenRouter", "base_url": "https://openrouter.ai/api/v1", "key": "OPENROUTER_API_KEY"},
 }
 
-# Models Krify can use, in auto-switch order (best first, small free allowances last).
-# Each has its own free limit; when one runs out Krify moves to the next.
+# Models Krify can use, in auto-switch order. Each has its own free limit.
+# "strong" models handle long tasks well; "backup" models are used only when every strong model
+# is out for a while (they tend to wander on long tasks).
 # "extra" = model-specific settings (less thinking = fewer tokens).
 _ALL_MODELS = {
-    "groq:openai/gpt-oss-120b": {"label": "GPT-OSS 120B (smartest)", "extra": {"reasoning_effort": "low"}},
-    "gemini:gemini-3.8-flash": {"label": "Gemini 3.8 Flash", "extra": {"reasoning_effort": "low"}},
-    "gemini:gemini-3.5-flash": {"label": "Gemini 3.5 Flash", "extra": {"reasoning_effort": "none"}},
-    "groq:qwen/qwen3.8-27b": {"label": "Qwen 3.8 27B", "extra": {"reasoning_effort": "none"}},
-    "groq:openai/gpt-oss-20b": {"label": "GPT-OSS 20B (fastest)", "extra": {"reasoning_effort": "low"}},
-    "gemini:gemini-flash-lite-latest": {"label": "Gemini Flash Lite", "extra": {}},
-    "openrouter:nvidia/nemotron-3-ultra-550b-a55b:free": {"label": "Nemotron Ultra", "extra": {}},
-    "openrouter:nvidia/nemotron-3.5-super-vl:free": {"label": "Nemotron Super", "extra": {}},
+    "groq:openai/gpt-oss-120b": {"label": "GPT-OSS 120B (smartest)", "tier": "strong", "extra": {"reasoning_effort": "low"}},
+    "gemini:gemini-3.8-flash": {"label": "Gemini 3.8 Flash", "tier": "strong", "extra": {"reasoning_effort": "low"}},
+    "gemini:gemini-3.5-flash": {"label": "Gemini 3.5 Flash", "tier": "strong", "extra": {"reasoning_effort": "none"}},
+    "openrouter:nvidia/nemotron-3-ultra-550b-a55b:free": {"label": "Nemotron Ultra", "tier": "strong", "extra": {}},
+    "groq:qwen/qwen3.8-27b": {"label": "Qwen 3.8 27B (backup)", "tier": "backup", "extra": {"reasoning_effort": "none"}},
+    "groq:openai/gpt-oss-20b": {"label": "GPT-OSS 20B (backup)", "tier": "backup", "extra": {"reasoning_effort": "low"}},
+    "gemini:gemini-flash-lite-latest": {"label": "Gemini Flash Lite (backup)", "tier": "backup", "extra": {}},
+    "openrouter:nvidia/nemotron-3.5-super-vl:free": {"label": "Nemotron Super (backup)", "tier": "backup", "extra": {}},
 }
 
 

@@ -2,8 +2,9 @@
 // Injected on demand; safe to inject more than once.
 
 if (!window.__krify) {
-  const MAX_ELEMENTS = 150;
+  const MAX_ELEMENTS = 100; // visible-on-screen only; fewer = smaller AI requests
   const MAX_TEXT = 4000; // keep AI requests small (free token limits)
+  const MAX_SCREEN_TEXT = 3000;
 
   const SELECTOR = [
     "a[href]", "button", "input:not([type=hidden])", "textarea", "select", "summary",
@@ -11,7 +12,7 @@ if (!window.__krify) {
     "[role=option]", "[role=switch]", "[contenteditable=true]", "[onclick]",
   ].join(",");
 
-  const clean = (s, max = 60) => {
+  const clean = (s, max = 50) => {
     s = (s || "").replace(/\s+/g, " ").trim();
     return s.length > max ? s.slice(0, max) + "…" : s;
   };
@@ -83,9 +84,43 @@ if (!window.__krify) {
       return lines.join("\n") || "(no interactive elements visible)";
     },
 
-    readText() {
-      const text = (document.body?.innerText || "").replace(/\n{3,}/g, "\n\n").trim();
-      return text.length > MAX_TEXT ? text.slice(0, MAX_TEXT) + "\n…(text cut, page is long)" : text;
+    // "screen" (default): only the text visible right now, line by line – prices, answers, etc.
+    // "page": the whole page from the top (long, cut at MAX_TEXT).
+    readText(scope = "screen") {
+      if (scope === "page") {
+        const text = (document.body?.innerText || "").replace(/\n{3,}/g, "\n\n").trim();
+        return text.length > MAX_TEXT ? text.slice(0, MAX_TEXT) + "\n…(text cut, page is long)" : text;
+      }
+      const lines = [];
+      let line = "";
+      let lineTop = null;
+      let size = 0;
+      const range = document.createRange();
+      const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+      while (walker.nextNode()) {
+        const node = walker.currentNode;
+        const text = node.nodeValue.replace(/\s+/g, " ").trim();
+        const parent = node.parentElement;
+        if (!text || !parent || /^(SCRIPT|STYLE|NOSCRIPT|TEMPLATE)$/.test(parent.tagName)) continue;
+        range.selectNodeContents(node);
+        const r = range.getBoundingClientRect();
+        if (r.width < 1 || r.height < 1 || r.bottom < 0 || r.top > innerHeight) continue; // off screen
+        if (parent.checkVisibility && !parent.checkVisibility({ opacityProperty: true, visibilityProperty: true })) continue;
+        // Text at about the same height belongs to the same visual line.
+        if (lineTop !== null && Math.abs(r.top - lineTop) > 6) {
+          lines.push(line);
+          line = "";
+        }
+        line = line ? `${line} ${text}` : text;
+        lineTop = r.top;
+        size += text.length + 1;
+        if (size > MAX_SCREEN_TEXT) {
+          line += " …(more on screen not shown)";
+          break;
+        }
+      }
+      if (line) lines.push(line);
+      return lines.join("\n") || "(no text visible on screen – try scrolling)";
     },
 
     // ---------- actions ----------

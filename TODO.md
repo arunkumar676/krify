@@ -54,6 +54,9 @@
 - [x] More AI providers: Gemini + OpenRouter (Cerebras skipped: needs a card)
 - [x] Glowing border while working
 
+## Test next session
+- [ ] iPhone 16 128GB price compare (amazon.in vs flipkart.com) – prices must match the sites, look for 📝 notes
+
 ## Later
 - [x] Tabs
 - [ ] Hover

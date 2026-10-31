@@ -22,7 +22,17 @@ ELEMENT = {"type": "integer", "description": "Element number from the page list,
 # so there are no "look at the page" tools – that saves tokens and wasted steps.
 TOOLS = [
     # See the page
-    _tool("read_text", "Read the page's text (articles, prices, answers). Elements are already given to you."),
+    _tool(
+        "read_text",
+        "Read the text visible on screen (prices, facts, answers). Scroll, then read again to see more.",
+        {
+            "scope": {
+                "type": "string",
+                "enum": ["screen", "page"],
+                "description": "screen (default) = what's visible now; page = whole page from the top (long)",
+            }
+        },
+    ),
     # Navigate
     _tool(
         "open_url",
@@ -78,6 +88,13 @@ TOOLS = [
         "Wait for the page to finish loading.",
         {"seconds": {"type": "number", "description": "1 to 10 seconds"}},
         ["seconds"],
+    ),
+    _tool(
+        "note",
+        "Save a fact you'll need later (e.g. 'Amazon: iPhone 16 128GB ₹69,900'). Old screen text is removed "
+        "to save space, but notes are kept.",
+        {"text": {"type": "string"}},
+        ["text"],
     ),
     _tool(
         "done",

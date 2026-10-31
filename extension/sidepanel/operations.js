@@ -168,7 +168,7 @@ export const operations = {
     return info;
   },
   get_elements: () => callInPage("getElements"),
-  read_text: () => callInPage("readText"),
+  read_text: ({ scope = "screen" } = {}) => callInPage("readText", [scope]),
 
   // Navigate
   async open_url({ url }) {
