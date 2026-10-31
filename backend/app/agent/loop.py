@@ -8,7 +8,7 @@ from app.agent import safety
 from app.agent.prompt import SYSTEM_PROMPT
 from app.agent.tools import TOOLS
 from app.config import MAX_STEPS
-from app.llm.groq_client import ask_ai
+from app.llm.client import ask_ai
 
 log = logging.getLogger("krify")
 

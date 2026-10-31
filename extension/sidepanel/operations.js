@@ -33,21 +33,35 @@ async function showCursor() {
   return showCursor;
 }
 
+// True while the agent runs a task (set by the side panel). Drives the glowing page border.
+let working = false;
+
+export async function setWorking(on) {
+  working = on;
+  try {
+    await callInPage("setWorking", [on && (await showCursor())]);
+  } catch {
+    // Protected page (e.g. chrome://): nothing to show.
+  }
+}
+
 // Inject content.js (if needed), then call one of its functions inside the page.
 async function callInPage(fnName, args = []) {
   const tab = await webTab();
   await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["content.js"] });
+  const animate = await showCursor();
   const [result] = await chrome.scripting.executeScript({
     target: { tabId: tab.id },
-    func: async (name, a, animate) => {
+    func: async (name, a, animate, glow) => {
       try {
         window.__krify.animate = animate;
+        if (name !== "setWorking") window.__krify.setWorking(glow); // re-show after page loads
         return { ok: true, value: await window.__krify[name](...a) };
       } catch (err) {
         return { ok: false, error: err.message };
       }
     },
-    args: [fnName, args, await showCursor()],
+    args: [fnName, args, animate, working && animate],
   });
   const res = result?.result;
   if (!res) throw new Error("No answer from the page. Try again.");

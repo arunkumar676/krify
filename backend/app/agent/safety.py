@@ -33,11 +33,17 @@ def element_line(elements, element_id):
     return match.group(1) if match else ""
 
 
+def visible_text(line):
+    """Only the quoted labels/values of an element line, not its type.
+    'input submit "Go" (value: "Go")' -> 'Go Go' (so a search box's "submit" type isn't risky)."""
+    return " ".join(re.findall(r'"([^"]*)"', line))
+
+
 def check(name, args, elements, last_typed_line=""):
     """Return a short reason if the action needs the user's OK, else None."""
     if name in ("click", "select_option"):
         line = element_line(elements, args.get("element"))
-        text = f"{line} {args.get('option', '')}"
+        text = f"{visible_text(line)} {args.get('option', '')}"
         for category, words in RISKY_WORDS.items():
             if _find(words, text):
                 return category

@@ -93,6 +93,13 @@ if (!window.__krify) {
 
     animate: false,
 
+    // Glowing border around the page while a task runs.
+    setWorking(on) {
+      if (!on && !view.root) return "ok"; // nothing shown, nothing to hide
+      overlay().querySelector(".working").classList.toggle("on", on);
+      return "ok";
+    },
+
     async click(id) {
       const el = find(id);
       await bringIntoView(el);
@@ -231,7 +238,39 @@ if (!window.__krify) {
         @keyframes ripple { to { transform: scale(3.5); opacity: 0; } }
         .key { position: fixed; padding: 3px 9px; border-radius: 6px; background: #1d1f24; color: #fff;
           font: 600 12px/18px system-ui, sans-serif; transition: opacity .4s; }
+
+        /* "Krify is working" border: flowing colors on the edges + soft inner glow */
+        .working { position: fixed; inset: 0; opacity: 0; transition: opacity .5s; }
+        .working.on { opacity: 1; }
+        .working .glow-in { position: absolute; inset: 0;
+          box-shadow: inset 0 0 28px 6px rgba(124,92,255,.45), inset 0 0 60px 10px rgba(62,168,255,.18);
+          animation: breathe 2.4s ease-in-out infinite alternate; }
+        .working .edge { position: absolute;
+          background: linear-gradient(90deg, #7c5cff, #3ea8ff, #ff5ca8, #7c5cff, #3ea8ff);
+          background-size: 300% 100%; animation: flow 3s linear infinite;
+          filter: drop-shadow(0 0 6px rgba(124,92,255,.9)); }
+        .working .top, .working .bottom { left: 0; right: 0; height: 4px; }
+        .working .top { top: 0; }
+        .working .bottom { bottom: 0; animation-direction: reverse; }
+        .working .left, .working .right { top: 0; bottom: 0; width: 4px;
+          background: linear-gradient(180deg, #7c5cff, #3ea8ff, #ff5ca8, #7c5cff, #3ea8ff);
+          background-size: 100% 300%; animation-name: flow-v; }
+        .working .left { left: 0; animation-direction: reverse; }
+        .working .right { right: 0; }
+        .working .badge { position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
+          padding: 4px 14px; border-radius: 999px; color: #fff; font: 600 12px/20px system-ui, sans-serif;
+          background: linear-gradient(90deg, #7c5cff, #3ea8ff, #ff5ca8, #7c5cff); background-size: 300% 100%;
+          animation: flow 3s linear infinite; box-shadow: 0 4px 18px rgba(124,92,255,.5); }
+        @keyframes flow { to { background-position: 300% 0; } }
+        @keyframes flow-v { to { background-position: 0 300%; } }
+        @keyframes breathe { from { opacity: .55; } to { opacity: 1; } }
       </style>
+      <div class="working">
+        <div class="glow-in"></div>
+        <div class="edge top"></div><div class="edge right"></div>
+        <div class="edge bottom"></div><div class="edge left"></div>
+        <div class="badge">✨ Krify is working…</div>
+      </div>
       <div class="cursor">
         <svg viewBox="0 0 24 24"><path d="M4 2l15 9.5-6.6 1.4L16 20.5l-2.8 1.3-3.6-7.6L4 18.5z"
           fill="#5b5bd6" stroke="#fff" stroke-width="1.6" stroke-linejoin="round"/></svg>

@@ -1,4 +1,4 @@
-import { runOperation } from "./operations.js";
+import { runOperation, setWorking } from "./operations.js";
 
 const SERVER_URL = "ws://127.0.0.1:8765/ws";
 
@@ -35,6 +35,7 @@ function setBusy(busy) {
   startBtn.hidden = busy;
   stopBtn.hidden = !busy;
   taskInput.disabled = busy;
+  setWorking(busy); // glowing border on the page while Krify works
 }
 
 function setConnected(on) {

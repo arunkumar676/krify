@@ -18,7 +18,7 @@ import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
 from app.agent.loop import Agent
-from app.config import MODELS, PORT
+from app.config import MODELS, PORT, PROVIDERS, provider_of
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("krify")
@@ -96,7 +96,13 @@ async def websocket_endpoint(ws: WebSocket):
 
     # Tell the side panel which models it can offer.
     await ws.send_json(
-        {"type": "models", "models": [{"id": m, "label": info["label"]} for m, info in MODELS.items()]}
+        {
+            "type": "models",
+            "models": [
+                {"id": m, "label": f"{PROVIDERS[provider_of(m)]['name']} · {info['label']}"}
+                for m, info in MODELS.items()
+            ],
+        }
     )
 
     try:

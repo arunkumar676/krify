@@ -6,13 +6,43 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Free Groq models Krify can use, best first. Each has its own daily limit, so when one runs out
-# Krify switches to the next. "extra" = model-specific settings (less thinking = fewer tokens).
-MODELS = {
-    "openai/gpt-oss-120b": {"label": "GPT-OSS 120B (smartest)", "extra": {"reasoning_effort": "low"}},
-    "qwen/qwen3.8-27b": {"label": "Qwen 3.8 27B", "extra": {"reasoning_effort": "none"}},
-    "openai/gpt-oss-20b": {"label": "GPT-OSS 20B (fastest)", "extra": {"reasoning_effort": "low"}},
+# Free AI providers. All speak the same (OpenAI-style) API, so one client works for all.
+# A provider without a key in .env is skipped.
+PROVIDERS = {
+    "groq": {"name": "Groq", "base_url": "https://api.groq.com/openai/v1", "key": "GROQ_API_KEY"},
+    "gemini": {
+        "name": "Gemini",
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+        "key": "GEMINI_API_KEY",
+    },
+    "openrouter": {"name": "OpenRouter", "base_url": "https://openrouter.ai/api/v1", "key": "OPENROUTER_API_KEY"},
 }
+
+# Models Krify can use, in auto-switch order (best first, small free allowances last).
+# Each has its own free limit; when one runs out Krify moves to the next.
+# "extra" = model-specific settings (less thinking = fewer tokens).
+_ALL_MODELS = {
+    "groq:openai/gpt-oss-120b": {"label": "GPT-OSS 120B (smartest)", "extra": {"reasoning_effort": "low"}},
+    "gemini:gemini-3.8-flash": {"label": "Gemini 3.8 Flash", "extra": {"reasoning_effort": "low"}},
+    "gemini:gemini-3.5-flash": {"label": "Gemini 3.5 Flash", "extra": {"reasoning_effort": "none"}},
+    "groq:qwen/qwen3.8-27b": {"label": "Qwen 3.8 27B", "extra": {"reasoning_effort": "none"}},
+    "groq:openai/gpt-oss-20b": {"label": "GPT-OSS 20B (fastest)", "extra": {"reasoning_effort": "low"}},
+    "gemini:gemini-flash-lite-latest": {"label": "Gemini Flash Lite", "extra": {}},
+    "openrouter:nvidia/nemotron-3-ultra-550b-a55b:free": {"label": "Nemotron Ultra", "extra": {}},
+    "openrouter:nvidia/nemotron-3.5-super-vl:free": {"label": "Nemotron Super", "extra": {}},
+}
+
+
+def provider_of(model_id):
+    return model_id.split(":", 1)[0]
+
+
+def model_name(model_id):
+    """The provider's own name for the model, e.g. 'openai/gpt-oss-120b'."""
+    return model_id.split(":", 1)[1]
+
+
+MODELS = {m: info for m, info in _ALL_MODELS.items() if os.getenv(PROVIDERS[provider_of(m)]["key"])}
 
 MAX_STEPS = int(os.getenv("MAX_STEPS", "25"))  # safety limit per task
 PORT = int(os.getenv("PORT", "8765"))
