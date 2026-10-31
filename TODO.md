@@ -1,0 +1,47 @@
+# TODO
+
+## 0. Setup
+- [ ] Get Groq API key
+- [ ] Install Python + uv
+- [ ] Create `backend/` and `extension/` folders
+
+## 1. Understand natural language
+- [ ] Connect to Groq
+- [ ] Sentence in → operation out
+- [ ] Test: different wordings, vague requests, follow-ups
+
+## 2. See the page
+- [ ] `get_page_info` – URL + title
+- [ ] `get_elements` – numbered buttons, links, inputs
+- [ ] `read_text` – page text
+
+## 3. Navigate
+- [ ] `open_url`
+- [ ] `go_back`
+- [ ] `reload`
+
+## 4. Interact
+- [ ] `click`
+- [ ] `type`
+- [ ] `press_key`
+- [ ] `scroll`
+- [ ] `select_option`
+
+## 5. Control
+- [ ] `wait`
+- [ ] `done`
+- [ ] `ask_user`
+
+## 6. Connect all
+- [ ] Extension ↔ backend
+- [ ] Agent loop
+- [ ] Side panel: task box + step log
+
+## 7. Test
+- [ ] Google search → open first result
+- [ ] Wikipedia question
+- [ ] Fill a form
+- [ ] Sort by price
+
+## Later
+- [ ] Tabs, hover, screenshots, safety prompts
