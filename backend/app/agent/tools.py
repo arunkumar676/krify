@@ -32,6 +32,20 @@ TOOLS = [
     ),
     _tool("go_back", "Go back to the previous page."),
     _tool("reload", "Reload the current page."),
+    # Tabs (numbers come from the [Tabs] list in the page info)
+    _tool(
+        "new_tab",
+        "Open a website in a new tab and switch to it. Use it to keep the current page, e.g. to compare sites.",
+        {"url": {"type": "string", "description": "Full URL"}},
+        ["url"],
+    ),
+    _tool("switch_tab", "Switch to another tab.", {"tab": {"type": "integer", "description": "Tab number"}}, ["tab"]),
+    _tool(
+        "close_tab",
+        "Close a tab you opened.",
+        {"tab": {"type": "integer", "description": "Tab number"}},
+        ["tab"],
+    ),
     # Interact
     _tool("click", "Click an element.", {"element": ELEMENT}, ["element"]),
     _tool(

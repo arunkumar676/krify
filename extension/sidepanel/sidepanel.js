@@ -1,4 +1,4 @@
-import { runOperation, setWorking } from "./operations.js";
+import { beginTask, resetTabs, runOperation, setWorking } from "./operations.js";
 
 const SERVER_URL = "ws://127.0.0.1:8765/ws";
 
@@ -135,11 +135,12 @@ function send(msg) {
 
 // ---------- task box ----------
 
-function start() {
+async function start() {
   const text = taskInput.value.trim();
   if (!text || startBtn.disabled) return;
   addEntry("user", text);
   taskInput.value = "";
+  await beginTask(); // Krify works in the tab you're looking at
   setBusy(true);
   send({ type: "task", text, model: modelSelect.value });
 }
@@ -174,6 +175,7 @@ taskInput.addEventListener("keydown", (e) => {
 });
 $("newBtn").onclick = () => {
   send({ type: "reset" });
+  resetTabs();
   logEl.innerHTML = '<div class="hint">New chat. What should I do?</div>';
 };
 

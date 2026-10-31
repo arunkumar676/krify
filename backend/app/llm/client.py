@@ -4,6 +4,7 @@ free quota or unavailable."""
 import asyncio
 import logging
 import os
+import re
 import time
 
 import openai
@@ -29,6 +30,16 @@ def _label(model):
 # calls lack one (e.g. calls made by a Groq model before a switch). Google documents this
 # placeholder for calls that came from other models.
 GEMINI_PLACEHOLDER = {"google": {"thought_signature": "skip_thought_signature_validator"}}
+
+
+def _retry_seconds(err):
+    """How long the provider asks us to wait. Groq sends a retry-after header; Gemini puts
+    'retryDelay': '20s' (or 'retry in 20s') in the error text. Unknown = 60s."""
+    header = err.response.headers.get("retry-after")
+    if header:
+        return float(header)
+    match = re.search(r"retry(?:Delay[\"']?\s*:\s*[\"']?| in )(\d+(?:\.\d+)?)\s*s", str(err), re.IGNORECASE)
+    return float(match.group(1)) if match else 60.0
 
 
 def _for_provider(messages, provider):
@@ -68,8 +79,8 @@ async def ask_ai(messages, tools, preferred, on_note=None):
                 usage = response.usage
                 return response.choices[0].message, model, (usage.total_tokens if usage else 0) or 0
             except openai.RateLimitError as err:
-                wait = float(err.response.headers.get("retry-after") or 60)
-                if wait <= 15 and attempt < 2:  # per-minute limit: a short pause is enough
+                wait = _retry_seconds(err)
+                if wait <= 30 and attempt < 2:  # per-minute limit: wait for the better model
                     if on_note:
                         await on_note(f"⏳ Busy, waiting {wait:.0f}s…")
                     await asyncio.sleep(wait)

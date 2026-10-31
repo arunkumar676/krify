@@ -19,7 +19,8 @@ OLD_PAGE = "\n[older page view removed to save space]"
 def clean_text_reply(text):
     """The model sometimes writes done({...}) / ask_user({...}) as plain text. Pull out the message.
 
-    Returns (kind, message) where kind is "done" or "ask".
+    Returns (kind, message, clear) where kind is "done" or "ask", and clear is False when the text
+    is just free text (could be nonsense from a weak model).
     """
     text = (text or "").strip()
     # Forms seen: done({"summary": ...}), ask_user({"question": ...}), or a bare {"summary": ...}
@@ -30,12 +31,18 @@ def clean_text_reply(text):
             args = json.loads(candidate)
             if isinstance(args, dict):
                 if "question" in args:
-                    return "ask", str(args["question"])
+                    return "ask", str(args["question"]), True
                 if "summary" in args:
-                    return "done", str(args["summary"])
+                    return "done", str(args["summary"]), True
         except json.JSONDecodeError:
             pass
-    return "done", text or "Done."
+    return "done", text or "Done.", False
+
+
+NUDGE = (
+    "Reminder: reply by calling one operation. If the task is finished, call done with a summary; "
+    "if you need something from the user, call ask_user."
+)
 
 
 def describe(name, args):
@@ -47,6 +54,9 @@ def describe(name, args):
         case "press_key": return f"⌨️ Press {args.get('key')}"
         case "scroll": return f"↕️ Scroll {args.get('direction')}"
         case "select_option": return f"📋 Choose \"{args.get('option')}\" in [{args.get('element')}]"
+        case "new_tab": return f"🗂️ New tab: {args.get('url')}"
+        case "switch_tab": return f"🗂️ Switch to tab {args.get('tab')}"
+        case "close_tab": return f"🗂️ Close tab {args.get('tab')}"
         case "go_back": return "⬅️ Go back"
         case "reload": return "🔄 Reload"
         case "wait": return f"⏳ Wait {args.get('seconds')}s"
@@ -97,7 +107,8 @@ class Agent:
             info = await self.browser("get_page_info", {})
             elements = await self.browser("get_elements", {})
             self.elements = elements
-            return f"[Current page] {info.get('title')} – {info.get('url')}\n{elements}"
+            tabs = f"[Tabs] {info['tabs']}\n" if info.get("tabs") else ""
+            return f"{tabs}[Current page] {info.get('title')} – {info.get('url')}\n{elements}"
         except Exception as err:
             return f"[Current page] (can't read it: {err})"
 
@@ -124,6 +135,7 @@ class Agent:
     async def run(self, task, model):
         self.recent_actions = []
         self.tokens = 0
+        nudged = False
         self.add_with_page({"role": "user"}, task, await self.page_view())
 
         for _ in range(MAX_STEPS):
@@ -134,10 +146,17 @@ class Agent:
             if used_model != model:
                 model = used_model  # keep using the model that still has free quota
 
-            if not reply.tool_calls:  # plain text: treat as the final answer (or a question)
+            if not reply.tool_calls:  # plain text instead of an operation
                 self.messages.append({"role": "assistant", "content": reply.content or ""})
-                await self.finish(*clean_text_reply(reply.content))
+                kind, text, clear = clean_text_reply(reply.content)
+                if not clear and not nudged:
+                    # Might be nonsense (weak models do this). Ask once for a proper operation.
+                    self.messages.append({"role": "user", "content": NUDGE})
+                    nudged = True
+                    continue
+                await self.finish(kind, text)
                 return
+            nudged = False
 
             self.messages.append(
                 {

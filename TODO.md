@@ -55,7 +55,7 @@
 - [x] Glowing border while working
 
 ## Later
-- [ ] Tabs
+- [x] Tabs
 - [ ] Hover
 - [ ] Screenshots
 - [ ] Task history
