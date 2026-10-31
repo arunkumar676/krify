@@ -1,0 +1,16 @@
+# Secrets (never upload)
+.env
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Logs
+*.log
+logs/
+
+# Editor / OS
+.vscode/
+.DS_Store
+Thumbs.db

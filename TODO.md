@@ -1,9 +1,9 @@
 # TODO
 
 ## 0. Setup
-- [ ] Get Groq API key
-- [ ] Install Python + uv
-- [ ] Create `backend/` and `extension/` folders
+- [x] Get Groq API key
+- [x] Install Python + uv
+- [x] Create `backend/` and `extension/` folders
 
 ## 1. Understand natural language
 - [ ] Connect to Groq
