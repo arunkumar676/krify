@@ -6,18 +6,35 @@
   <link rel="stylesheet" href="sidepanel.css" />
 </head>
 <body>
-  <h1>Krify</h1>
+  <header>
+    <h1>Krify</h1>
+    <span id="status" class="status off">● Not connected</span>
+  </header>
 
-  <section>
+  <div id="log" class="log">
+    <div class="hint">Tell me what to do, e.g. <em>"search google for wireless mouse"</em></div>
+  </div>
+
+  <div class="composer">
+    <textarea id="taskInput" rows="2" placeholder="What should I do?"></textarea>
+    <div class="row">
+      <button id="newBtn" class="small" title="Forget this chat">New chat</button>
+      <span class="spacer"></span>
+      <button id="stopBtn" class="stop" hidden>■ Stop</button>
+      <button id="startBtn" class="start">▶ Start</button>
+    </div>
+  </div>
+
+  <details class="manual">
+    <summary>Manual test buttons</summary>
+
     <h2>See the page</h2>
     <div class="buttons">
       <button data-op="get_page_info">Page info</button>
       <button data-op="get_elements">Elements</button>
       <button data-op="read_text">Read text</button>
     </div>
-  </section>
 
-  <section>
     <h2>Do something</h2>
     <div class="fields">
       <label>Element # <input id="elementInput" type="number" min="1" placeholder="7" /></label>
@@ -32,9 +49,7 @@
       <button data-op="scroll" data-direction="up">Scroll up</button>
       <button data-op="scroll" data-direction="down">Scroll down</button>
     </div>
-  </section>
 
-  <section>
     <h2>Navigate</h2>
     <div class="buttons">
       <button data-op="open_url">Open URL (from Text)</button>
@@ -42,9 +57,9 @@
       <button data-op="reload">Reload</button>
       <button data-op="wait" data-seconds="2">Wait 2s</button>
     </div>
-  </section>
 
-  <pre id="output">Open any website, then click a button above.</pre>
+    <pre id="output">Results of manual tests show here.</pre>
+  </details>
 
   <script type="module" src="sidepanel.js"></script>
 </body>

@@ -28,16 +28,17 @@
 - [x] `select_option`
 
 ## 5. Control
-- [ ] `wait`
-- [ ] `done`
-- [ ] `ask_user`
+- [x] `wait`
+- [x] `done`
+- [x] `ask_user`
 
 ## 6. Connect all
-- [ ] Extension ↔ backend
-- [ ] Agent loop
-- [ ] Side panel: task box + step log
+- [x] Extension ↔ backend
+- [x] Agent loop
+- [x] Side panel: task box + step log
 
 ## 7. Test
+- [x] Google search
 - [ ] Google search → open first result
 - [ ] Wikipedia question
 - [ ] Fill a form

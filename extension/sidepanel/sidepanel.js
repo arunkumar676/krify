@@ -1,18 +1,119 @@
 import { runOperation } from "./operations.js";
 
-const output = document.getElementById("output");
-const elementInput = document.getElementById("elementInput");
-const textInput = document.getElementById("textInput");
+const SERVER_URL = "ws://127.0.0.1:8765/ws";
 
-function show(value, isError = false) {
-  output.textContent = typeof value === "string" ? value : JSON.stringify(value, null, 2);
-  output.classList.toggle("error", isError);
+const $ = (id) => document.getElementById(id);
+const logEl = $("log");
+const taskInput = $("taskInput");
+const startBtn = $("startBtn");
+const stopBtn = $("stopBtn");
+const statusEl = $("status");
+
+let ws = null;
+
+// ---------- step log ----------
+
+function addEntry(kind, text) {
+  logEl.querySelector(".hint")?.remove();
+  const el = document.createElement("div");
+  el.className = `entry ${kind}`;
+  el.textContent = text;
+  logEl.append(el);
+  logEl.scrollTop = logEl.scrollHeight;
 }
 
-// Build the operation's inputs from the test boxes and the button's data-* values.
+function setBusy(busy) {
+  startBtn.hidden = busy;
+  stopBtn.hidden = !busy;
+  taskInput.disabled = busy;
+}
+
+function setConnected(on) {
+  statusEl.textContent = on ? "● Connected" : "● Not connected – start the server";
+  statusEl.className = `status ${on ? "on" : "off"}`;
+  startBtn.disabled = !on;
+}
+
+// ---------- connection to the Python server ----------
+
+function connect() {
+  ws = new WebSocket(SERVER_URL);
+  ws.onopen = () => setConnected(true);
+  ws.onclose = () => {
+    setConnected(false);
+    setBusy(false);
+    setTimeout(connect, 3000); // keep trying
+  };
+  ws.onmessage = async (event) => {
+    const msg = JSON.parse(event.data);
+    switch (msg.type) {
+      case "run": // the agent wants a browser operation
+        try {
+          const value = await runOperation(msg.name, msg.args);
+          send({ type: "result", id: msg.id, ok: true, value });
+        } catch (err) {
+          send({ type: "result", id: msg.id, ok: false, error: err.message });
+        }
+        break;
+      case "step":
+        addEntry("step", msg.text);
+        break;
+      case "done":
+        addEntry("done", `✅ ${msg.text}`);
+        setBusy(false);
+        break;
+      case "ask":
+        addEntry("ask", `❓ ${msg.text}`);
+        setBusy(false);
+        taskInput.focus();
+        break;
+      case "stopped":
+        addEntry("stopped", "⛔ Stopped.");
+        setBusy(false);
+        break;
+      case "error":
+        addEntry("error", `⚠️ ${msg.text}`);
+        setBusy(false);
+        break;
+    }
+  };
+}
+
+function send(msg) {
+  if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
+}
+
+// ---------- task box ----------
+
+function start() {
+  const text = taskInput.value.trim();
+  if (!text || startBtn.disabled) return;
+  addEntry("user", text);
+  taskInput.value = "";
+  setBusy(true);
+  send({ type: "task", text });
+}
+
+startBtn.onclick = start;
+stopBtn.onclick = () => send({ type: "stop" });
+taskInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    start();
+  }
+});
+$("newBtn").onclick = () => {
+  send({ type: "reset" });
+  logEl.innerHTML = '<div class="hint">New chat. What should I do?</div>';
+};
+
+// ---------- manual test buttons ----------
+
+const output = $("output");
+
 function argsFor(btn) {
-  const element = Number(elementInput.value);
-  const text = textInput.value;
+  const element = Number($("elementInput").value);
+  const text = $("textInput").value;
   switch (btn.dataset.op) {
     case "click": return { element };
     case "type": return { element, text };
@@ -27,11 +128,19 @@ function argsFor(btn) {
 
 document.querySelectorAll("button[data-op]").forEach((btn) => {
   btn.addEventListener("click", async () => {
-    show("Working…");
+    output.textContent = "Working…";
+    output.classList.remove("error");
     try {
-      show(await runOperation(btn.dataset.op, argsFor(btn)));
+      const value = await runOperation(btn.dataset.op, argsFor(btn));
+      output.textContent = typeof value === "string" ? value : JSON.stringify(value, null, 2);
     } catch (err) {
-      show(err.message, true);
+      output.textContent = err.message;
+      output.classList.add("error");
     }
   });
 });
+
+// ---------- start ----------
+
+setConnected(false);
+connect();
