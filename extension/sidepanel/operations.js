@@ -27,20 +27,27 @@ async function waitForLoad(tabId) {
   }
 }
 
+// The "Show cursor" switch in the side panel (on unless turned off).
+async function showCursor() {
+  const { showCursor = true } = await chrome.storage.local.get("showCursor");
+  return showCursor;
+}
+
 // Inject content.js (if needed), then call one of its functions inside the page.
 async function callInPage(fnName, args = []) {
   const tab = await webTab();
   await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["content.js"] });
   const [result] = await chrome.scripting.executeScript({
     target: { tabId: tab.id },
-    func: (name, a) => {
+    func: async (name, a, animate) => {
       try {
-        return { ok: true, value: window.__krify[name](...a) };
+        window.__krify.animate = animate;
+        return { ok: true, value: await window.__krify[name](...a) };
       } catch (err) {
         return { ok: false, error: err.message };
       }
     },
-    args: [fnName, args],
+    args: [fnName, args, await showCursor()],
   });
   const res = result?.result;
   if (!res) throw new Error("No answer from the page. Try again.");

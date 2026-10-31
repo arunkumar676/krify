@@ -116,6 +116,16 @@ $("newBtn").onclick = () => {
   logEl.innerHTML = '<div class="hint">New chat. What should I do?</div>';
 };
 
+// ---------- "Show cursor" switch (remembered between sessions) ----------
+
+const cursorToggle = $("cursorToggle");
+chrome.storage.local.get("showCursor").then(({ showCursor = true }) => {
+  cursorToggle.checked = showCursor;
+});
+cursorToggle.addEventListener("change", () => {
+  chrome.storage.local.set({ showCursor: cursorToggle.checked });
+});
+
 // ---------- manual test buttons ----------
 
 const output = $("output");

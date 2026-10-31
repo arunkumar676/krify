@@ -89,10 +89,19 @@ if (!window.__krify) {
     },
 
     // ---------- actions ----------
+    // When `animate` is on, a visible Krify cursor moves, clicks and types like a person.
 
-    click(id) {
+    animate: false,
+
+    async click(id) {
       const el = find(id);
-      el.scrollIntoView({ block: "center", behavior: "instant" });
+      await bringIntoView(el);
+      if (this.animate) {
+        const { x, y } = await moveCursorTo(el);
+        glow(el);
+        ripple(x, y);
+        await sleep(150);
+      }
       const opts = { bubbles: true, cancelable: true, view: window };
       el.dispatchEvent(new PointerEvent("pointerdown", opts));
       el.dispatchEvent(new MouseEvent("mousedown", opts));
@@ -103,26 +112,49 @@ if (!window.__krify) {
       return `Clicked [${id}] ${describe(el)}`;
     },
 
-    type(id, text) {
+    async type(id, text) {
       const el = find(id);
-      el.scrollIntoView({ block: "center", behavior: "instant" });
-      el.focus();
-      if (el.isContentEditable) {
-        el.textContent = text;
-      } else if (el.tagName === "INPUT" || el.tagName === "TEXTAREA") {
-        // Use the native setter so sites built with React/Vue notice the change.
-        const proto = el.tagName === "INPUT" ? HTMLInputElement.prototype : HTMLTextAreaElement.prototype;
-        Object.getOwnPropertyDescriptor(proto, "value").set.call(el, text);
-      } else {
-        throw new Error(`[${id}] is not a text box.`);
+      const isField = el.tagName === "INPUT" || el.tagName === "TEXTAREA";
+      if (!isField && !el.isContentEditable) throw new Error(`[${id}] is not a text box.`);
+      await bringIntoView(el);
+      if (this.animate) {
+        const { x, y } = await moveCursorTo(el);
+        glow(el);
+        ripple(x, y);
       }
-      el.dispatchEvent(new Event("input", { bubbles: true }));
+      el.focus();
+
+      // Use the native setter so sites built with React/Vue notice the change.
+      const setValue = (value) => {
+        if (el.isContentEditable) {
+          el.textContent = value;
+        } else {
+          const proto = el.tagName === "INPUT" ? HTMLInputElement.prototype : HTMLTextAreaElement.prototype;
+          Object.getOwnPropertyDescriptor(proto, "value").set.call(el, value);
+        }
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+      };
+
+      if (this.animate) {
+        setValue("");
+        const delay = Math.min(60, 1500 / Math.max(text.length, 1)); // long text still finishes in ~1.5s
+        for (let i = 1; i <= text.length; i++) {
+          setValue(text.slice(0, i));
+          await sleep(delay);
+        }
+      } else {
+        setValue(text);
+      }
       el.dispatchEvent(new Event("change", { bubbles: true }));
       return `Typed "${text}" into [${id}]`;
     },
 
-    pressKey(key) {
+    async pressKey(key) {
       const target = document.activeElement || document.body;
+      if (this.animate) {
+        showKey(key);
+        await sleep(400);
+      }
       const opts = { key, code: key, bubbles: true, cancelable: true };
       target.dispatchEvent(new KeyboardEvent("keydown", opts));
       target.dispatchEvent(new KeyboardEvent("keyup", opts));
@@ -131,13 +163,14 @@ if (!window.__krify) {
       return `Pressed ${key}`;
     },
 
-    scroll(direction) {
+    async scroll(direction) {
       const before = scrollY;
-      scrollBy({ top: (direction === "up" ? -1 : 1) * innerHeight * 0.8, behavior: "instant" });
+      scrollBy({ top: (direction === "up" ? -1 : 1) * innerHeight * 0.8, behavior: this.animate ? "smooth" : "instant" });
+      if (this.animate) await sleep(600);
       return scrollY === before ? `Can't scroll ${direction} any more` : `Scrolled ${direction}`;
     },
 
-    selectOption(id, option) {
+    async selectOption(id, option) {
       const el = find(id);
       if (el.tagName !== "SELECT") throw new Error(`[${id}] is not a dropdown. Try clicking it instead.`);
       const want = option.trim().toLowerCase();
@@ -145,6 +178,14 @@ if (!window.__krify) {
         [...el.options].find((o) => o.text.trim().toLowerCase() === want) ||
         [...el.options].find((o) => o.text.toLowerCase().includes(want));
       if (!match) throw new Error(`Option "${option}" not found in [${id}].`);
+      if (this.animate) {
+        const target = isVisible(el) ? el : el.parentElement; // hidden <select>: point at its visible wrapper
+        await bringIntoView(target);
+        const { x, y } = await moveCursorTo(target);
+        glow(target);
+        ripple(x, y);
+        await sleep(300);
+      }
       el.value = match.value;
       el.dispatchEvent(new Event("input", { bubbles: true }));
       el.dispatchEvent(new Event("change", { bubbles: true }));
@@ -156,5 +197,97 @@ if (!window.__krify) {
     const el = document.querySelector(`[data-krify-id="${id}"]`);
     if (!el) throw new Error(`Element [${id}] not found. The page may have changed – get the elements again.`);
     return el;
+  }
+
+  // ---------- visible cursor (drawn on the page; the real mouse can't be moved) ----------
+
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const view = { root: null, cursor: null, hideTimer: null };
+
+  async function bringIntoView(el) {
+    const smooth = window.__krify.animate;
+    el.scrollIntoView({ block: "center", behavior: smooth ? "smooth" : "instant" });
+    if (smooth) await sleep(350);
+  }
+
+  // A shadow-DOM layer on top of the page, so page styles can't break it and it never blocks clicks.
+  function overlay() {
+    if (view.root && view.root.host.isConnected) return view.root;
+    const host = document.createElement("krify-overlay");
+    host.style.cssText = "position:fixed;inset:0;pointer-events:none;z-index:2147483647;";
+    const root = host.attachShadow({ mode: "open" });
+    root.innerHTML = `
+      <style>
+        .cursor { position: fixed; left: 0; top: 0; display: flex; align-items: flex-start; gap: 2px;
+          transform: translate(${innerWidth / 2}px, ${innerHeight / 2}px);
+          transition: transform .55s cubic-bezier(.45,.05,.25,1), opacity .3s; opacity: 0; }
+        .cursor svg { width: 26px; height: 26px; filter: drop-shadow(0 2px 3px rgba(0,0,0,.35)); }
+        .tag { margin-top: 18px; padding: 1px 7px; border-radius: 10px; background: #5b5bd6; color: #fff;
+          font: 600 11px/18px system-ui, sans-serif; }
+        .glow { position: fixed; border: 2px solid #5b5bd6; border-radius: 6px;
+          box-shadow: 0 0 0 4px rgba(91,91,214,.25); transition: opacity .5s; }
+        .ripple { position: fixed; width: 18px; height: 18px; margin: -9px 0 0 -9px; border-radius: 50%;
+          background: rgba(91,91,214,.55); animation: ripple .55s ease-out forwards; }
+        @keyframes ripple { to { transform: scale(3.5); opacity: 0; } }
+        .key { position: fixed; padding: 3px 9px; border-radius: 6px; background: #1d1f24; color: #fff;
+          font: 600 12px/18px system-ui, sans-serif; transition: opacity .4s; }
+      </style>
+      <div class="cursor">
+        <svg viewBox="0 0 24 24"><path d="M4 2l15 9.5-6.6 1.4L16 20.5l-2.8 1.3-3.6-7.6L4 18.5z"
+          fill="#5b5bd6" stroke="#fff" stroke-width="1.6" stroke-linejoin="round"/></svg>
+        <span class="tag">Krify</span>
+      </div>`;
+    document.documentElement.append(host);
+    view.root = root;
+    view.cursor = root.querySelector(".cursor");
+    return root;
+  }
+
+  function cursorPosition() {
+    const m = /translate\(([-\d.]+)px,\s*([-\d.]+)px\)/.exec(view.cursor?.style.transform || "");
+    return m ? { x: +m[1], y: +m[2] } : { x: innerWidth / 2, y: innerHeight / 2 };
+  }
+
+  async function moveCursorTo(el) {
+    overlay();
+    const r = el.getBoundingClientRect();
+    const x = r.left + Math.min(r.width / 2, 60);
+    const y = r.top + r.height / 2;
+    view.cursor.style.opacity = "1";
+    view.cursor.style.transform = `translate(${x}px, ${y}px)`;
+    clearTimeout(view.hideTimer);
+    view.hideTimer = setTimeout(() => (view.cursor.style.opacity = "0"), 5000);
+    await sleep(600);
+    return { x, y };
+  }
+
+  function glow(el) {
+    const r = el.getBoundingClientRect();
+    const box = document.createElement("div");
+    box.className = "glow";
+    Object.assign(box.style, { left: `${r.left - 4}px`, top: `${r.top - 4}px`, width: `${r.width + 8}px`, height: `${r.height + 8}px` });
+    overlay().append(box);
+    setTimeout(() => (box.style.opacity = "0"), 900);
+    setTimeout(() => box.remove(), 1500);
+  }
+
+  function ripple(x, y) {
+    const dot = document.createElement("div");
+    dot.className = "ripple";
+    Object.assign(dot.style, { left: `${x}px`, top: `${y}px` });
+    overlay().append(dot);
+    setTimeout(() => dot.remove(), 700);
+  }
+
+  function showKey(key) {
+    const root = overlay();
+    const { x, y } = cursorPosition();
+    const badge = document.createElement("div");
+    badge.className = "key";
+    badge.textContent = key === "Enter" ? "⏎ Enter" : key;
+    Object.assign(badge.style, { left: `${x + 20}px`, top: `${y + 26}px` });
+    root.append(badge);
+    setTimeout(() => (badge.style.opacity = "0"), 700);
+    setTimeout(() => badge.remove(), 1200);
   }
 }

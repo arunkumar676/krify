@@ -46,6 +46,7 @@ textarea {
 textarea:focus { outline: 2px solid #5b5bd6; outline-offset: -1px; }
 .row { display: flex; gap: 6px; align-items: center; }
 .spacer { flex: 1; }
+.switch { display: flex; align-items: center; gap: 4px; font-size: 12px; color: #444; cursor: pointer; user-select: none; }
 
 button {
   font: inherit;
