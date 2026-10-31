@@ -122,10 +122,10 @@ if (!window.__krify) {
     pressKey(key) {
       const target = document.activeElement || document.body;
       const opts = { key, code: key, bubbles: true, cancelable: true };
-      const notBlocked = target.dispatchEvent(new KeyboardEvent("keydown", opts));
+      target.dispatchEvent(new KeyboardEvent("keydown", opts));
       target.dispatchEvent(new KeyboardEvent("keyup", opts));
-      // Fake key events don't submit forms by themselves, so do it ourselves.
-      if (key === "Enter" && notBlocked && target.form) target.form.requestSubmit();
+      // Sites ignore fake key events, so Enter in a form submits the form directly.
+      if (key === "Enter" && target.form) target.form.requestSubmit();
       return `Pressed ${key}`;
     },
 

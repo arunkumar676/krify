@@ -16,16 +16,16 @@
 - [x] `read_text` – page text
 
 ## 3. Navigate
-- [ ] `open_url`
-- [ ] `go_back`
-- [ ] `reload`
+- [x] `open_url`
+- [x] `go_back`
+- [x] `reload`
 
 ## 4. Interact
-- [ ] `click`
-- [ ] `type`
-- [ ] `press_key`
-- [ ] `scroll`
-- [ ] `select_option`
+- [x] `click`
+- [x] `type`
+- [x] `press_key`
+- [x] `scroll`
+- [x] `select_option`
 
 ## 5. Control
 - [ ] `wait`
