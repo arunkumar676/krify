@@ -1,196 +1,165 @@
 # Krify – AI Browser Agent
 
-Krify is an AI-powered browser agent. You tell the browser what to do in plain language, and the AI **plans, executes and verifies** the task for you, with minimal manual effort.
+Krify is an AI agent that works inside your browser. You tell it what to do in plain language, and it **plans, acts and checks its own work**: opening sites, clicking, typing, choosing options, until the task is done.
 
-> **Example:** *"Search for wireless mice under ₹1000 on this site and sort by rating."*
-> Krify reads the page, types the search, applies the filter, sorts the results and confirms the task is done.
+> **Example:** *"search amazon.in for wireless mouse and sort by price low to high"*
+> Krify opens Amazon, types the search, presses Go, picks "Price: Low to High" and confirms the results are sorted.
 
-> **Status:** 🚧 Early development. Currently in the planning and setup phase.
+**Status:** working prototype. It runs on your own PC using free AI models.
+
+---
+
+## Features
+
+- 🗣️ **Plain-language tasks**: casual wording and Hinglish work ("amazon pe sasta mouse dhundo")
+- 🔁 **Plan → act → verify loop**: after every action Krify looks at the page again to check it worked
+- 🖱️ **Browser actions**: open URL, back, reload, click, type, press keys, scroll, choose from dropdowns, read page text
+- ✨ **Animations (optional)**: a visible Krify cursor that moves, clicks and types letter by letter, plus a glowing border while Krify works
+- 🔐 **Safety prompts in code**: Krify always asks **Allow / Block** before risky actions (paying, buying, sending, submitting, deleting, signing in or out, typing passwords or card details), even if your task already said to do it
+- 🧠 **8 free AI models from 3 providers** with a model picker. When one model is busy or out of free quota, Krify **switches to the next automatically**
+- ⛔ **Stop anytime**: ends the task instantly
+- 💬 **Follow-ups**: "now sort it", "open the second one"
+- 📉 **Token-saving**: only the latest page view is sent in full, and unchanged pages aren't sent again
 
 ---
 
 ## How it works
 
-Krify runs a continuous **observe → decide → act → verify** loop:
-
 ```
-User: "Find the cheapest flight from Hyderabad to Delhi next Friday"
-        │
-        ▼
- ┌──────────────┐
- │  1. PLAN     │  AI breaks the goal into steps
- └──────┬───────┘
-        ▼
- ┌──────────────┐
- │  2. OBSERVE  │  Extension reads the page and lists interactive elements
- └──────┬───────┘
-        ▼
- ┌──────────────┐
- │  3. DECIDE   │  AI picks one action: click [12], type "Delhi" into [7], scroll...
- └──────┬───────┘
-        ▼
- ┌──────────────┐
- │  4. ACT      │  Extension performs the action in the real browser
- └──────┬───────┘
-        ▼
- ┌──────────────┐
- │  5. VERIFY   │  Re-observe: did it work? If not, retry or re-plan
- └──────┬───────┘
-        └──── repeat until done ──► final check ──► report to user
+ ┌──────────────────────────┐        WebSocket         ┌───────────────────────────┐
+ │  Chrome extension (JS)   │ ◄──────────────────────► │  Python server (FastAPI)  │
+ │  "hands & eyes"          │                          │  "brain"                  │
+ │                          │  ◄── "click element 12"  │                           │
+ │ • reads page elements    │  ── "done + new page" ─► │ • agent loop              │
+ │ • clicks, types, scrolls │                          │ • safety check            │
+ │ • side panel UI          │                          │ • model auto-switch       │
+ └──────────────────────────┘                          └─────────────┬─────────────┘
+                                                                     ▼
+                                                     Groq · Gemini · OpenRouter (free)
 ```
 
-### Architecture
+Krify "sees" a page as a short numbered list of what you can interact with:
 
 ```
-┌─────────────────────────┐   WebSocket (two-way)   ┌──────────────────────────┐
-│  Browser Extension (JS) │ ◄─────────────────────► │  Python Backend          │
-│  "Hands & Eyes"         │                         │  "Brain"                 │
-│                         │  ◄── "click element 12" │                          │
-│ • Reads page elements   │  ── "done, new page" ─► │ • Agent loop             │
-│ • Clicks, types, scrolls│                         │ • Calls the AI model     │
-│ • Opens/switches tabs   │                         │ • Planning + verification│
-│ • Side panel UI         │                         │ • Safety rules           │
-│ • Live step log + Stop  │                         │ • Logging                │
-└─────────────────────────┘                         └────────────┬─────────────┘
-                                                                 │
-                                                                 ▼
-                                                        ┌─────────────────┐
-                                                        │  Groq AI (LLM)  │
-                                                        └─────────────────┘
+[4] input text "Search Amazon.in" (empty)
+[5] input submit "Go"
+[45] select "Sort by" = "Featured" (options: Featured, Price: Low to High, ...)
 ```
 
-**How the AI "sees" the page:** the extension turns each page into a compact, numbered list of visible interactive elements, for example:
-
-```
-[1]  link    "Home"
-[7]  input   "Search products" (empty)
-[12] button  "Search"
-[15] select  "Sort by" = "Relevance"
-```
-
-The AI responds with an action such as `type(7, "wireless mouse")` or `click(12)`, which the extension carries out.
+The AI answers with one action at a time, e.g. `type(4, "wireless mouse")`, then `click(5)`. The extension performs it and sends back the updated page.
 
 ---
 
-## Planned features
+## Setup
 
-- 🗣️ **Natural-language tasks**: describe what you want; no scripting needed
-- 🧠 **Planning**: complex goals are broken into steps
-- 🖱️ **Browser actions**: click, type, select, scroll, navigate, open and switch tabs
-- ✅ **Verification**: checks each step worked, and retries or re-plans when it doesn't
-- 📋 **Live step log**: see exactly what the agent is doing, in real time
-- ⛔ **Stop anytime**: one click halts the agent
-- 🔐 **Safety confirmations**: asks before payments, sending messages, deleting data or entering passwords
-- 🛡️ **Prompt-injection protection**: page content is treated as data, never as instructions
+**You need:** Windows/macOS/Linux, Python 3.12+, [uv](https://github.com/astral-sh/uv), and Google Chrome or Microsoft Edge.
+
+### 1. Get free API keys
+
+| Provider | Where | Notes |
+|---|---|---|
+| **Groq** (required) | [console.groq.com](https://console.groq.com) → API Keys | Free, no card |
+| **Gemini** (recommended) | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) | Free, no card |
+| **OpenRouter** (optional) | [openrouter.ai](https://openrouter.ai) → Keys | Small free daily allowance |
+
+### 2. Set up the server
+
+```bash
+cd backend
+cp .env.example .env      # then paste your keys into .env
+uv sync
+uv run python -m app.main
+```
+
+Leave it running. You should see `Uvicorn running on http://127.0.0.1:8765`.
+
+> 🔑 **Never commit `.env`.** It's already listed in `.gitignore`.
+
+### 3. Load the extension
+
+1. Open `chrome://extensions` and turn on **Developer mode**.
+2. Click **Load unpacked** and choose the `extension` folder.
+3. Pin **Krify** and click its icon. The side panel opens and shows **● Connected**.
+
+### 4. Try it
+
+Type a task in the side panel and press **▶ Start**, for example:
+
+- `search google for wireless mouse and open the first result`
+- `go to wikipedia and find out when python programming language was created`
+- `go to httpbin.org/forms/post and fill the form: name Arun, size medium, then submit it`
 
 ---
 
 ## Tech stack
 
-The project is built entirely on **free** tools and services.
-
-### Browser extension
 | Part | Choice |
 |---|---|
-| Language | Plain JavaScript |
-| Platform | Chrome / Edge, Manifest V3 |
-| UI | Side panel (HTML + CSS) |
-| Page reading & actions | Content scripts, `chrome.tabs` |
-| Connection to backend | WebSocket |
+| Extension | Plain JavaScript, Chrome Manifest V3, side panel, content scripts |
+| Server | Python 3.12+, FastAPI, Uvicorn, WebSocket |
+| AI access | `openai` Python library (OpenAI-compatible APIs) pointed at Groq, Gemini and OpenRouter |
+| Agent loop | Custom: observe → decide → act → verify |
+| Package manager | uv |
 
-### Backend
-| Part | Choice |
-|---|---|
-| Language | Python 3.12+ |
-| Package manager | [uv](https://github.com/astral-sh/uv) |
-| Web framework | [FastAPI](https://fastapi.tiangolo.com/) |
-| Server | Uvicorn |
-| Real-time link | FastAPI WebSocket |
-| Data validation | Pydantic v2 |
-| Config / secrets | python-dotenv + `.env` |
-| Agent loop | Custom (plan → observe → act → verify) |
-| Logging | Python `logging` to files |
+### Models (auto-switch order)
 
-### AI
-| Part | Choice |
+| Provider | Models |
 |---|---|
-| Provider | [Groq](https://groq.com/) (free tier) |
-| SDK | `groq` Python SDK |
-| Model | A Groq-hosted model with strong tool calling (configurable) |
-| Design | Provider adapter: models and providers can be swapped via config |
-| Perception | Text-first element list; screenshots as an optional fallback |
+| Groq | GPT-OSS 120B, Qwen 3.8 27B, GPT-OSS 20B |
+| Gemini | Gemini 3.8 Flash, Gemini 3.5 Flash, Gemini Flash Lite |
+| OpenRouter | Nemotron Ultra, Nemotron Super |
 
-### Development tools
-| Part | Choice |
-|---|---|
-| Editor | VS Code |
-| Version control | Git + GitHub |
-| Lint / format | Ruff |
-| Tests | pytest (Playwright for end-to-end agent tests later) |
+A provider without a key in `.env` is skipped. Models are configured in [backend/app/config.py](backend/app/config.py).
 
 ---
 
-## Project structure (planned)
+## Project structure
 
 ```
 krify/
 ├── backend/
 │   ├── app/
-│   │   ├── main.py             # FastAPI app + WebSocket endpoint
-│   │   ├── config.py           # Settings loaded from .env
+│   │   ├── main.py          # FastAPI server + WebSocket
+│   │   ├── config.py        # providers, models, settings
 │   │   ├── agent/
-│   │   │   ├── loop.py         # plan → observe → act → verify
-│   │   │   ├── tools.py        # Browser action definitions for the AI
-│   │   │   ├── prompts.py      # System prompts
-│   │   │   └── safety.py       # Confirmations, limits
+│   │   │   ├── loop.py      # the agent loop
+│   │   │   ├── tools.py     # actions the AI can choose
+│   │   │   ├── prompt.py    # instructions for the AI
+│   │   │   └── safety.py    # what counts as risky
 │   │   └── llm/
-│   │       └── groq_client.py  # Groq adapter
-│   ├── .env.example            # Required settings (no real values)
+│   │       └── client.py    # AI providers + auto-switch
+│   ├── .env.example
 │   └── pyproject.toml
-│
 ├── extension/
 │   ├── manifest.json
-│   ├── background.js           # WebSocket link, routes actions
-│   ├── content.js              # Reads the page, performs actions
-│   └── sidepanel/
-│       ├── sidepanel.html
-│       ├── sidepanel.css
-│       └── sidepanel.js
-│
-└── README.md
+│   ├── background.js        # opens the side panel
+│   ├── content.js           # runs in the page: reads it, acts, animations
+│   └── sidepanel/           # chat UI, model picker, Allow/Block
+├── README.md
+└── TODO.md                  # progress checklist
 ```
 
 ---
 
 ## Roadmap
 
-| Phase | Goal | Status |
-|---|---|---|
-| **1. Foundation** | Python WebSocket server, extension connects to it, side panel with task input and step log | ⏳ Next |
-| **2. Eyes** | Page observation: numbered element list and page text | 🔜 Planned |
-| **3. Hands** | Actions: click, type, scroll, select, navigate, tabs | 🔜 Planned |
-| **4. Brain** | Agent loop: plan, act, observe, verify, finish | 🔜 Planned |
-| **5. Safety** | Confirmation prompts, Stop button, step limits, injection defences | 🔜 Planned |
-| **6. Polish** | Task history, smarter retries, multi-tab tasks, accounts, deployment | 🔜 Planned |
+- [x] Basic actions, agent loop, side panel
+- [x] Visible cursor and glowing border
+- [x] Safety prompts (Allow / Block)
+- [x] Multiple free AI providers with auto-switch
+- [ ] Tabs: open, switch, close
+- [ ] Hover menus
+- [ ] Screenshots (let the AI see the page as an image)
+- [ ] Task history
+
+See [TODO.md](TODO.md) for the detailed checklist.
 
 ---
 
-## Getting started
+## Safety notes
 
-Setup instructions will be added in **Phase 1**. You will need:
+Krify acts in your **real** browser, with your logged-in accounts.
 
-- Python 3.12+ and [uv](https://github.com/astral-sh/uv)
-- Google Chrome or Microsoft Edge
-- A free Groq API key from [console.groq.com](https://console.groq.com/)
-
-> 🔑 **Never commit your API key.** It belongs in `backend/.env`, which is excluded from Git.
-
----
-
-## Safety note
-
-Krify acts inside your real browser. While it is in development:
-
-- Use test accounts where possible.
-- Avoid banking, payment and other sensitive sites.
-- Keep an eye on the live step log, and use **Stop** if anything looks wrong.
+- Risky actions always need your **Allow**, but stay alert and use **Stop** if anything looks wrong.
+- Page content is sent to the AI provider you choose. Free tiers may use that data, so avoid banking, medical or other sensitive pages.
+- The server only accepts connections from the Krify extension on your own PC (`127.0.0.1`).

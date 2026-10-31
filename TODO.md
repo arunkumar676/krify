@@ -51,8 +51,11 @@
 - [x] Stop works instantly
 - [x] Fewer tokens per task
 
+- [x] More AI providers: Gemini + OpenRouter (Cerebras skipped: needs a card)
+- [x] Glowing border while working
+
 ## Later
 - [ ] Tabs
 - [ ] Hover
 - [ ] Screenshots
-- [ ] More AI providers (Gemini, Cerebras, OpenRouter)
+- [ ] Task history
