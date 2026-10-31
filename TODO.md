@@ -11,9 +11,9 @@
 - [ ] Test: different wordings, vague requests, follow-ups
 
 ## 2. See the page
-- [ ] `get_page_info` – URL + title
-- [ ] `get_elements` – numbered buttons, links, inputs
-- [ ] `read_text` – page text
+- [x] `get_page_info` – URL + title
+- [x] `get_elements` – numbered buttons, links, inputs
+- [x] `read_text` – page text
 
 ## 3. Navigate
 - [ ] `open_url`

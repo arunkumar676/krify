@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Krify</title>
+  <link rel="stylesheet" href="sidepanel.css" />
+</head>
+<body>
+  <h1>Krify</h1>
+
+  <section>
+    <h2>See the page</h2>
+    <div class="buttons">
+      <button data-op="get_page_info">Page info</button>
+      <button data-op="get_elements">Elements</button>
+      <button data-op="read_text">Read text</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>Do something</h2>
+    <div class="fields">
+      <label>Element # <input id="elementInput" type="number" min="1" placeholder="7" /></label>
+      <label>Text <input id="textInput" type="text" placeholder="text, option or URL" /></label>
+    </div>
+    <div class="buttons">
+      <button data-op="click">Click</button>
+      <button data-op="type">Type</button>
+      <button data-op="press_key" data-key="Enter">Press Enter</button>
+      <button data-op="press_key" data-key="Escape">Press Esc</button>
+      <button data-op="select_option">Select option</button>
+      <button data-op="scroll" data-direction="up">Scroll up</button>
+      <button data-op="scroll" data-direction="down">Scroll down</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>Navigate</h2>
+    <div class="buttons">
+      <button data-op="open_url">Open URL (from Text)</button>
+      <button data-op="go_back">Back</button>
+      <button data-op="reload">Reload</button>
+      <button data-op="wait" data-seconds="2">Wait 2s</button>
+    </div>
+  </section>
+
+  <pre id="output">Open any website, then click a button above.</pre>
+
+  <script type="module" src="sidepanel.js"></script>
+</body>
+</html>
