@@ -21,6 +21,7 @@ Krify is an AI agent that works inside your browser. You tell it what to do in p
 - 📊 **Usage per model**: the picker shows today's usage next to each model ("14k tokens today", "64% used", "limit reached")
 - 🕘 **Task history**: past tasks with their result; click to edit and reuse, ▶ to run again, 🗑 to delete
 - 📝 **Notes and screen reading**: Krify reads the text visible on screen and saves key facts (like prices) as notes, so it doesn't guess
+- 📸 **Screenshots**: when text isn't enough (pictures, colours, icons, maps), Krify takes a screenshot with element numbers drawn on it and switches to a model that can see images
 - 📋 **Plans and fact check**: for longer tasks Krify writes a checklist first; every number in its final answer must have appeared on a page it read
 - ⛔ **Stop anytime**: ends the task instantly
 - 💬 **Follow-ups**: "now sort it", "open the second one"
@@ -109,11 +110,11 @@ Type a task in the side panel and press **▶ Start**, for example:
 
 ### Models (auto-switch order)
 
-| Provider | Models |
+| Provider | Models (👁 = can read screenshots) |
 |---|---|
-| Groq | GPT-OSS 120B, Qwen 3.8 27B, GPT-OSS 20B |
-| Gemini | Gemini 3.8 Flash, Gemini 3.5 Flash, Gemini Flash Lite |
-| OpenRouter | Nemotron Ultra, Nemotron Super |
+| Groq | GPT-OSS 120B, Qwen 3.8 27B 👁, GPT-OSS 20B |
+| Gemini | Gemini 3.8 Flash 👁, Gemini 3.5 Flash 👁, Gemini Flash Lite 👁 |
+| OpenRouter | Nemotron Ultra, Nemotron Super 👁 |
 
 A provider without a key in `.env` is skipped. Models are configured in [backend/app/config.py](backend/app/config.py).
 
@@ -161,7 +162,7 @@ krify/
 - [x] Task history and per-model usage (SQLite database)
 - [x] Reliability on long tasks: plan checklist, goal shown at every step, scroll limit, wrap-up warning, fact check
 - [x] Hover menus
-- [ ] Screenshots (let the AI see the page as an image)
+- [x] Screenshots (let the AI see the page as an image)
 
 See [TODO.md](TODO.md) for the detailed checklist.
 

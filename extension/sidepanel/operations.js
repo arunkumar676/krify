@@ -153,6 +153,20 @@ async function callInPage(fnName, args = [], tabId = null) {
   return res.value;
 }
 
+// Make a screenshot smaller (fewer tokens): at most maxWidth pixels wide, compressed JPEG.
+async function shrinkImage(dataUrl, maxWidth) {
+  const bitmap = await createImageBitmap(await (await fetch(dataUrl)).blob());
+  const scale = Math.min(1, maxWidth / bitmap.width);
+  const canvas = new OffscreenCanvas(Math.round(bitmap.width * scale), Math.round(bitmap.height * scale));
+  canvas.getContext("2d").drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  const blob = await canvas.convertToBlob({ type: "image/jpeg", quality: 0.6 });
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.readAsDataURL(blob);
+  });
+}
+
 // Run an in-page action, then give the page time to react or load.
 async function act(fnName, args) {
   const value = await callInPage(fnName, args);
@@ -168,6 +182,20 @@ export const operations = {
     return info;
   },
   get_elements: () => callInPage("getElements"),
+  async screenshot() {
+    // Element numbers drawn on → picture of the visible area → labels removed → shrink.
+    const tab = await currentTab();
+    await chrome.tabs.update(tab.id, { active: true }); // only the visible tab can be captured
+    await callInPage("showLabels", [true]);
+    await sleep(150);
+    let shot;
+    try {
+      shot = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "jpeg", quality: 70 });
+    } finally {
+      await callInPage("showLabels", [false]);
+    }
+    return shrinkImage(shot, 1024);
+  },
   read_text: ({ scope = "screen" } = {}) => callInPage("readText", [scope]),
 
   // Navigate

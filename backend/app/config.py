@@ -22,15 +22,16 @@ PROVIDERS = {
 # "strong" models handle long tasks well; "backup" models are used only when every strong model
 # is out for a while (they tend to wander on long tasks).
 # "extra" = model-specific settings (less thinking = fewer tokens).
+# "vision" = can look at screenshots (tested with a sample image).
 _ALL_MODELS = {
-    "groq:openai/gpt-oss-120b": {"label": "GPT-OSS 120B (smartest)", "tier": "strong", "extra": {"reasoning_effort": "low"}},
-    "gemini:gemini-3.8-flash": {"label": "Gemini 3.8 Flash", "tier": "strong", "extra": {"reasoning_effort": "low"}},
-    "gemini:gemini-3.5-flash": {"label": "Gemini 3.5 Flash", "tier": "strong", "extra": {"reasoning_effort": "none"}},
-    "openrouter:nvidia/nemotron-3-ultra-550b-a55b:free": {"label": "Nemotron Ultra", "tier": "strong", "extra": {}},
-    "groq:qwen/qwen3.8-27b": {"label": "Qwen 3.8 27B (backup)", "tier": "backup", "extra": {"reasoning_effort": "none"}},
-    "groq:openai/gpt-oss-20b": {"label": "GPT-OSS 20B (backup)", "tier": "backup", "extra": {"reasoning_effort": "low"}},
-    "gemini:gemini-flash-lite-latest": {"label": "Gemini Flash Lite (backup)", "tier": "backup", "extra": {}},
-    "openrouter:nvidia/nemotron-3.5-super-vl:free": {"label": "Nemotron Super (backup)", "tier": "backup", "extra": {}},
+    "groq:openai/gpt-oss-120b": {"label": "GPT-OSS 120B (smartest)", "tier": "strong", "vision": False, "extra": {"reasoning_effort": "low"}},
+    "gemini:gemini-3.8-flash": {"label": "Gemini 3.8 Flash", "tier": "strong", "vision": True, "extra": {"reasoning_effort": "low"}},
+    "gemini:gemini-3.5-flash": {"label": "Gemini 3.5 Flash", "tier": "strong", "vision": True, "extra": {"reasoning_effort": "none"}},
+    "openrouter:nvidia/nemotron-3-ultra-550b-a55b:free": {"label": "Nemotron Ultra", "tier": "strong", "vision": False, "extra": {}},
+    "groq:qwen/qwen3.8-27b": {"label": "Qwen 3.8 27B (backup)", "tier": "backup", "vision": True, "extra": {"reasoning_effort": "none"}},
+    "groq:openai/gpt-oss-20b": {"label": "GPT-OSS 20B (backup)", "tier": "backup", "vision": False, "extra": {"reasoning_effort": "low"}},
+    "gemini:gemini-flash-lite-latest": {"label": "Gemini Flash Lite (backup)", "tier": "backup", "vision": True, "extra": {}},
+    "openrouter:nvidia/nemotron-3.5-super-vl:free": {"label": "Nemotron Super (backup)", "tier": "backup", "vision": True, "extra": {}},
 }
 
 

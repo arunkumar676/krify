@@ -9,7 +9,7 @@ from app.agent import safety
 from app.agent.prompt import SYSTEM_PROMPT
 from app.agent.tools import TOOLS
 from app.config import MAX_STEPS
-from app.llm.client import ask_ai
+from app.llm.client import ask_ai, has_vision_model
 
 log = logging.getLogger("krify")
 
@@ -18,7 +18,8 @@ OLD_PAGE = "\n[older page view removed to save space]"
 OLD_SCREEN = "[older screen text removed to save space – use your notes]"
 
 # Stuck detector: these always count as progress; clicks/keys count only if the page changed.
-PROGRESS_OPS = {"read_text", "note", "type", "select_option", "open_url", "new_tab"}
+PROGRESS_OPS = {"read_text", "screenshot", "note", "type", "select_option", "open_url", "new_tab"}
+OLD_SCREENSHOT = "[older screenshot removed to save space]"
 IDLE_LIMIT = 5
 MAX_SCROLLS_PER_PAGE = 4
 SCROLL_REFUSED = (
@@ -129,6 +130,7 @@ class Agent:
         self.page_views = []  # (message, text_before_page_view) – trimmed later to save tokens
         self.last_page = None
         self.screen_reads = []  # read_text results – only the newest is kept in full
+        self.screenshot_msgs = []  # messages holding a screenshot – dropped when the page changes
         self.tokens = 0
         # Per task: shown to the AI at every step so it keeps the goal in view.
         self.task_text = ""
@@ -166,6 +168,7 @@ class Agent:
         self.page_views = []
         self.last_page = None
         self.screen_reads = []
+        self.screenshot_msgs = []
 
     def add_screen_read(self, message, text):
         """Keep only the newest screen text in full. Facts worth keeping go into notes,
@@ -210,8 +213,38 @@ class Agent:
         except Exception as err:
             return f"[Current page] (can't read it: {err})"
 
+    def drop_screenshots(self):
+        """Replace older screenshots with a short note: they cost tokens and need a vision model."""
+        for msg in self.screenshot_msgs:
+            msg["content"] = OLD_SCREENSHOT
+        self.screenshot_msgs = []
+
+    async def add_screenshot(self, tool_msg):
+        """Take a screenshot (with element numbers drawn on it) and attach it for the AI."""
+        if not has_vision_model():
+            self.messages.append({**tool_msg, "content": "Screenshots aren't available (no model that can see images)."})
+            return
+        result = await self.safe_run("screenshot", {})
+        if not str(result).startswith("data:image/"):
+            self.messages.append({**tool_msg, "content": f"Couldn't take a screenshot: {result}"})
+            return
+        self.drop_screenshots()
+        # Tool results must be text for most providers, so the image goes in a user message after it.
+        self.messages.append({**tool_msg, "content": "Screenshot taken – it's in the next message."})
+        image_msg = {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Screenshot of the current screen. Numbers in boxes = element numbers."},
+                {"type": "image_url", "image_url": {"url": result}},
+            ],
+        }
+        self.messages.append(image_msg)
+        self.screenshot_msgs.append(image_msg)
+
     def add_with_page(self, message, text, page):
         """Add a message that ends with a page view. Only the newest page view is kept in full."""
+        if page != self.last_page:
+            self.drop_screenshots()  # the screen changed, so the old picture is out of date
         if page == self.last_page:  # nothing changed: don't send the same list again
             message["content"] = f"{text}\n\n{self.header()}\n[Page unchanged since the last view.]"
             self.messages.append(message)
@@ -256,7 +289,8 @@ class Agent:
                 await self.ui("step", "⏰ Few steps left – asking Krify to wrap up")
                 self.messages.append({"role": "user", "content": WRAP_UP})
             reply, used_model, tokens = await ask_ai(
-                self.messages, TOOLS, model, on_note=lambda t: self.ui("step", t)
+                self.messages, TOOLS, model, on_note=lambda t: self.ui("step", t),
+                need_vision=bool(self.screenshot_msgs),
             )
             self.tokens += tokens
             if used_model != model:
@@ -319,6 +353,10 @@ class Agent:
                     self.messages.append({**tool_msg, "content": "Question shown. The user's answer comes next."})
                     await self.finish("ask", args.get("question", "Can you tell me more?"))
                     finished = True
+                elif name == "screenshot":
+                    await self.ui("step", "📸 Screenshot")
+                    await self.add_screenshot(tool_msg)
+                    self.check_progress(name, False)
                 elif name == "note":
                     await self.ui("step", f"📝 {args.get('text', '')}")
                     self.notes.append(str(args.get("text", ""))[:200])

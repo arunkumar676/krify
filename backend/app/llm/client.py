@@ -116,15 +116,21 @@ async def _try_model(model, messages, tools, on_note):
     return None
 
 
-async def ask_ai(messages, tools, preferred, on_note=None):
+def has_vision_model():
+    return any(info["vision"] for info in MODELS.values())
+
+
+async def ask_ai(messages, tools, preferred, on_note=None, need_vision=False):
     """Return (message, model_used, tokens_used).
 
     Order: the model you picked, then strong models. If all strong models are busy for less than
     a minute, wait for one. Backup models are used only when the strong ones are out for longer.
+    need_vision: the chat contains a screenshot, so only models that can see images are used.
     """
-    strong = [m for m in MODELS if MODELS[m]["tier"] == "strong"]
-    backup = [m for m in MODELS if MODELS[m]["tier"] == "backup"]
-    first = [preferred] + [m for m in strong if m != preferred]
+    usable = [m for m in MODELS if MODELS[m]["vision"] or not need_vision]
+    strong = [m for m in usable if MODELS[m]["tier"] == "strong"]
+    backup = [m for m in usable if MODELS[m]["tier"] == "backup"]
+    first = ([preferred] if preferred in usable else []) + [m for m in strong if m != preferred]
 
     for _ in range(5):
         for model in first:
@@ -141,14 +147,18 @@ async def ask_ai(messages, tools, preferred, on_note=None):
             continue
 
         for model in backup:
-            if model != preferred and _blocked_for(model) <= 0:
+            if model not in first and _blocked_for(model) <= 0:
                 result = await _try_model(model, messages, tools, on_note)
                 if result:
                     return result[0], model, result[1]
         break
 
-    soonest = min((_blocked_for(m) for m in MODELS), default=60)
+    soonest = min((_blocked_for(m) for m in usable), default=60)
     minutes = max(1, round(soonest / 60))
+    if need_vision:
+        raise RuntimeError(
+            f"All models that can read screenshots are busy or at their limit. Try again in about {minutes} minute(s)."
+        )
     if all(_blocked_why.get(m) == "limit" and _blocked_for(m) > 0 for m in MODELS):
         raise RuntimeError(
             f"⛔ All free models have used up their limits. Try again in about {minutes} minute(s)."

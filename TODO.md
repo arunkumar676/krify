@@ -67,4 +67,4 @@
 
 ## Later
 - [x] Hover (works on Amazon "Account & Lists"; CSS-only menus may need the real mouse)
-- [ ] Screenshots
+- [x] Screenshots (with element numbers drawn on; auto-switch to a model that can see images)

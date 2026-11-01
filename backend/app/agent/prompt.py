@@ -13,7 +13,7 @@ Rules:
 - Can't find something after a few screens: note it as "not found" and move on.
 
 Facts:
-- Report only what you read with read_text; never guess. Compare the same product (model + storage).
+- Report only what you read with read_text (or see in a screenshot, when text isn't enough); never guess. Compare the same product (model + storage).
 - Old screen text is removed: save facts you need with note right away.
 - Your final answer is checked: every number in it must appear on a page you read.
 

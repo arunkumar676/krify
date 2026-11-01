@@ -18,6 +18,8 @@ TEXT = {"type": "string"}
 TOOLS = [
     _tool("read_text", "Read text on screen (prices, facts). scope=page reads the whole page.",
           {"scope": {"type": "string", "enum": ["screen", "page"]}}),
+    _tool("screenshot", "See the screen as an image, with element numbers drawn on it. Costs more: use only "
+          "when text isn't enough (pictures, icons, colours, maps, charts)."),
     _tool("open_url", "Open a URL in this tab.", {"url": URL}, ["url"]),
     _tool("go_back", "Go back."),
     _tool("reload", "Reload the page."),

@@ -339,7 +339,15 @@ document.querySelectorAll("button[data-op]").forEach((btn) => {
     output.textContent = "Working…";
     output.classList.remove("error");
     try {
+      if (btn.dataset.op === "screenshot") await runOperation("get_elements"); // number the elements first
       const value = await runOperation(btn.dataset.op, argsFor(btn));
+      if (typeof value === "string" && value.startsWith("data:image/")) {
+        const img = document.createElement("img");
+        img.src = value;
+        img.style.maxWidth = "100%";
+        output.replaceChildren(img, `\n${Math.round(value.length / 1024)} KB`);
+        return;
+      }
       output.textContent = typeof value === "string" ? value : JSON.stringify(value, null, 2);
     } catch (err) {
       output.textContent = err.message;

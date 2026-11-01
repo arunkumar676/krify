@@ -136,6 +136,28 @@ if (!window.__krify) {
 
     animate: false,
 
+    // For screenshots: draw each listed element's number on the page (and hide Krify's own
+    // border/badge/cursor so they don't cover the content). on=false removes the labels again.
+    showLabels(on) {
+      const root = overlay();
+      root.querySelector(".labels")?.remove();
+      for (const part of root.querySelectorAll(".working, .cursor")) part.style.visibility = on ? "hidden" : "";
+      if (!on) return "ok";
+      const layer = document.createElement("div");
+      layer.className = "labels";
+      for (const el of document.querySelectorAll("[data-krify-id]")) {
+        const r = el.getBoundingClientRect();
+        if (r.bottom < 0 || r.top > innerHeight || r.width < 2) continue;
+        const tag = document.createElement("div");
+        tag.className = "num";
+        tag.textContent = el.getAttribute("data-krify-id");
+        Object.assign(tag.style, { left: `${Math.max(0, r.left)}px`, top: `${Math.max(0, r.top)}px` });
+        layer.append(tag);
+      }
+      root.append(layer);
+      return "ok";
+    },
+
     // Glowing border around the page while a task runs.
     setWorking(on) {
       if (!on && !view.root) return "ok"; // nothing shown, nothing to hide
@@ -330,6 +352,9 @@ if (!window.__krify) {
           padding: 4px 14px; border-radius: 999px; color: #fff; font: 600 12px/20px system-ui, sans-serif;
           background: linear-gradient(90deg, #7c5cff, #3ea8ff, #ff5ca8, #7c5cff); background-size: 300% 100%;
           animation: flow 3s linear infinite; box-shadow: 0 4px 18px rgba(124,92,255,.5); }
+        /* element numbers drawn for screenshots */
+        .num { position: fixed; padding: 0 4px; border-radius: 3px; background: #ffd400; color: #000;
+          border: 1px solid #000; font: 700 11px/14px system-ui, sans-serif; }
         @keyframes flow { to { background-position: 300% 0; } }
         @keyframes flow-v { to { background-position: 0 300%; } }
         @keyframes breathe { from { opacity: .55; } to { opacity: 1; } }
