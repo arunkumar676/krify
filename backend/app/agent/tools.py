@@ -25,6 +25,7 @@ TOOLS = [
     _tool("switch_tab", "Switch tab.", {"tab": TAB}, ["tab"]),
     _tool("close_tab", "Close a tab you opened.", {"tab": TAB}, ["tab"]),
     _tool("click", "Click an element.", {"element": ELEMENT}, ["element"]),
+    _tool("hover", "Point at an element without clicking (opens hover menus).", {"element": ELEMENT}, ["element"]),
     _tool("type", "Type into a box (replaces its text). submit=true presses Enter after.",
           {"element": ELEMENT, "text": TEXT, "submit": {"type": "boolean"}}, ["element", "text"]),
     _tool("press_key", "Press a key.",

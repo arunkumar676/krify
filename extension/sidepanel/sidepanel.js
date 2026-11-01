@@ -323,6 +323,7 @@ function argsFor(btn) {
   const text = $("textInput").value;
   switch (btn.dataset.op) {
     case "click": return { element };
+    case "hover": return { element };
     case "type": return { element, text };
     case "select_option": return { element, option: text };
     case "open_url": return { url: text };

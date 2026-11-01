@@ -162,6 +162,28 @@ if (!window.__krify) {
       return `Clicked [${id}] ${describe(el)}`;
     },
 
+    // Point at an element without clicking, so hover menus open (e.g. Amazon "Account & Lists").
+    async hover(id) {
+      const el = find(id);
+      await bringIntoView(el);
+      if (this.animate) {
+        await moveCursorTo(el);
+        glow(el);
+      }
+      const r = el.getBoundingClientRect();
+      const at = { clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, view: window };
+      const fire = (Type, type, bubbles) => el.dispatchEvent(new Type(type, { ...at, bubbles, cancelable: true }));
+      fire(PointerEvent, "pointerover", true);
+      fire(PointerEvent, "pointerenter", false);
+      fire(MouseEvent, "mouseover", true);
+      fire(MouseEvent, "mouseenter", false);
+      fire(PointerEvent, "pointermove", true);
+      fire(MouseEvent, "mousemove", true);
+      el.focus?.({ preventScroll: true }); // many menus also open on focus (keyboard users)
+      await sleep(500); // let the menu appear
+      return `Hovered over [${id}] ${describe(el)}`;
+    },
+
     async type(id, text, submit = false) {
       const el = find(id);
       const isField = el.tagName === "INPUT" || el.tagName === "TEXTAREA";

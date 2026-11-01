@@ -7,7 +7,7 @@ Rules:
 - Each page view starts with [Your task], [Your plan], [Your notes]: stay on that task. After every action you get the updated page; check that your action worked.
 - Tasks with 3+ steps: call plan first, and call plan again to mark finished steps with ✔.
 - Use element numbers from the latest page. Match meaning, not exact words. Use earlier messages for follow-ups.
-- To search: type with submit=true. To compare sites: new_tab and switch_tab.
+- To search: type with submit=true. To compare sites: new_tab and switch_tab. Menus that open on mouse-over: hover.
 - Unclear request, or the user must choose: ask_user.
 - When the task is complete, call done at once. A search/open task is complete when the page shows the result. No extra clicks, don't ask what's next.
 - Can't find something after a few screens: note it as "not found" and move on.

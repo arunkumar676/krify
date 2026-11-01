@@ -13,7 +13,7 @@ Krify is an AI agent that works inside your browser. You tell it what to do in p
 
 - 🗣️ **Plain-language tasks**: casual wording and Hinglish work ("amazon pe sasta mouse dhundo")
 - 🔁 **Plan → act → verify loop**: after every action Krify looks at the page again to check it worked
-- 🖱️ **Browser actions**: open URL, back, reload, click, type, press keys, scroll, choose from dropdowns, read page text
+- 🖱️ **Browser actions**: open URL, back, reload, click, hover, type (+ Enter), press keys, scroll, choose from dropdowns, read page text
 - 🗂️ **Tabs**: open a site in a new tab, switch between tabs, close tabs. Krify only sees and closes **its own** tabs, never your other ones
 - ✨ **Animations (optional)**: a visible Krify cursor that moves, clicks and types letter by letter, plus a glowing border while Krify works
 - 🔐 **Safety prompts in code**: Krify always asks **Allow / Block** before risky actions (paying, buying, sending, submitting, deleting, signing in or out, typing passwords or card details), even if your task already said to do it
@@ -160,7 +160,7 @@ krify/
 - [x] Tabs: open, switch, close (Krify only uses and closes its own tabs)
 - [x] Task history and per-model usage (SQLite database)
 - [x] Reliability on long tasks: plan checklist, goal shown at every step, scroll limit, wrap-up warning, fact check
-- [ ] Hover menus
+- [x] Hover menus
 - [ ] Screenshots (let the AI see the page as an image)
 
 See [TODO.md](TODO.md) for the detailed checklist.

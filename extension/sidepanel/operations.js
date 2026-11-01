@@ -217,6 +217,7 @@ export const operations = {
 
   // Interact
   click: ({ element }) => act("click", [element]),
+  hover: ({ element }) => act("hover", [element]),
   type: ({ element, text, submit = false }) => act("type", [element, text, Boolean(submit)]),
   press_key: ({ key }) => act("pressKey", [key]),
   scroll: ({ direction }) => callInPage("scroll", [direction]),

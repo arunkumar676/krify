@@ -66,5 +66,5 @@
 - [x] Fewer tokens on long tasks (price compare: 94k → 43k)
 
 ## Later
-- [ ] Hover
+- [x] Hover (works on Amazon "Account & Lists"; CSS-only menus may need the real mouse)
 - [ ] Screenshots

@@ -88,6 +88,7 @@ def describe(name, args):
     match name:
         case "open_url": return f"🌐 Open {args.get('url')}"
         case "click": return f"🖱️ Click [{args.get('element')}]"
+        case "hover": return f"👆 Hover over [{args.get('element')}]"
         case "type":
             enter = " + Enter" if args.get("submit") else ""
             return f"⌨️ Type \"{args.get('text')}\" into [{args.get('element')}]{enter}"
@@ -177,7 +178,7 @@ class Agent:
 
     def check_progress(self, name, page_changed):
         """Stuck detector: count steps that don't move the task forward."""
-        progress = name in PROGRESS_OPS or (name in ("click", "press_key", "go_back") and page_changed)
+        progress = name in PROGRESS_OPS or (name in ("click", "hover", "press_key", "go_back") and page_changed)
         self.idle_steps = 0 if progress else self.idle_steps + 1
         if self.idle_steps >= IDLE_LIMIT:
             self.idle_steps = 0
