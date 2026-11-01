@@ -18,6 +18,9 @@ Krify is an AI agent that works inside your browser. You tell it what to do in p
 - ✨ **Animations (optional)**: a visible Krify cursor that moves, clicks and types letter by letter, plus a glowing border while Krify works
 - 🔐 **Safety prompts in code**: Krify always asks **Allow / Block** before risky actions (paying, buying, sending, submitting, deleting, signing in or out, typing passwords or card details), even if your task already said to do it
 - 🧠 **8 free AI models from 3 providers** with a model picker. When one model is busy or out of free quota, Krify **switches to the next automatically**
+- 📊 **Usage per model**: the picker shows today's usage next to each model ("14k tokens today", "64% used", "limit reached")
+- 🕘 **Task history**: past tasks with their result; click to edit and reuse, ▶ to run again, 🗑 to delete
+- 📝 **Notes and screen reading**: Krify reads the text visible on screen and saves key facts (like prices) as notes, so it doesn't guess
 - ⛔ **Stop anytime**: ends the task instantly
 - 💬 **Follow-ups**: "now sort it", "open the second one"
 - 📉 **Token-saving**: only the latest page view is sent in full, and unchanged pages aren't sent again
@@ -99,6 +102,7 @@ Type a task in the side panel and press **▶ Start**, for example:
 | Extension | Plain JavaScript, Chrome Manifest V3, side panel, content scripts |
 | Server | Python 3.12+, FastAPI, Uvicorn, WebSocket |
 | AI access | `openai` Python library (OpenAI-compatible APIs) pointed at Groq, Gemini and OpenRouter |
+| Database | SQLite (`backend/krify.db`, created automatically) via SQLModel; PostgreSQL later for multi-user hosting |
 | Agent loop | Custom: observe → decide → act → verify |
 | Package manager | uv |
 
@@ -122,20 +126,24 @@ krify/
 │   ├── app/
 │   │   ├── main.py          # FastAPI server + WebSocket
 │   │   ├── config.py        # providers, models, settings
+│   │   ├── db.py            # SQLite database: tasks, steps, usage, limits
+│   │   ├── history.py       # task history
 │   │   ├── agent/
 │   │   │   ├── loop.py      # the agent loop
 │   │   │   ├── tools.py     # actions the AI can choose
 │   │   │   ├── prompt.py    # instructions for the AI
 │   │   │   └── safety.py    # what counts as risky
 │   │   └── llm/
-│   │       └── client.py    # AI providers + auto-switch
+│   │       ├── client.py    # AI providers + auto-switch
+│   │       └── usage.py     # tokens/requests per model per day
+│   ├── krify.db             # your local database (not in Git)
 │   ├── .env.example
 │   └── pyproject.toml
 ├── extension/
 │   ├── manifest.json
 │   ├── background.js        # opens the side panel
 │   ├── content.js           # runs in the page: reads it, acts, animations
-│   └── sidepanel/           # chat UI, model picker, Allow/Block
+│   └── sidepanel/           # chat UI, model picker, history, Allow/Block
 ├── README.md
 └── TODO.md                  # progress checklist
 ```
@@ -149,9 +157,10 @@ krify/
 - [x] Safety prompts (Allow / Block)
 - [x] Multiple free AI providers with auto-switch
 - [x] Tabs: open, switch, close (Krify only uses and closes its own tabs)
+- [x] Task history and per-model usage (SQLite database)
+- [ ] Reliability on long tasks (e.g. comparing prices across sites)
 - [ ] Hover menus
 - [ ] Screenshots (let the AI see the page as an image)
-- [ ] Task history
 
 See [TODO.md](TODO.md) for the detailed checklist.
 
@@ -162,5 +171,6 @@ See [TODO.md](TODO.md) for the detailed checklist.
 Krify acts in your **real** browser, with your logged-in accounts.
 
 - Risky actions always need your **Allow**, but stay alert and use **Stop** if anything looks wrong.
+- Task history and usage are stored only on your PC in `backend/krify.db`.
 - Page content is sent to the AI provider you choose. Free tiers may use that data, so avoid banking, medical or other sensitive pages.
 - The server only accepts connections from the Krify extension on your own PC (`127.0.0.1`).

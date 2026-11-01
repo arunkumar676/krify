@@ -53,12 +53,16 @@
 
 - [x] More AI providers: Gemini + OpenRouter (Cerebras skipped: needs a card)
 - [x] Glowing border while working
+- [x] Tabs
+- [x] Read visible screen + notes
+- [x] Usage per model in the picker
+- [x] Task history (SQLite database)
 
-## Test next session
-- [ ] iPhone 16 128GB price compare (amazon.in vs flipkart.com) – prices must match the sites, look for 📝 notes
+## 9. Reliability (now)
+- [ ] Stop extra clicks after the task is done
+- [ ] Stop wandering on long tasks
+- [ ] iPhone 16 128GB price compare (amazon.in vs flipkart.com) works – prices match the sites
 
 ## Later
-- [x] Tabs
 - [ ] Hover
 - [ ] Screenshots
-- [ ] Task history
