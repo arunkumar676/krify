@@ -90,6 +90,13 @@ TOOLS = [
         ["seconds"],
     ),
     _tool(
+        "plan",
+        "Write (or update) a short checklist for a multi-step task. Start finished steps with ✔. "
+        "Your plan is shown to you at every step.",
+        {"steps": {"type": "array", "items": {"type": "string"}, "description": "2-6 short steps"}},
+        ["steps"],
+    ),
+    _tool(
         "note",
         "Save a fact you'll need later (e.g. 'Amazon: iPhone 16 128GB ₹69,900'). Old screen text is removed "
         "to save space, but notes are kept.",

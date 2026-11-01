@@ -20,6 +20,16 @@ OLD_SCREEN = "[older screen text removed to save space – use your notes]"
 # Stuck detector: these always count as progress; clicks/keys count only if the page changed.
 PROGRESS_OPS = {"read_text", "note", "type", "select_option", "open_url", "new_tab"}
 IDLE_LIMIT = 5
+MAX_SCROLLS_PER_PAGE = 4
+SCROLL_REFUSED = (
+    "NOT scrolled: you already scrolled this page 4 times. Decide with what you've found: save it with note, "
+    "or note that it's not on this site, then continue with your plan (or finish with done)."
+)
+WRAP_UP_AT = 5  # steps left
+WRAP_UP = (
+    "⚠️ Only 5 steps left. Finish now: call done with what you found so far (from your notes), "
+    "and say clearly what you couldn't find."
+)
 STUCK_NOTE = (
     "\nWarning: the last 5 steps made no progress (only scrolling, switching or clicking without "
     "the page changing). Stop wandering: read_text to see what's on screen, try a different "
@@ -48,6 +58,23 @@ def clean_text_reply(text):
         except json.JSONDecodeError:
             pass
     return "done", text or "Done.", False
+
+
+_NUMBER = re.compile(r"\d[\d,]*(?:\.\d+)?")
+
+
+def unverified_numbers(text, seen):
+    """Numbers with 3+ digits in `text` (prices, years…) that appear nowhere in `seen`.
+    Thousands separators are ignored, so ₹69,900 matches 69900."""
+    pages = re.sub(r"(?<=\d),(?=\d)", "", "\n".join(seen))
+    missing = []
+    for raw in _NUMBER.findall(text or ""):
+        number = raw.replace(",", "").rstrip(".")
+        if sum(c.isdigit() for c in number) < 3 or raw in missing:
+            continue
+        if not re.search(rf"(?<![\d.]){re.escape(number)}(?![\d])", pages):
+            missing.append(raw.rstrip(".,"))
+    return missing
 
 
 NUDGE = (
@@ -100,6 +127,36 @@ class Agent:
         self.last_page = None
         self.screen_reads = []  # read_text results – only the newest is kept in full
         self.tokens = 0
+        # Per task: shown to the AI at every step so it keeps the goal in view.
+        self.task_text = ""
+        self.plan = []
+        self.notes = []
+        self.seen = []  # everything read from pages this task – used by the fact check
+        self.fact_check_failed = False
+
+    def header(self):
+        """'[Your task] … [Your plan] … [Your notes] …' – sent with every page view."""
+        lines = [f"[Your task] {self.task_text}"]
+        if self.plan:
+            lines.append("[Your plan] " + " | ".join(f"{i}. {s}" for i, s in enumerate(self.plan, 1)))
+        if self.notes:
+            lines.append("[Your notes] " + " | ".join(self.notes))
+        return "\n".join(lines)
+
+    def check_facts(self, summary):
+        """Fact check before 'done': every number (3+ digits) in the answer must have appeared on a
+        page Krify read this task. Returns a rejection message, or None if the answer may go out."""
+        missing = unverified_numbers(summary, self.seen)
+        if not missing:
+            return None
+        if self.fact_check_failed:  # second time: let it through, but tell the user honestly
+            return None
+        self.fact_check_failed = True
+        return (
+            "REJECTED – not sent to the user. These numbers in your answer were not seen on any page you read: "
+            f"{', '.join(missing)}. Use read_text to find the real values, report only numbers you actually "
+            "saw (no estimates or your own calculations), then call done again."
+        )
 
     def reset(self):
         self.messages = self.messages[:1]
@@ -143,6 +200,8 @@ class Agent:
             info = await self.browser("get_page_info", {})
             elements = await self.browser("get_elements", {})
             self.elements = elements
+            self.seen.append(elements)
+            self.current_url = info.get("url", "")
             tabs = f"[Tabs] {info['tabs']}\n" if info.get("tabs") else ""
             return f"{tabs}[Current page] {info.get('title')} – {info.get('url')}\n{elements}"
         except Exception as err:
@@ -151,12 +210,12 @@ class Agent:
     def add_with_page(self, message, text, page):
         """Add a message that ends with a page view. Only the newest page view is kept in full."""
         if page == self.last_page:  # nothing changed: don't send the same list again
-            message["content"] = f"{text}\n\n[Page unchanged since the last view.]"
+            message["content"] = f"{text}\n\n{self.header()}\n[Page unchanged since the last view.]"
             self.messages.append(message)
             return
         for old_msg, old_text in self.page_views:
             old_msg["content"] = old_text + OLD_PAGE
-        message["content"] = f"{text}\n\n{page}"
+        message["content"] = f"{text}\n\n{self.header()}\n{page}"
         self.messages.append(message)
         self.page_views = [(message, text)]
         self.last_page = page
@@ -164,6 +223,8 @@ class Agent:
     async def finish(self, kind, text):
         """Send the final message, with how many tokens the task used, and save the result."""
         log.info("Task used %d tokens", self.tokens)
+        if kind == "done" and (missing := unverified_numbers(text, self.seen)):
+            text = f"{text}\n⚠️ Krify couldn't confirm these numbers on the pages it read: {', '.join(missing)}"
         self.end_task(kind, text)
         if kind == "done":
             text = f"{text}\n· used {self.tokens / 1000:.1f}k tokens"
@@ -179,10 +240,18 @@ class Agent:
         self.tokens = 0
         self.model = model
         self.task_id = history.start_task(task, model)
+        self.task_text, self.plan, self.notes = task, [], []
+        self.seen = [task]  # numbers the user gave count as known
+        self.fact_check_failed = False
+        self.current_url = ""
+        self.scrolls = {}  # url -> times scrolled on that page
         nudged = False
         self.add_with_page({"role": "user"}, task, await self.page_view())
 
-        for _ in range(MAX_STEPS):
+        for step in range(MAX_STEPS):
+            if MAX_STEPS - step == WRAP_UP_AT:
+                await self.ui("step", "⏰ Few steps left – asking Krify to wrap up")
+                self.messages.append({"role": "user", "content": WRAP_UP})
             reply, used_model, tokens = await ask_ai(
                 self.messages, TOOLS, model, on_note=lambda t: self.ui("step", t)
             )
@@ -198,6 +267,10 @@ class Agent:
                     # Might be nonsense (weak models do this). Ask once for a proper operation.
                     self.messages.append({"role": "user", "content": NUDGE})
                     nudged = True
+                    continue
+                if kind == "done" and (rejection := self.check_facts(text)):
+                    await self.ui("step", "🔍 Fact check: answer has numbers not seen on any page – checking again")
+                    self.messages.append({"role": "user", "content": rejection})
                     continue
                 await self.finish(kind, text)
                 return
@@ -223,21 +296,36 @@ class Agent:
                 if finished:
                     self.messages.append({**tool_msg, "content": "Skipped."})
                 elif name == "done":
+                    summary = args.get("summary", "Done.")
+                    if rejection := self.check_facts(summary):
+                        await self.ui("step", "🔍 Fact check: answer has numbers not seen on any page – checking again")
+                        self.messages.append({**tool_msg, "content": rejection})
+                        continue
                     self.messages.append({**tool_msg, "content": "Reported to the user."})
-                    await self.finish("done", args.get("summary", "Done."))
+                    await self.finish("done", summary)
                     finished = True
+                elif name == "plan":
+                    self.plan = [str(s) for s in (args.get("steps") or [])][:8]
+                    await self.ui("step", "📋 Plan:\n" + "\n".join(f"{i}. {s}" for i, s in enumerate(self.plan, 1)))
+                    self.messages.append(
+                        {**tool_msg, "content": "Plan saved – you'll see it at every step. Call plan again to "
+                                                "update it; start finished steps with ✔."}
+                    )
+                    self.check_progress(name, False)
                 elif name == "ask_user":
                     self.messages.append({**tool_msg, "content": "Question shown. The user's answer comes next."})
                     await self.finish("ask", args.get("question", "Can you tell me more?"))
                     finished = True
                 elif name == "note":
                     await self.ui("step", f"📝 {args.get('text', '')}")
+                    self.notes.append(str(args.get("text", ""))[:200])
                     self.messages.append({**tool_msg, "content": "Saved."})
                     self.check_progress(name, False)
                 elif name in READ_OPS:
                     await self.ui("step", describe(name, args))
                     result = await self.safe_run(name, args)
                     self.check_progress(name, False)
+                    self.seen.append(str(result))
                     if name == "get_elements":
                         self.elements = str(result)
                         self.add_with_page(tool_msg, "Elements:", result)
@@ -260,6 +348,15 @@ class Agent:
                         )
                         continue
 
+                    if name == "scroll":
+                        count = self.scrolls.get(self.current_url, 0)
+                        if count >= MAX_SCROLLS_PER_PAGE:
+                            await self.ui("step", "🛑 Scroll limit for this page – deciding with what was found")
+                            self.messages.append({**tool_msg, "content": SCROLL_REFUSED})
+                            self.check_progress(name, False)
+                            continue
+                        self.scrolls[self.current_url] = count + 1
+
                     if name == "type":
                         self.last_typed_line = safety.element_line(self.elements, args.get("element"))
                     result = await self.safe_run(name, args)
@@ -271,7 +368,13 @@ class Agent:
             if finished:
                 return
 
-        await self.finish("done", f"Stopped after {MAX_STEPS} steps (safety limit). Try a simpler or more specific task.")
+        # Never end empty-handed: report what was found so far.
+        found = "\n".join(f"• {n}" for n in self.notes) or "• nothing confirmed yet"
+        await self.finish(
+            "done",
+            f"Stopped after {MAX_STEPS} steps (safety limit). What Krify found so far:\n{found}\n"
+            "Try a simpler or more specific task for the rest.",
+        )
 
     async def ask_permission(self, reason, name, args):
         """Show Allow / Block in the side panel. Returns True only if the user allows."""

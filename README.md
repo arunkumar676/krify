@@ -21,6 +21,7 @@ Krify is an AI agent that works inside your browser. You tell it what to do in p
 - 📊 **Usage per model**: the picker shows today's usage next to each model ("14k tokens today", "64% used", "limit reached")
 - 🕘 **Task history**: past tasks with their result; click to edit and reuse, ▶ to run again, 🗑 to delete
 - 📝 **Notes and screen reading**: Krify reads the text visible on screen and saves key facts (like prices) as notes, so it doesn't guess
+- 📋 **Plans and fact check**: for longer tasks Krify writes a checklist first; every number in its final answer must have appeared on a page it read
 - ⛔ **Stop anytime**: ends the task instantly
 - 💬 **Follow-ups**: "now sort it", "open the second one"
 - 📉 **Token-saving**: only the latest page view is sent in full, and unchanged pages aren't sent again
@@ -158,7 +159,7 @@ krify/
 - [x] Multiple free AI providers with auto-switch
 - [x] Tabs: open, switch, close (Krify only uses and closes its own tabs)
 - [x] Task history and per-model usage (SQLite database)
-- [ ] Reliability on long tasks (e.g. comparing prices across sites)
+- [x] Reliability on long tasks: plan checklist, goal shown at every step, scroll limit, wrap-up warning, fact check
 - [ ] Hover menus
 - [ ] Screenshots (let the AI see the page as an image)
 

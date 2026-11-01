@@ -87,9 +87,12 @@ def _import_old_file():
                 s.merge(Limit(model=model, tokens=lim.get("tokens"), requests=lim.get("requests")))
             if data.get("date") == _today():
                 for model, used in data.get("models", {}).items():
-                    s.merge(Usage(day=_today(), model=model, tokens=used["tokens"], requests=used["requests"]))
+                    row = _usage(s, model)  # never lower counts already in the database
+                    row.tokens = max(row.tokens, used["tokens"])
+                    row.requests = max(row.requests, used["requests"])
+                    s.add(row)
             s.commit()
-        OLD_FILE.rename(OLD_FILE.with_suffix(".json.imported"))
+        OLD_FILE.replace(OLD_FILE.with_suffix(".json.imported"))
         log.info("Moved usage.json into the database")
     except (OSError, ValueError, KeyError) as err:
         log.warning("Couldn't import usage.json: %s", err)

@@ -59,9 +59,11 @@
 - [x] Task history (SQLite database)
 
 ## 9. Reliability (now)
-- [ ] Stop extra clicks after the task is done
-- [ ] Stop wandering on long tasks
-- [ ] iPhone 16 128GB price compare (amazon.in vs flipkart.com) works – prices match the sites
+- [x] Stop extra clicks after the task is done
+- [x] Stop wandering on long tasks (plan, scroll limit, wrap-up warning)
+- [x] iPhone 16 128GB price compare (amazon.in vs flipkart.com) works – prices match the sites
+- [x] Fact check: numbers in answers must come from pages Krify read
+- [ ] Fewer tokens on long tasks (price compare used ~94k)
 
 ## Later
 - [ ] Hover
