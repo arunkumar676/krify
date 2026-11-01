@@ -88,7 +88,9 @@ def describe(name, args):
     match name:
         case "open_url": return f"🌐 Open {args.get('url')}"
         case "click": return f"🖱️ Click [{args.get('element')}]"
-        case "type": return f"⌨️ Type \"{args.get('text')}\" into [{args.get('element')}]"
+        case "type":
+            enter = " + Enter" if args.get("submit") else ""
+            return f"⌨️ Type \"{args.get('text')}\" into [{args.get('element')}]{enter}"
         case "press_key": return f"⌨️ Press {args.get('key')}"
         case "scroll": return f"↕️ Scroll {args.get('direction')}"
         case "select_option": return f"📋 Choose \"{args.get('option')}\" in [{args.get('element')}]"

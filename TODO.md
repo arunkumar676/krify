@@ -63,7 +63,7 @@
 - [x] Stop wandering on long tasks (plan, scroll limit, wrap-up warning)
 - [x] iPhone 16 128GB price compare (amazon.in vs flipkart.com) works – prices match the sites
 - [x] Fact check: numbers in answers must come from pages Krify read
-- [ ] Fewer tokens on long tasks (price compare used ~94k)
+- [x] Fewer tokens on long tasks (price compare: 94k → 43k)
 
 ## Later
 - [ ] Hover

@@ -3,7 +3,7 @@
 
 if (!window.__krify) {
   const MAX_ELEMENTS = 100; // visible-on-screen only; fewer = smaller AI requests
-  const MAX_TEXT = 4000; // keep AI requests small (free token limits)
+  const MAX_TEXT = 2500; // keep AI requests small (free token limits)
   const MAX_SCREEN_TEXT = 3000;
 
   const SELECTOR = [
@@ -67,11 +67,19 @@ if (!window.__krify) {
     getElements() {
       document.querySelectorAll("[data-krify-id]").forEach((el) => el.removeAttribute("data-krify-id"));
       const lines = [];
+      const seenLinks = new Set();
       let id = 0;
       for (const el of document.querySelectorAll(SELECTOR)) {
         // Some sites (e.g. Amazon's "Sort by") hide the real <select> under a custom button.
         const visible = isVisible(el) || (el.tagName === "SELECT" && el.parentElement && isVisible(el.parentElement));
         if (!visible || el.disabled) continue;
+        // Fewer tokens: inside an already-listed link/button = same click; same link target = listed once
+        // (shops link each product from its picture AND its title).
+        if (el.parentElement?.closest("[data-krify-id]")) continue;
+        if (el.tagName === "A" && el.href) {
+          if (seenLinks.has(el.href)) continue;
+          seenLinks.add(el.href);
+        }
         const text = describe(el);
         if (/"\s*"/.test(text) && !/input|textarea|select/.test(text)) continue; // skip unlabeled
         id += 1;
@@ -154,7 +162,7 @@ if (!window.__krify) {
       return `Clicked [${id}] ${describe(el)}`;
     },
 
-    async type(id, text) {
+    async type(id, text, submit = false) {
       const el = find(id);
       const isField = el.tagName === "INPUT" || el.tagName === "TEXTAREA";
       if (!isField && !el.isContentEditable) throw new Error(`[${id}] is not a text box.`);
@@ -188,6 +196,10 @@ if (!window.__krify) {
         setValue(text);
       }
       el.dispatchEvent(new Event("change", { bubbles: true }));
+      if (submit) {
+        await this.pressKey("Enter"); // search in one step instead of two
+        return `Typed "${text}" into [${id}] and pressed Enter`;
+      }
       return `Typed "${text}" into [${id}]`;
     },
 

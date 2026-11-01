@@ -54,11 +54,18 @@ def check(name, args, elements, last_typed_line=""):
         line = element_line(elements, args.get("element"))
         if "input password" in line or _find(PRIVATE_FIELDS, line):
             return "Private data"
+        if args.get("submit"):  # type + Enter in one step: same checks as pressing Enter
+            return _enter_risk(elements, line)
 
     elif name == "press_key" and args.get("key") == "Enter":
-        if "input password" in (elements or ""):
-            return "Accounts"  # Enter on a login form signs in
-        if _find(MESSAGE_FIELDS, last_typed_line):
-            return "Sending"  # Enter in a message box usually sends it
+        return _enter_risk(elements, last_typed_line)
 
+    return None
+
+
+def _enter_risk(elements, typed_line):
+    if "input password" in (elements or ""):
+        return "Accounts"  # Enter on a login form signs in
+    if _find(MESSAGE_FIELDS, typed_line):
+        return "Sending"  # Enter in a message box usually sends it
     return None

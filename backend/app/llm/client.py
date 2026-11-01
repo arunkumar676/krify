@@ -78,7 +78,10 @@ async def _try_model(model, messages, tools, on_note):
             response = await _clients[provider].chat.completions.create(
                 model=model_name(model), messages=chat, tools=tools, tool_choice="auto", **MODELS[model]["extra"]
             )
-            tokens = (response.usage.total_tokens if response.usage else 0) or 0
+            u = response.usage
+            tokens = (u.total_tokens if u else 0) or 0
+            if u:
+                log.info("%s: in %s / out %s tokens", _label(model), u.prompt_tokens, u.completion_tokens)
             usage.record(model, tokens)
             return response.choices[0].message, tokens
         except openai.RateLimitError as err:
