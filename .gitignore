@@ -14,3 +14,6 @@ logs/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# Local usage counts
+backend/usage.json

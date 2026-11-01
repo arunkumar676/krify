@@ -11,6 +11,7 @@ import openai
 from openai import AsyncOpenAI
 
 from app.config import MODELS, PROVIDERS, model_name, provider_of
+from app.llm import usage
 
 log = logging.getLogger("krify")
 
@@ -20,6 +21,7 @@ _clients = {
     if os.getenv(cfg["key"])
 }
 _blocked_until = {}  # model -> time when it can be tried again
+_blocked_why = {}  # model -> "limit" | "busy" | "problem"
 
 MAX_WAIT_FOR_STRONG = 60  # seconds: wait this long for a strong model before using a backup one
 BROKEN_REPLY_CODES = {"tool_use_failed", "output_parse_failed"}
@@ -76,9 +78,11 @@ async def _try_model(model, messages, tools, on_note):
             response = await _clients[provider].chat.completions.create(
                 model=model_name(model), messages=chat, tools=tools, tool_choice="auto", **MODELS[model]["extra"]
             )
-            usage = response.usage
-            return response.choices[0].message, (usage.total_tokens if usage else 0) or 0
+            tokens = (response.usage.total_tokens if response.usage else 0) or 0
+            usage.record(model, tokens)
+            return response.choices[0].message, tokens
         except openai.RateLimitError as err:
+            usage.learn_from_limit_error(model, err)
             wait = _retry_seconds(err)
             if wait <= 20 and attempt < 2:  # short per-minute limit: just wait
                 if on_note:
@@ -86,6 +90,7 @@ async def _try_model(model, messages, tools, on_note):
                 await asyncio.sleep(wait)
                 continue
             _blocked_until[model] = time.time() + wait
+            _blocked_why[model] = "limit"
             reason = "limit reached"
         except openai.BadRequestError as err:
             # Some models now and then produce a malformed tool call; asking again usually fixes it.
@@ -94,11 +99,13 @@ async def _try_model(model, messages, tools, on_note):
                 continue
             log.warning("%s rejected the request: %s", model, str(err.body)[:300])
             _blocked_until[model] = time.time() + 30
+            _blocked_why[model] = "problem"
             reason = "had a problem"
         except (openai.APITimeoutError, openai.APIConnectionError, openai.InternalServerError,
                 openai.PermissionDeniedError, openai.NotFoundError) as err:
             log.warning("%s unavailable: %s", model, str(err)[:200])
             _blocked_until[model] = time.time() + 120  # busy/down: skip it for 2 minutes
+            _blocked_why[model] = "busy"
             reason = "is busy"
         if on_note:
             await on_note(f"🔁 {_label(model)} {reason} – switching model")
@@ -139,4 +146,19 @@ async def ask_ai(messages, tools, preferred, on_note=None):
 
     soonest = min((_blocked_for(m) for m in MODELS), default=60)
     minutes = max(1, round(soonest / 60))
+    if all(_blocked_why.get(m) == "limit" and _blocked_for(m) > 0 for m in MODELS):
+        raise RuntimeError(
+            f"⛔ All free models have used up their limits. Try again in about {minutes} minute(s)."
+        )
     raise RuntimeError(f"All free models are busy or at their limit. Try again in about {minutes} minute(s).")
+
+
+def model_status(model):
+    """Text shown next to the model in the picker."""
+    left = _blocked_for(model)
+    if left > 60 and _blocked_why.get(model) == "limit":
+        hours, minutes = divmod(round(left / 60), 60)
+        return f"⛔ limit reached ({f'{hours}h ' if hours else ''}{minutes}m left)"
+    if left > 0 and _blocked_why.get(model) == "busy":
+        return "busy right now"
+    return usage.status(model)

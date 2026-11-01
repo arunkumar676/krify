@@ -16,10 +16,17 @@
   </div>
 
   <div class="composer">
-    <label class="model-row" title="If this model hits its free limit, Krify switches to another automatically">
+    <div class="model-row" title="If this model hits its free limit, Krify switches to another automatically">
       🧠 Model
-      <select id="modelSelect"><option value="">(connect to the server)</option></select>
-    </label>
+      <div class="model-picker">
+        <button type="button" id="modelButton" class="model-button" aria-haspopup="listbox">
+          <span class="model-name">(connect to the server)</span>
+          <span class="model-status"></span>
+          <span class="model-arrow">▾</span>
+        </button>
+        <ul id="modelList" class="model-list" role="listbox" hidden></ul>
+      </div>
+    </div>
     <textarea id="taskInput" rows="2" placeholder="What should I do?"></textarea>
     <div class="row">
       <button id="newBtn" class="small" title="Forget this chat">New chat</button>

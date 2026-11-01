@@ -142,27 +142,61 @@ async function start() {
   taskInput.value = "";
   await beginTask(); // Krify works in the tab you're looking at
   setBusy(true);
-  send({ type: "task", text, model: modelSelect.value });
+  send({ type: "task", text, model: selectedModel });
 }
 
 // ---------- model picker (list comes from the server, choice is remembered) ----------
+// A custom dropdown, so each row can show the name on the left and today's usage on the right.
 
-const modelSelect = $("modelSelect");
+const modelButton = $("modelButton");
+const modelList = $("modelList");
+let models = [];
+let selectedModel = "";
 
-async function fillModels(models) {
-  const { model: saved } = await chrome.storage.local.get("model");
-  modelSelect.innerHTML = "";
-  for (const m of models) {
-    const option = document.createElement("option");
-    option.value = m.id;
-    option.textContent = m.label;
-    modelSelect.append(option);
-  }
-  if (models.some((m) => m.id === saved)) modelSelect.value = saved;
+function showSelected() {
+  const m = models.find((x) => x.id === selectedModel);
+  modelButton.querySelector(".model-name").textContent = m ? m.label : "(connect to the server)";
+  modelButton.querySelector(".model-status").textContent = m?.status || "";
+  for (const li of modelList.children) li.setAttribute("aria-selected", li.dataset.id === selectedModel);
 }
 
-modelSelect.addEventListener("change", () => {
-  chrome.storage.local.set({ model: modelSelect.value });
+async function fillModels(list) {
+  const { model: saved } = await chrome.storage.local.get("model");
+  models = list;
+  const wanted = selectedModel || saved;
+  selectedModel = list.some((m) => m.id === wanted) ? wanted : list[0]?.id || "";
+
+  modelList.innerHTML = "";
+  for (const m of list) {
+    const li = document.createElement("li");
+    li.role = "option";
+    li.dataset.id = m.id;
+    const name = document.createElement("span");
+    name.className = "model-name";
+    name.textContent = m.label;
+    const status = document.createElement("span");
+    status.className = "model-status";
+    status.textContent = m.status || "";
+    li.append(name, status);
+    li.onclick = () => {
+      selectedModel = m.id;
+      chrome.storage.local.set({ model: m.id });
+      showSelected();
+      modelList.hidden = true;
+    };
+    modelList.append(li);
+  }
+  showSelected();
+}
+
+modelButton.onclick = () => {
+  if (models.length) modelList.hidden = !modelList.hidden;
+};
+document.addEventListener("click", (e) => {
+  if (!e.target.closest(".model-picker")) modelList.hidden = true;
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") modelList.hidden = true;
 });
 
 startBtn.onclick = start;

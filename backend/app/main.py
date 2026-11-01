@@ -4,7 +4,7 @@ The side panel connects to ws://127.0.0.1:8765/ws.
 Side panel → server: {"type": "task", "text", "model"} | {"type": "stop"} | {"type": "reset"}
                      | {"type": "result", "id", "ok", "value" | "error"}
                      | {"type": "confirm_result", "id", "allow"}
-Server → side panel: {"type": "models", "models": [{"id", "label"}]}  (sent on connect)
+Server → side panel: {"type": "models", "models": [{"id", "label", "status"}]}  (on connect + after each task)
                      | {"type": "run", "id", "name", "args"}  (do a browser operation)
                      | {"type": "confirm", "id", "text"}  (ask the user Allow / Block)
                      | {"type": "step" | "done" | "ask" | "stopped" | "error", "text"}
@@ -19,6 +19,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
 from app.agent.loop import Agent
 from app.config import MODELS, PORT, PROVIDERS, provider_of
+from app.llm.client import model_status
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("krify")
@@ -78,6 +79,22 @@ async def websocket_endpoint(ws: WebSocket):
     agent = Agent(browser, ui, confirm)
     task = None
 
+    async def send_models():
+        """Model list for the picker, with today's usage next to each one."""
+        await ws.send_json(
+            {
+                "type": "models",
+                "models": [
+                    {
+                        "id": m,
+                        "label": f"{PROVIDERS[provider_of(m)]['name']} · {info['label']}",
+                        "status": model_status(m),
+                    }
+                    for m, info in MODELS.items()
+                ],
+            }
+        )
+
     async def run_task(text, model):
         try:
             await agent.run(text, model)
@@ -93,17 +110,13 @@ async def websocket_endpoint(ws: WebSocket):
             agent.close_open_calls()
             log.exception("Task failed")
             await ui("error", f"Something went wrong: {err}")
+        finally:
+            try:
+                await send_models()  # refresh usage in the picker
+            except Exception:
+                pass  # panel already gone
 
-    # Tell the side panel which models it can offer.
-    await ws.send_json(
-        {
-            "type": "models",
-            "models": [
-                {"id": m, "label": f"{PROVIDERS[provider_of(m)]['name']} · {info['label']}"}
-                for m, info in MODELS.items()
-            ],
-        }
-    )
+    await send_models()
 
     try:
         while True:
