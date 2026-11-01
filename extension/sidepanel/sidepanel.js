@@ -60,6 +60,9 @@ function connect() {
       case "models":
         fillModels(msg.models);
         break;
+      case "history":
+        showHistory(msg.items);
+        break;
       case "run": // the agent wants a browser operation
         try {
           const value = await runOperation(msg.name, msg.args);
@@ -207,10 +210,98 @@ taskInput.addEventListener("keydown", (e) => {
     start();
   }
 });
-$("newBtn").onclick = () => {
+function newChat() {
   send({ type: "reset" });
   resetTabs();
   logEl.innerHTML = '<div class="hint">New chat. What should I do?</div>';
+}
+$("newBtn").onclick = newChat;
+
+// ---------- task history (saved by the server in its database) ----------
+
+const historyView = $("historyView");
+const historyList = $("historyList");
+const STATUS_ICON = { done: "✅", ask: "❓", stopped: "⛔", error: "⚠️", running: "⏳" };
+
+function openHistory(open) {
+  historyView.hidden = !open;
+  logEl.hidden = open;
+  $("clearConfirm").hidden = true;
+  if (open) send({ type: "history" });
+}
+
+function timeAgo(iso) {
+  const minutes = Math.round((Date.now() - new Date(iso)) / 60000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  if (minutes < 24 * 60) return `${Math.round(minutes / 60)}h ago`;
+  const days = Math.round(minutes / (24 * 60));
+  return days === 1 ? "yesterday" : `${days} days ago`;
+}
+
+function showHistory(items) {
+  historyList.innerHTML = "";
+  if (!items.length) {
+    historyList.innerHTML = '<li class="history-empty">No tasks yet.</li>';
+    return;
+  }
+  for (const item of items) {
+    const li = document.createElement("li");
+    li.title = "Click to put this task in the box (you can edit it)";
+
+    const top = document.createElement("div");
+    top.className = "top";
+    const task = document.createElement("span");
+    task.className = "task";
+    task.textContent = `${STATUS_ICON[item.status] || "•"} ${item.text}`;
+    const when = document.createElement("span");
+    when.className = "when";
+    when.textContent = timeAgo(item.created_at);
+    top.append(task, when);
+
+    const bottom = document.createElement("div");
+    bottom.className = "bottom";
+    const summary = document.createElement("span");
+    summary.className = "summary";
+    summary.textContent = item.summary || "";
+    const run = document.createElement("button");
+    run.textContent = "▶";
+    run.title = "Run again (in a new chat)";
+    const del = document.createElement("button");
+    del.textContent = "🗑";
+    del.title = "Delete from history";
+    bottom.append(summary, run, del);
+    li.append(top, bottom);
+
+    li.onclick = () => {
+      // Put the task in the box so it can be edited before Start.
+      openHistory(false);
+      taskInput.value = item.text;
+      taskInput.focus();
+    };
+    run.onclick = (e) => {
+      e.stopPropagation();
+      if (startBtn.disabled || startBtn.hidden) return; // not connected, or a task is running
+      openHistory(false);
+      newChat();
+      taskInput.value = item.text;
+      start();
+    };
+    del.onclick = (e) => {
+      e.stopPropagation();
+      send({ type: "history_delete", text: item.text });
+    };
+    historyList.append(li);
+  }
+}
+
+$("historyBtn").onclick = () => openHistory(historyView.hidden);
+$("closeHistoryBtn").onclick = () => openHistory(false);
+$("clearHistoryBtn").onclick = () => ($("clearConfirm").hidden = false);
+$("clearNoBtn").onclick = () => ($("clearConfirm").hidden = true);
+$("clearYesBtn").onclick = () => {
+  send({ type: "history_clear" });
+  $("clearConfirm").hidden = true;
 };
 
 // ---------- "Show cursor" switch (remembered between sessions) ----------

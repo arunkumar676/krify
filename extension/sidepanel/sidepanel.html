@@ -8,8 +8,26 @@
 <body>
   <header>
     <h1>Krify</h1>
+    <span class="spacer"></span>
     <span id="status" class="status off">● Not connected</span>
+    <button id="historyBtn" class="small" title="Past tasks">🕘 History</button>
   </header>
+
+  <section id="historyView" class="history" hidden>
+    <div class="row">
+      <strong>🕘 History</strong>
+      <span class="spacer"></span>
+      <button id="clearHistoryBtn" class="small">Clear all</button>
+      <button id="closeHistoryBtn" class="small">✕ Close</button>
+    </div>
+    <div id="clearConfirm" class="row confirm-clear" hidden>
+      Delete all history?
+      <span class="spacer"></span>
+      <button id="clearYesBtn" class="small">Yes, delete</button>
+      <button id="clearNoBtn" class="small">No</button>
+    </div>
+    <ul id="historyList" class="history-list"></ul>
+  </section>
 
   <div id="log" class="log">
     <div class="hint">Tell me what to do, e.g. <em>"search google for wireless mouse"</em></div>

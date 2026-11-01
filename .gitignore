@@ -17,3 +17,5 @@ Thumbs.db
 
 # Local usage counts
 backend/usage.json
+backend/krify.db
+backend/usage.json.imported

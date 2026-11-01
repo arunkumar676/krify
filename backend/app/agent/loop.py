@@ -4,6 +4,7 @@ import json
 import logging
 import re
 
+from app import history
 from app.agent import safety
 from app.agent.prompt import SYSTEM_PROMPT
 from app.agent.tools import TOOLS
@@ -86,7 +87,12 @@ class Agent:
 
         async def ui_and_log(kind, text):
             log.info("[%s] %s", kind, text)
+            if self.task_id:
+                history.add_step(self.task_id, kind, text)
             await ui(kind, text)
+
+        self.task_id = None  # database id of the running task
+        self.model = None  # model the task is currently using
 
         self.ui = ui_and_log  # async (type, text) -> None
         self.messages = [{"role": "system", "content": SYSTEM_PROMPT}]
@@ -156,15 +162,23 @@ class Agent:
         self.last_page = page
 
     async def finish(self, kind, text):
-        """Send the final message, with how many tokens the task used."""
+        """Send the final message, with how many tokens the task used, and save the result."""
         log.info("Task used %d tokens", self.tokens)
+        self.end_task(kind, text)
         if kind == "done":
             text = f"{text}\n· used {self.tokens / 1000:.1f}k tokens"
         await self.ui(kind, text)
 
+    def end_task(self, status, summary):
+        """Save how the task ended (done / ask / stopped / error) in the history."""
+        if self.task_id:
+            history.finish_task(self.task_id, status, summary, self.tokens, self.model)
+
     async def run(self, task, model):
         self.idle_steps = 0
         self.tokens = 0
+        self.model = model
+        self.task_id = history.start_task(task, model)
         nudged = False
         self.add_with_page({"role": "user"}, task, await self.page_view())
 
@@ -175,6 +189,7 @@ class Agent:
             self.tokens += tokens
             if used_model != model:
                 model = used_model  # keep using the model that still has free quota
+                self.model = model
 
             if not reply.tool_calls:  # plain text instead of an operation
                 self.messages.append({"role": "assistant", "content": reply.content or ""})

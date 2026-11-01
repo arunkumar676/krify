@@ -4,9 +4,11 @@ The side panel connects to ws://127.0.0.1:8765/ws.
 Side panel → server: {"type": "task", "text", "model"} | {"type": "stop"} | {"type": "reset"}
                      | {"type": "result", "id", "ok", "value" | "error"}
                      | {"type": "confirm_result", "id", "allow"}
+                     | {"type": "history"} | {"type": "history_delete", "text"} | {"type": "history_clear"}
 Server → side panel: {"type": "models", "models": [{"id", "label", "status"}]}  (on connect + after each task)
                      | {"type": "run", "id", "name", "args"}  (do a browser operation)
                      | {"type": "confirm", "id", "text"}  (ask the user Allow / Block)
+                     | {"type": "history", "items": [{"text", "status", "summary", "tokens", "created_at"}]}
                      | {"type": "step" | "done" | "ask" | "stopped" | "error", "text"}
 """
 
@@ -17,6 +19,7 @@ import logging
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
+from app import history
 from app.agent.loop import Agent
 from app.config import MODELS, PORT, PROVIDERS, provider_of
 from app.llm.client import model_status
@@ -100,17 +103,19 @@ async def websocket_endpoint(ws: WebSocket):
             await agent.run(text, model)
         except asyncio.CancelledError:  # Stop button
             agent.close_open_calls()
-            log.info("[stopped] by the user")
-            await ui("stopped", "Stopped.")
+            agent.end_task("stopped", "Stopped by you.")
+            await agent.ui("stopped", "Stopped.")
         except RuntimeError as err:  # friendly errors we raise ourselves
             agent.close_open_calls()
-            log.warning("Task stopped: %s", err)
-            await ui("error", str(err))
+            agent.end_task("error", str(err))
+            await agent.ui("error", str(err))
         except Exception as err:
             agent.close_open_calls()
             log.exception("Task failed")
-            await ui("error", f"Something went wrong: {err}")
+            agent.end_task("error", f"Something went wrong: {err}")
+            await agent.ui("error", f"Something went wrong: {err}")
         finally:
+            agent.task_id = None
             try:
                 await send_models()  # refresh usage in the picker
             except Exception:
@@ -142,6 +147,14 @@ async def websocket_endpoint(ws: WebSocket):
                     task.cancel()  # ends the task right away, even while waiting
             elif kind == "reset":
                 agent.reset()
+            elif kind == "history":
+                await ws.send_json({"type": "history", "items": history.recent()})
+            elif kind == "history_delete":
+                history.delete_text(msg.get("text", ""))
+                await ws.send_json({"type": "history", "items": history.recent()})
+            elif kind == "history_clear":
+                history.clear()
+                await ws.send_json({"type": "history", "items": []})
     except WebSocketDisconnect:
         log.info("Side panel disconnected")
         if task:

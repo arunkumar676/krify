@@ -7,5 +7,6 @@ dependencies = [
     "groq>=1.7.0",
     "openai>=3.42.0",
     "python-dotenv>=1.2.4",
+    "sqlmodel>=0.0.48",
     "uvicorn[standard]>=0.54.0",
 ]
