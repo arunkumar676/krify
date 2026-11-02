@@ -3,6 +3,7 @@ name = "krify-backend"
 version = "0.1.0"
 requires-python = ">=3.13"
 dependencies = [
+    "duckdb>=2.0.0",
     "fastapi>=0.162.0",
     "groq>=1.7.0",
     "openai>=3.42.0",

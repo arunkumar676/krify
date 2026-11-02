@@ -21,6 +21,7 @@ Krify is an AI agent that works inside your browser. You tell it what to do in p
 - 📊 **Usage per model**: the picker shows today's usage next to each model ("14k tokens today", "64% used", "limit reached")
 - 🕘 **Task history**: past tasks with their result; click to edit and reuse, ▶ to run again, 🗑 to delete
 - 📝 **Notes and screen reading**: Krify reads the text visible on screen and saves key facts (like prices) as notes, so it doesn't guess
+- 📊 **Google Sheets**: Krify downloads the open sheet as CSV (your own login, private sheets too, nothing saved) and answers questions with SQL in a small in-memory database (DuckDB). Only the answer rows go to the AI. Read-only
 - 📸 **Screenshots**: when text isn't enough (pictures, colours, icons, maps), Krify takes a screenshot with element numbers drawn on it and switches to a model that can see images
 - 📋 **Plans and fact check**: for longer tasks Krify writes a checklist first; every number in its final answer must have appeared on a page it read
 - ⛔ **Stop anytime**: ends the task instantly
@@ -105,6 +106,7 @@ Type a task in the side panel and press **▶ Start**, for example:
 | Server | Python 3.12+, FastAPI, Uvicorn, WebSocket |
 | AI access | `openai` Python library (OpenAI-compatible APIs) pointed at Groq, Gemini and OpenRouter |
 | Database | SQLite (`backend/krify.db`, created automatically) via SQLModel; PostgreSQL later for multi-user hosting |
+| Sheet questions | DuckDB, in memory, with file and network access switched off |
 | Agent loop | Custom: observe → decide → act → verify |
 | Package manager | uv |
 
@@ -130,6 +132,7 @@ krify/
 │   │   ├── config.py        # providers, models, settings
 │   │   ├── db.py            # SQLite database: tasks, steps, usage, limits
 │   │   ├── history.py       # task history
+│   │   ├── sheets.py        # Google Sheets: CSV → DuckDB → answers
 │   │   ├── agent/
 │   │   │   ├── loop.py      # the agent loop
 │   │   │   ├── tools.py     # actions the AI can choose
@@ -145,7 +148,7 @@ krify/
 │   ├── manifest.json
 │   ├── background.js        # opens the side panel
 │   ├── content.js           # runs in the page: reads it, acts, animations
-│   └── sidepanel/           # chat UI, model picker, history, Allow/Block
+│   └── sidepanel/           # chat UI, model picker, history, Allow/Block, sheets.js
 ├── README.md
 └── TODO.md                  # progress checklist
 ```
@@ -163,6 +166,7 @@ krify/
 - [x] Reliability on long tasks: plan checklist, goal shown at every step, scroll limit, wrap-up warning, fact check
 - [x] Hover menus
 - [x] Screenshots (let the AI see the page as an image)
+- [x] Read Google Sheets (private too)
 
 See [TODO.md](TODO.md) for the detailed checklist.
 

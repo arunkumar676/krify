@@ -4,7 +4,7 @@ import json
 import logging
 import re
 
-from app import history
+from app import history, sheets
 from app.agent import safety
 from app.agent.prompt import SYSTEM_PROMPT
 from app.agent.tools import TOOLS
@@ -13,12 +13,17 @@ from app.llm.client import ask_ai, has_vision_model
 
 log = logging.getLogger("krify")
 
-READ_OPS = {"get_page_info", "get_elements", "read_text"}
+READ_OPS = {"get_page_info", "get_elements", "read_text", "sheet_query"}
 OLD_PAGE = "\n[older page view removed to save space]"
 OLD_SCREEN = "[older screen text removed to save space – use your notes]"
+SHEET_HINT = "[Google Sheet] Call read_text first to see the columns, then sheet_query with SQL."
+
+
+def is_sheet(url):
+    return "docs.google.com/spreadsheets/" in (url or "")
 
 # Stuck detector: these always count as progress; clicks/keys count only if the page changed.
-PROGRESS_OPS = {"read_text", "screenshot", "note", "type", "select_option", "open_url", "new_tab"}
+PROGRESS_OPS = {"read_text", "sheet_query", "screenshot", "note", "type", "select_option", "open_url", "new_tab"}
 OLD_SCREENSHOT = "[older screenshot removed to save space]"
 IDLE_LIMIT = 5
 MAX_SCROLLS_PER_PAGE = 4
@@ -104,6 +109,7 @@ def describe(name, args):
         case "wait": return f"⏳ Wait {args.get('seconds')}s"
         case "get_page_info" | "get_elements": return "👀 Look at the page"
         case "read_text": return "📖 Read the whole page" if args.get("scope") == "page" else "📖 Read the screen"
+        case "sheet_query": return f"📊 Ask the sheet: {args.get('sql')}"
         case _: return f"{name} {args}"
 
 
@@ -209,6 +215,8 @@ class Agent:
             self.seen.append(elements)
             self.current_url = info.get("url", "")
             tabs = f"[Tabs] {info['tabs']}\n" if info.get("tabs") else ""
+            if is_sheet(self.current_url):
+                elements = f"{SHEET_HINT}\n{elements}"
             return f"{tabs}[Current page] {info.get('title')} – {info.get('url')}\n{elements}"
         except Exception as err:
             return f"[Current page] (can't read it: {err})"
@@ -363,8 +371,15 @@ class Agent:
                     self.messages.append({**tool_msg, "content": "Saved."})
                     self.check_progress(name, False)
                 elif name in READ_OPS:
-                    await self.ui("step", describe(name, args))
-                    result = await self.safe_run(name, args)
+                    on_sheet = name in ("read_text", "sheet_query") and is_sheet(self.current_url)
+                    label = "📊 Read the sheet" if on_sheet and name == "read_text" else describe(name, args)
+                    await self.ui("step", label)
+                    if on_sheet:
+                        result = await self.sheet_op(name, args)
+                    elif name == "sheet_query":
+                        result = "Error: sheet_query only works on a Google Sheets page."
+                    else:
+                        result = await self.safe_run(name, args)
                     self.check_progress(name, False)
                     self.seen.append(str(result))
                     if name == "get_elements":
@@ -424,6 +439,19 @@ class Agent:
         allowed = await self.confirm(f"{reason}: {what}")
         await self.ui("step", "✅ Allowed by you" if allowed else "⛔ Blocked")
         return allowed
+
+    async def sheet_op(self, name, args):
+        """Google Sheets: the extension downloads the sheet as CSV, DuckDB answers here."""
+        data = await self.safe_run("sheet_csv", {})
+        if not isinstance(data, dict):
+            return data  # an "Error: …" text
+        try:
+            if name == "read_text":
+                return sheets.summary(data.get("csv", ""), data.get("title", ""), data.get("tab", ""))
+            return sheets.query(data.get("csv", ""), args.get("sql", ""))
+        except Exception as err:
+            await self.ui("step", f"⚠️ {err}")
+            return f"Error: {err}"
 
     async def safe_run(self, name, args):
         try:

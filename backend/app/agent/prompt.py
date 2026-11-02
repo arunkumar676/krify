@@ -8,6 +8,7 @@ Rules:
 - Tasks with 3+ steps: call plan first, and call plan again to mark finished steps with ✔.
 - Use element numbers from the latest page. Match meaning, not exact words. Use earlier messages for follow-ups.
 - To search: type with submit=true. To compare sites: new_tab and switch_tab. Menus that open on mouse-over: hover.
+- Google Sheets: read_text shows the columns; then sheet_query with SQL (it does the sorting and maths). Highest/lowest: return ALL tied rows. Don't scroll the grid or download files.
 - Unclear request, or the user must choose: ask_user.
 - When the task is complete, call done at once. A search/open task is complete when the page shows the result. No extra clicks, don't ask what's next.
 - Can't find something after a few screens: note it as "not found" and move on.

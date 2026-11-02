@@ -18,6 +18,9 @@ TEXT = {"type": "string"}
 TOOLS = [
     _tool("read_text", "Read text on screen (prices, facts). scope=page reads the whole page.",
           {"scope": {"type": "string", "enum": ["screen", "page"]}}),
+    _tool("sheet_query", "Google Sheets: one SQL SELECT (DuckDB) on table sheet; quote column names, e.g. "
+          "SELECT \"First Name\", \"Math Score\" FROM sheet WHERE \"Math Score\" = (SELECT MAX(\"Math Score\") FROM sheet)",
+          {"sql": TEXT}, ["sql"]),
     _tool("screenshot", "See the screen as an image, with element numbers drawn on it. Costs more: use only "
           "when text isn't enough (pictures, icons, colours, maps, charts)."),
     _tool("open_url", "Open a URL in this tab.", {"url": URL}, ["url"]),

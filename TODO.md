@@ -70,7 +70,7 @@
 - [x] Screenshots (with element numbers drawn on; auto-switch to a model that can see images)
 
 ## 10. Quick wins (no new permissions)
-- [ ] Read Google Sheets (CSV + ask Google for only the rows needed)
+- [x] Read Google Sheets, private too (download as CSV → DuckDB answers the AI's SQL; ties kept)
 - [ ] Zoom into a small part of the screen
 - [ ] Find an element by description ("the search bar")
 - [ ] Batch: several actions in one AI call

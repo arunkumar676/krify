@@ -1,6 +1,8 @@
 // Runs browser operations. During a task Krify works in "its" tab, not whatever tab is active,
 // and only sees/uses its own tabs: the one the task started in plus tabs it opened.
 
+import { isSheetUrl, sheetCsv } from "./sheets.js";
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ---------- Krify's tabs ----------
@@ -197,6 +199,14 @@ export const operations = {
     return shrinkImage(shot, 1024);
   },
   read_text: ({ scope = "screen" } = {}) => callInPage("readText", [scope]),
+  // Google Sheets: the open sheet tab as CSV (the server answers questions about it).
+  async sheet_csv() {
+    const tab = await currentTab();
+    if (!isSheetUrl(tab.url)) throw new Error("This isn't a Google Sheets page.");
+    const csv = await sheetCsv(tab.url);
+    const name = await callInPage("sheetTabName").catch(() => "");
+    return { csv, tab: name, title: (tab.title || "").replace(/ - Google Sheets$/, "") };
+  },
 
   // Navigate
   async open_url({ url }) {

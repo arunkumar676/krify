@@ -131,6 +131,11 @@ if (!window.__krify) {
       return lines.join("\n") || "(no text visible on screen – try scrolling)";
     },
 
+    // Google Sheets: name of the open sheet tab (the data itself is fetched by sheets.js).
+    sheetTabName() {
+      return document.querySelector(".docs-sheet-active-tab .docs-sheet-tab-name")?.textContent || "";
+    },
+
     // ---------- actions ----------
     // When `animate` is on, a visible Krify cursor moves, clicks and types like a person.
 
