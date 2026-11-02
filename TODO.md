@@ -68,3 +68,33 @@
 ## Later
 - [x] Hover (works on Amazon "Account & Lists"; CSS-only menus may need the real mouse)
 - [x] Screenshots (with element numbers drawn on; auto-switch to a model that can see images)
+
+## 10. Quick wins (no new permissions)
+- [ ] Read Google Sheets (CSV + ask Google for only the rows needed)
+- [ ] Zoom into a small part of the screen
+- [ ] Find an element by description ("the search bar")
+- [ ] Batch: several actions in one AI call
+- [ ] File upload
+
+## 11. Real keyboard and mouse (`chrome.debugger`)
+- [ ] Turn on the debugger permission (Chrome shows a yellow bar)
+- [ ] Real keys and shortcuts (Tab, Enter, Ctrl+Z, Ctrl+C/V, Ctrl+End)
+- [ ] Right, double, triple click; drag and drop
+- [ ] Click by position (x, y) from a screenshot
+
+## 12. Google Sheets editing
+- [ ] Jump to a cell with the Name box (e.g. A102)
+- [ ] Type a row: value + Tab
+- [ ] Check with a screenshot, undo with Ctrl+Z if wrong
+- [ ] Apps Script for big jobs (user clicks Allow)
+
+## 13. Safety
+- [ ] Ask before downloads, accepting terms, changing settings
+- [ ] Never: passwords, card numbers, CAPTCHAs, money transfers, permanent deletes
+- [ ] Ignore instructions written inside web pages
+
+## 14. Extras (later)
+- [ ] Run JavaScript in the page
+- [ ] Read console errors and network requests
+- [ ] Record a GIF
+- [ ] Resize the window (phone layout)
