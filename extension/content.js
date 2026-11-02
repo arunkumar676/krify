@@ -12,6 +12,8 @@ if (!window.__krify) {
     "[role=option]", "[role=switch]", "[contenteditable=true]", "[onclick]",
   ].join(",");
 
+  const NAME_BOX = '#t-name-box, input.waffle-name-box, input[aria-label="Name Box" i]';
+
   const clean = (s, max = 50) => {
     s = (s || "").replace(/\s+/g, " ").trim();
     return s.length > max ? s.slice(0, max) + "…" : s;
@@ -250,6 +252,77 @@ if (!window.__krify) {
         return `Typed "${text}" into [${id}] and pressed Enter`;
       }
       return `Typed "${text}" into [${id}]`;
+    },
+
+    // ---------- helpers for real mouse clicks (realinput.js) ----------
+
+    // Scroll an element into view, show the cursor there, and return the spot to click.
+    async pointAt(id) {
+      const el = find(id);
+      await bringIntoView(el);
+      const r = el.getBoundingClientRect();
+      let spot = { x: r.left + Math.min(r.width / 2, 60), y: r.top + r.height / 2 };
+      if (this.animate) {
+        spot = await moveCursorTo(el);
+        glow(el);
+        ripple(spot.x, spot.y);
+      }
+      return { ...spot, nameBox: el.matches(NAME_BOX) };
+    },
+
+    // After a real click: is the cursor in this box? Selects its text so typing replaces it.
+    focusCheck(id) {
+      const el = find(id);
+      if (document.activeElement !== el && !el.contains(document.activeElement)) return false;
+      el.select?.();
+      return true;
+    },
+
+    // Google Sheets' Name box (shows/jumps to a cell like A130): its spot, value and focus.
+    async nameBox() {
+      const el = document.querySelector(NAME_BOX);
+      if (!el) throw new Error("Can't find the Name box on this page.");
+      const r = el.getBoundingClientRect();
+      let spot = { x: r.left + Math.min(r.width / 2, 60), y: r.top + r.height / 2 };
+      if (this.animate) {
+        spot = await moveCursorTo(el);
+        glow(el);
+        ripple(spot.x, spot.y);
+      }
+      return { ...spot, value: el.value, focused: document.activeElement === el };
+    },
+
+    nameBoxValue() {
+      return document.querySelector(NAME_BOX)?.value || "";
+    },
+
+    // Google Sheets/Docs save status next to the title: "saving", "saved" or "unknown".
+    saveState() {
+      const said = [...document.querySelectorAll("[aria-label], [data-tooltip], .docs-save-indicator-container")]
+        .slice(0, 3000)
+        .map((el) => `${el.getAttribute("aria-label") || ""} ${el.getAttribute("data-tooltip") || ""} ${el.classList.contains("docs-save-indicator-container") ? el.textContent : ""}`)
+        .join("\n");
+      if (/\bsaving\b/i.test(said)) return "saving";
+      if (/all changes saved|saved to drive|changes saved/i.test(said)) return "saved";
+      return "unknown";
+    },
+
+    // Google Sheets: the selected cell and what the formula bar shows for it (live, no saving needed).
+    activeCell() {
+      const bar = document.querySelector("#t-formula-bar-input, .cell-input[role=combobox], #t-formula-bar-input-container [contenteditable]");
+      return { cell: document.querySelector(NAME_BOX)?.value || "", formula: bar ? bar.innerText.replace(/\n$/, "") : null };
+    },
+
+    selectNameBox() {
+      const el = document.querySelector(NAME_BOX);
+      if (!el || document.activeElement !== el) return false;
+      el.select();
+      return true;
+    },
+
+    // Show the key badge for a key pressed for real (by realinput.js).
+    showKeyBadge(key) {
+      if (this.animate) showKey(key);
     },
 
     async pressKey(key) {

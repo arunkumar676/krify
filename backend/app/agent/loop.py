@@ -13,7 +13,8 @@ from app.llm.client import ask_ai, has_vision_model
 
 log = logging.getLogger("krify")
 
-READ_OPS = {"get_page_info", "get_elements", "read_text", "sheet_query"}
+READ_OPS = {"get_page_info", "get_elements", "read_text", "sheet_query", "read_cells"}
+SHEET_OPS = {"sheet_query", "read_cells"}
 OLD_PAGE = "\n[older page view removed to save space]"
 OLD_SCREEN = "[older screen text removed to save space – use your notes]"
 SHEET_HINT = "[Google Sheet] Call read_text first to see the columns, then sheet_query with SQL."
@@ -21,7 +22,7 @@ SHEET_HINT = "[Google Sheet] Call read_text first to see the columns, then sheet
 
 # Batches: actions the AI may send several of in one reply.
 ACTION_OPS = {"open_url", "go_back", "reload", "new_tab", "switch_tab", "close_tab", "click", "hover", "type",
-              "press_key", "scroll", "select_option", "wait"}
+              "type_here", "go_to_cell", "press_key", "scroll", "select_option", "wait"}
 MAX_BATCH = 5
 BATCH_LIMIT = "Skipped: at most 5 steps at once. Look at the page and continue."
 PAGE_MOVED = ("Skipped: the page changed after an earlier step, so element numbers may be different. "
@@ -41,7 +42,7 @@ def is_sheet(url):
     return "docs.google.com/spreadsheets/" in (url or "")
 
 # Stuck detector: these always count as progress; clicks/keys count only if the page changed.
-PROGRESS_OPS = {"read_text", "sheet_query", "screenshot", "note", "type", "select_option", "open_url", "new_tab"}
+PROGRESS_OPS = {"read_text", "sheet_query", "read_cells", "go_to_cell", "type_here", "screenshot", "note", "type", "select_option", "open_url", "new_tab"}
 OLD_SCREENSHOT = "[older screenshot removed to save space]"
 IDLE_LIMIT = 5
 MAX_SCROLLS_PER_PAGE = 4
@@ -116,7 +117,12 @@ def describe(name, args):
         case "type":
             enter = " + Enter" if args.get("submit") else ""
             return f"⌨️ Type \"{args.get('text')}\" into [{args.get('element')}]{enter}"
-        case "press_key": return f"⌨️ Press {args.get('key')}"
+        case "press_key":
+            times = f" × {args.get('repeat')}" if str(args.get("repeat") or 1) not in ("1", "0") else ""
+            return f"⌨️ Press {args.get('key')}{times}"
+        case "type_here": return f"⌨️ Type \"{args.get('text')}\" where the cursor is"
+        case "go_to_cell": return f"📍 Go to cell {args.get('cell')}"
+        case "read_cells": return f"📊 Read cells {args.get('cells')}"
         case "scroll": return f"↕️ Scroll {args.get('direction')}"
         case "select_option": return f"📋 Choose \"{args.get('option')}\" in [{args.get('element')}]"
         case "new_tab": return f"🗂️ New tab: {args.get('url')}"
@@ -307,6 +313,8 @@ class Agent:
         self.fact_check_failed = False
         self.current_url = ""
         self.scrolls = {}  # url -> times scrolled on that page
+        self.edit_allowed = False  # the user allowed editing a Google Sheet/Doc in this task
+        self.last_cell = ""
         nudged = False
         self.add_with_page({"role": "user"}, task, await self.page_view())
 
@@ -402,13 +410,13 @@ class Agent:
                     self.messages.append({**tool_msg, "content": "Saved."})
                     self.check_progress(name, False)
                 elif name in READ_OPS:
-                    on_sheet = name in ("read_text", "sheet_query") and is_sheet(self.current_url)
+                    on_sheet = name in SHEET_OPS | {"read_text"} and is_sheet(self.current_url)
                     label = "📊 Read the sheet" if on_sheet and name == "read_text" else describe(name, args)
                     await self.ui("step", label)
                     if on_sheet:
                         result = await self.sheet_op(name, args)
-                    elif name == "sheet_query":
-                        result = "Error: sheet_query only works on a Google Sheets page."
+                    elif name in SHEET_OPS:
+                        result = f"Error: {name} only works on a Google Sheets page."
                     else:
                         result = await self.safe_run(name, args)
                     self.check_progress(name, False)
@@ -459,6 +467,8 @@ class Agent:
         """Show Allow / Block in the side panel. Returns True only if the user allows."""
         line = safety.element_line(self.elements, args.get("element"))
         what = describe(name, args) + (f" – {line}" if line else "")
+        if name == "type_here" and self.last_cell:
+            what += f" (cell {self.last_cell})"
         allowed = await self.confirm(f"{reason}: {what}")
         await self.ui("step", "✅ Allowed by you" if allowed else "⛔ Blocked")
         return allowed
@@ -469,9 +479,15 @@ class Agent:
         await self.ui("step", describe(name, args))
 
         # Safety check runs in code: risky actions always need the user's OK.
-        reason = safety.check(name, args, self.elements, self.last_typed_line)
+        reason = safety.check(name, args, self.elements, self.last_typed_line, self.current_url)
+        if reason == "Editing" and self.edit_allowed:
+            reason = None  # editing this document was already allowed in this task
         if reason and not await self.ask_permission(reason, name, args):
             return BLOCKED, "blocked"
+        if reason == "Editing":
+            self.edit_allowed = True
+        if name == "go_to_cell":
+            self.last_cell = str(args.get("cell", ""))
 
         if name == "scroll":
             count = self.scrolls.get(self.current_url, 0)
@@ -522,14 +538,33 @@ class Agent:
         self.add_with_page(tool_msg, "\n".join(report), page or await self.page_view())
         return ran
 
+    async def live_cell(self, ref):
+        """One cell that's selected right now: read it from the formula bar – instant, and right
+        even before Google has saved. None if it can't be read that way (then the sheet is downloaded)."""
+        ref = ref.strip().upper().replace("$", "")
+        if not ref or ":" in ref:
+            return None
+        try:
+            live = await self.browser("sheet_active_cell", {})
+        except Exception:
+            return None
+        formula = live.get("formula") if isinstance(live, dict) else None
+        if formula is None or str(live.get("cell", "")).upper() != ref or formula.startswith("="):
+            return None  # another cell is selected, or a formula (its result is in the download)
+        return f"{ref}: {formula!r} (live, from the formula bar)" if formula else f"{ref}: (empty) (live)"
+
     async def sheet_op(self, name, args):
         """Google Sheets: the extension downloads the sheet as CSV, DuckDB answers here."""
+        if name == "read_cells" and (live := await self.live_cell(str(args.get("cells", "")))):
+            return live
         data = await self.safe_run("sheet_csv", {})
         if not isinstance(data, dict):
             return data  # an "Error: …" text
         try:
             if name == "read_text":
                 return sheets.summary(data.get("csv", ""), data.get("title", ""), data.get("tab", ""))
+            if name == "read_cells":
+                return sheets.cells(data.get("csv", ""), str(args.get("cells", "")))
             return sheets.query(data.get("csv", ""), args.get("sql", ""))
         except Exception as err:
             await self.ui("step", f"⚠️ {err}")

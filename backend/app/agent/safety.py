@@ -39,8 +39,21 @@ def visible_text(line):
     return " ".join(re.findall(r'"([^"]*)"', line))
 
 
-def check(name, args, elements, last_typed_line=""):
+# Keys that wipe content in Google Sheets/Docs (selected cells, text).
+ERASE_KEYS = r"delete|backspace|ctrl\s*\+\s*x|control\s*\+\s*x"
+GOOGLE_EDITORS = r"^https://docs\.google\.com/(spreadsheets|document|presentation)/"
+
+
+def check(name, args, elements, last_typed_line="", url=""):
     """Return a short reason if the action needs the user's OK, else None."""
+    key = str(args.get("key", "")).strip()
+    in_editor = bool(re.match(GOOGLE_EDITORS, url or ""))
+    if name == "press_key" and in_editor and re.fullmatch(ERASE_KEYS, key, re.IGNORECASE):
+        return "Deleting"
+    # Typing into a Google Sheet/Doc changes it: asked once per task (see Agent.do_action).
+    if in_editor and (name == "type_here" or (name == "type" and "name box" not in
+                                               element_line(elements, args.get("element")).lower())):
+        return "Editing"
     if name in ("click", "select_option"):
         line = element_line(elements, args.get("element"))
         text = f"{visible_text(line)} {args.get('option', '')}"
@@ -57,7 +70,7 @@ def check(name, args, elements, last_typed_line=""):
         if args.get("submit"):  # type + Enter in one step: same checks as pressing Enter
             return _enter_risk(elements, line)
 
-    elif name == "press_key" and args.get("key") == "Enter":
+    elif name == "press_key" and key.lower() == "enter":
         return _enter_risk(elements, last_typed_line)
 
     return None

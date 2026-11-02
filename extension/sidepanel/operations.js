@@ -1,6 +1,7 @@
 // Runs browser operations. During a task Krify works in "its" tab, not whatever tab is active,
 // and only sees/uses its own tabs: the one the task started in plus tabs it opened.
 
+import { detachAll, needsRealInput, realClick, realKey, realType, resetRealInput } from "./realinput.js";
 import { isSheetUrl, sheetCsv } from "./sheets.js";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -13,6 +14,7 @@ const openedByKrify = new Set(); // only these may be closed by Krify
 
 /** Called when a task starts: Krify works in the tab you're looking at. */
 export async function beginTask() {
+  resetRealInput();
   const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!active) return;
   if (!krifyTabs.includes(active.id)) krifyTabs.push(active.id);
@@ -21,6 +23,7 @@ export async function beginTask() {
 
 /** New chat: forget Krify's tabs (the tabs themselves stay open). */
 export function resetTabs() {
+  detachAll();
   krifyTabs.length = 0;
   openedByKrify.clear();
   agentTabId = null;
@@ -118,6 +121,7 @@ export async function setWorking(on) {
   if (on) {
     await setWorkingIn(agentTabId, await showCursor());
   } else {
+    await detachAll(); // task over: real keyboard off, Chrome's yellow bar goes away
     for (const id of krifyTabs) await setWorkingIn(id, false);
     if (!krifyTabs.length) await setWorkingIn(null, false);
   }
@@ -169,6 +173,29 @@ async function shrinkImage(dataUrl, maxWidth) {
   });
 }
 
+// ---------- Google Sheets: saving ----------
+
+// When Krify last typed or pressed keys for real. The downloaded copy of a sheet only has an
+// edit once Google has saved it, so reading right after an edit waits for the "saved" sign.
+let lastEdit = 0;
+const edited = () => (lastEdit = Date.now());
+
+async function waitForSave() {
+  if (Date.now() - lastEdit > 15000) return; // no recent edit
+  let sawSaving = false;
+  const start = Date.now();
+  while (Date.now() - start < 5000) {
+    const state = await callInPage("saveState").catch(() => "unknown");
+    const since = Date.now() - lastEdit;
+    if (state === "saving") sawSaving = true;
+    // "saved" right after typing may still be the old status, so trust it only after "saving"
+    // was seen, or once saving had time to start.
+    if (state === "saved" && (sawSaving ? since > 300 : since > 1500)) return;
+    if (state === "unknown" && since > 2000) return; // can't see the sign: plain wait instead
+    await sleep(200);
+  }
+}
+
 // Run an in-page action, then give the page time to react or load.
 async function act(fnName, args) {
   const value = await callInPage(fnName, args);
@@ -203,6 +230,7 @@ export const operations = {
   async sheet_csv() {
     const tab = await currentTab();
     if (!isSheetUrl(tab.url)) throw new Error("This isn't a Google Sheets page.");
+    await waitForSave();
     const csv = await sheetCsv(tab.url);
     const name = await callInPage("sheetTabName").catch(() => "");
     return { csv, tab: name, title: (tab.title || "").replace(/ - Google Sheets$/, "") };
@@ -256,8 +284,79 @@ export const operations = {
   // Interact
   click: ({ element }) => act("click", [element]),
   hover: ({ element }) => act("hover", [element]),
-  type: ({ element, text, submit = false }) => act("type", [element, text, Boolean(submit)]),
-  press_key: ({ key }) => act("pressKey", [key]),
+  async type({ element, text, submit = false }) {
+    const tab = await currentTab();
+    if (!needsRealInput(tab.url)) return act("type", [element, text, Boolean(submit)]);
+    // Google Sheets/Docs ignore JavaScript typing: click the box for real, check the cursor is
+    // really in it (never Ctrl+A: in Sheets that selects every cell), then type for real.
+    const spot = await callInPage("pointAt", [element]);
+    if (spot.nameBox) return operations.go_to_cell({ cell: text });
+    await realClick(tab.id, spot.x, spot.y);
+    await sleep(200);
+    if (!(await callInPage("focusCheck", [element]))) {
+      throw new Error(`Couldn't put the cursor in [${element}] – nothing was typed.`);
+    }
+    await realType(tab.id, String(text ?? ""));
+    if (submit) await realKey(tab.id, "Enter");
+    edited();
+    await sleep(300);
+    return `Typed "${text}" into [${element}]${submit ? " and pressed Enter" : ""}`;
+  },
+
+  // Google Sheets: the selected cell and its formula bar text – live, no waiting for a save.
+  async sheet_active_cell() {
+    const tab = await currentTab();
+    if (!isSheetUrl(tab.url)) throw new Error("This isn't a Google Sheets page.");
+    await sleep(150); // let the formula bar catch up with the last key
+    return callInPage("activeCell");
+  },
+
+  // Google Sheets: jump to a cell through the Name box, and check it really got there before
+  // anything is typed (typing into the wrong cell would overwrite data).
+  async go_to_cell({ cell }) {
+    const tab = await currentTab();
+    if (!isSheetUrl(tab.url)) throw new Error("go_to_cell only works on a Google Sheets page.");
+    const ref = String(cell || "").trim().toUpperCase().replace(/\$/g, "");
+    if (!/^[A-Z]{1,3}[0-9]{1,7}(:[A-Z]{1,3}[0-9]{1,7})?$/.test(ref)) {
+      throw new Error(`"${cell}" isn't a cell like A130 or a range like A1:C5.`);
+    }
+    const box = await callInPage("nameBox");
+    await realClick(tab.id, box.x, box.y);
+    await sleep(250);
+    if (!(await callInPage("selectNameBox"))) {
+      throw new Error("Couldn't put the cursor in the Name box – nothing was typed. Stop and tell the user.");
+    }
+    await realType(tab.id, ref);
+    await realKey(tab.id, "Enter");
+    await sleep(400);
+    const now = String(await callInPage("nameBoxValue")).toUpperCase();
+    if (now !== ref) {
+      throw new Error(`The Name box shows "${now}", not ${ref} – not at that cell, nothing typed. Stop and tell the user.`);
+    }
+    return `At cell ${ref} – type_here now types into it`;
+  },
+  async press_key({ key, repeat = 1 }) {
+    const tab = await currentTab();
+    const times = Math.min(Math.max(Math.round(Number(repeat)) || 1, 1), 20);
+    const simple = ["Enter", "Escape", "Tab", "ArrowDown", "ArrowUp"].includes(key);
+    if (simple && times === 1 && !needsRealInput(tab.url)) return act("pressKey", [key]);
+    // Shortcuts, other keys, and Google Sheets/Docs: real key presses.
+    await callInPage("showKeyBadge", [key]).catch(() => {});
+    await realKey(tab.id, key, times);
+    edited();
+    await sleep(300);
+    await waitForLoad(tab.id);
+    return `Pressed ${key}${times > 1 ? ` ${times} times` : ""}`;
+  },
+  async type_here({ text }) {
+    const tab = await currentTab();
+    // AI models often write Enter/Tab as the two characters \n and \t.
+    text = String(text ?? "").replace(/\\n/g, "\n").replace(/\\t/g, "\t");
+    await realType(tab.id, text);
+    edited();
+    await sleep(300);
+    return `Typed "${text}" where the cursor is`;
+  },
   scroll: ({ direction }) => callInPage("scroll", [direction]),
   select_option: ({ element, option }) => act("selectOption", [element, option]),
 

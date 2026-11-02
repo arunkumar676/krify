@@ -111,6 +111,45 @@ def summary(text, title="", tab=""):
     )
 
 
+_CELL = re.compile(r"^([A-Z]{1,3})(\d{1,7})$")
+MAX_CELLS = 60
+
+
+def _cell_pos(ref):
+    """'B12' → (row 12, column 2), both counted from 1 like in Sheets."""
+    match = _CELL.match(ref)
+    if not match:
+        raise ValueError(f'"{ref}" isn\'t a cell like A130.')
+    col = 0
+    for letter in match[1]:
+        col = col * 26 + ord(letter) - 64
+    return int(match[2]), col
+
+
+def cells(text, ref):
+    """Exact cell values by address (A130, or A128:C130), read from the sheet as it is now –
+    used to check an edit landed in the right place."""
+    ref = (ref or "").strip().upper().replace("$", "")
+    start, _, end = ref.partition(":")
+    (r1, c1), (r2, c2) = _cell_pos(start), _cell_pos(end or start)
+    r1, r2, c1, c2 = min(r1, r2), max(r1, r2), min(c1, c2), max(c1, c2)
+    if (r2 - r1 + 1) * (c2 - c1 + 1) > MAX_CELLS:
+        raise ValueError(f"Too many cells – read at most {MAX_CELLS} at once.")
+    rows = list(csv.reader(io.StringIO(text)))
+    lines = []
+    for r in range(r1, r2 + 1):
+        row = rows[r - 1] if r - 1 < len(rows) else []
+        for c in range(c1, c2 + 1):
+            name = ""
+            n = c
+            while n:
+                n, rest = divmod(n - 1, 26)
+                name = chr(65 + rest) + name
+            value = row[c - 1] if c - 1 < len(row) else ""
+            lines.append(f"{name}{r}: {value!r}" if value else f"{name}{r}: (empty)")
+    return "\n".join(lines)
+
+
 # "... ORDER BY x DESC LIMIT 1" at the end of a query: top-N questions ("who scored highest").
 _TOP_N = re.compile(r"(?is)^(?P<base>.*)\border\s+by\s+(?P<order>(?:(?!\border\s+by\b).)+?)\s+limit\s+(?P<n>\d+)\s*$")
 

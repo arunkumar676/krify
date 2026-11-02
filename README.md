@@ -22,6 +22,7 @@ Krify is an AI agent that works inside your browser. You tell it what to do in p
 - 🕘 **Task history**: past tasks with their result; click to edit and reuse, ▶ to run again, 🗑 to delete
 - 📝 **Notes and screen reading**: Krify reads the text visible on screen and saves key facts (like prices) as notes, so it doesn't guess
 - 📊 **Google Sheets**: Krify downloads the open sheet as CSV (your own login, private sheets too, nothing saved) and answers questions with SQL in a small in-memory database (DuckDB). Only the answer rows go to the AI. Read-only
+- ⌨️ **Real keyboard when needed**: on Google Sheets/Docs and for shortcuts (Ctrl+Z, Ctrl+End…) Krify presses real keys through Chrome's debugger (Chrome shows a yellow bar while it works). It can jump to a cell, type into it, check the result and undo. Editing a sheet asks Allow / Block first
 - 📸 **Screenshots**: when text isn't enough (pictures, colours, icons, maps), Krify takes a screenshot with element numbers drawn on it and switches to a model that can see images
 - 📋 **Plans and fact check**: for longer tasks Krify writes a checklist first; every number in its final answer must have appeared on a page it read
 - ⛔ **Stop anytime**: ends the task instantly
@@ -149,7 +150,7 @@ krify/
 │   ├── manifest.json
 │   ├── background.js        # opens the side panel
 │   ├── content.js           # runs in the page: reads it, acts, animations
-│   └── sidepanel/           # chat UI, model picker, history, Allow/Block, sheets.js
+│   └── sidepanel/           # chat UI, model picker, history, Allow/Block, sheets.js, realinput.js
 ├── README.md
 └── TODO.md                  # progress checklist
 ```

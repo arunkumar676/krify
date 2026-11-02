@@ -75,17 +75,19 @@
 - [ ] Find an element by description ("the search bar")
 - [x] Batch: several actions in one AI call (httpbin form: 7 → 4 calls, 14.1k → 6.7k tokens)
 - [ ] File upload
+- [ ] Website tables (`<table>` → DuckDB → SQL, e.g. Wikipedia lists)
 
 ## 11. Real keyboard and mouse (`chrome.debugger`)
-- [ ] Turn on the debugger permission (Chrome shows a yellow bar)
-- [ ] Real keys and shortcuts (Tab, Enter, Ctrl+Z, Ctrl+C/V, Ctrl+End)
+- [x] Turn on the debugger permission (Chrome shows a yellow bar; only when needed)
+- [x] Real keys and shortcuts (Tab, Enter, Ctrl+Z, Ctrl+C/V, Ctrl+End)
 - [ ] Right, double, triple click; drag and drop
 - [ ] Click by position (x, y) from a screenshot
 
 ## 12. Google Sheets editing
-- [ ] Jump to a cell with the Name box (e.g. A102)
+- [x] Jump to a cell with the Name box (`go_to_cell`, checked before typing)
 - [ ] Type a row: value + Tab
-- [ ] Check with a screenshot, undo with Ctrl+Z if wrong
+- [x] Check the cells (`read_cells`: formula bar or after Google saves), undo with Ctrl+Z
+- [x] Ask Allow / Block before editing a sheet (once per task)
 - [ ] Apps Script for big jobs (user clicks Allow)
 
 ## 13. Safety

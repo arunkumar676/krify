@@ -3,7 +3,7 @@
   "name": "Krify – AI Browser Agent",
   "version": "0.1.0",
   "description": "Tell the browser what to do in plain language.",
-  "permissions": ["sidePanel", "scripting", "tabs", "storage"],
+  "permissions": ["sidePanel", "scripting", "tabs", "storage", "debugger"],
   "host_permissions": ["<all_urls>"],
   "background": { "service_worker": "background.js" },
   "side_panel": { "default_path": "sidepanel/sidepanel.html" },
