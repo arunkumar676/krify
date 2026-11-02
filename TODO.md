@@ -73,7 +73,7 @@
 - [x] Read Google Sheets, private too (download as CSV → DuckDB answers the AI's SQL; ties kept)
 - [ ] Zoom into a small part of the screen
 - [ ] Find an element by description ("the search bar")
-- [ ] Batch: several actions in one AI call
+- [x] Batch: several actions in one AI call (httpbin form: 7 → 4 calls, 14.1k → 6.7k tokens)
 - [ ] File upload
 
 ## 11. Real keyboard and mouse (`chrome.debugger`)

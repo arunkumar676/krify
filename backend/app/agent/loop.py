@@ -19,6 +19,24 @@ OLD_SCREEN = "[older screen text removed to save space – use your notes]"
 SHEET_HINT = "[Google Sheet] Call read_text first to see the columns, then sheet_query with SQL."
 
 
+# Batches: actions the AI may send several of in one reply.
+ACTION_OPS = {"open_url", "go_back", "reload", "new_tab", "switch_tab", "close_tab", "click", "hover", "type",
+              "press_key", "scroll", "select_option", "wait"}
+MAX_BATCH = 5
+BATCH_LIMIT = "Skipped: at most 5 steps at once. Look at the page and continue."
+PAGE_MOVED = ("Skipped: the page changed after an earlier step, so element numbers may be different. "
+              "Look at the new page and decide again.")
+BLOCKED = ("BLOCKED by the user – this action was NOT done. "
+           "Don't try it again. Tell the user what's left, or call ask_user.")
+DONE_TOO_EARLY ="Not sent: check the page after your steps first, then call done."
+_VALUES = re.compile(r' \((?:value: ".*?"|empty|checked|unchecked)\)| = ".*?"')
+
+
+def layout(page):
+    """The page without typed values or ticks, to see if element numbers could have moved."""
+    return _VALUES.sub("", page or "")
+
+
 def is_sheet(url):
     return "docs.google.com/spreadsheets/" in (url or "")
 
@@ -330,7 +348,16 @@ class Agent:
             )
 
             finished = False
-            for call in reply.tool_calls:
+            # Batch: several actions in one reply (e.g. filling a form). The page is shown after the
+            # last one; the batch stops early if the page changed (element numbers may have moved).
+            calls = reply.tool_calls
+            action_count = sum(c.function.name in ACTION_OPS | {"batch"} for c in calls)
+            if action_count > 1:
+                await self.ui("step", f"📦 {min(action_count, MAX_BATCH)} steps at once")
+            actions_done = 0
+            batch_stopped = ""  # why the rest of the batch is skipped
+            prev_page = self.last_page
+            for i, call in enumerate(calls):
                 name = call.function.name
                 tool_msg = {"role": "tool", "tool_call_id": call.id}
                 try:
@@ -340,6 +367,10 @@ class Agent:
 
                 if finished:
                     self.messages.append({**tool_msg, "content": "Skipped."})
+                elif name in ACTION_OPS and batch_stopped:
+                    self.messages.append({**tool_msg, "content": batch_stopped})
+                elif name == "done" and actions_done:
+                    self.messages.append({**tool_msg, "content": DONE_TOO_EARLY})
                 elif name == "done":
                     summary = args.get("summary", "Done.")
                     if rejection := self.check_facts(summary):
@@ -389,36 +420,28 @@ class Agent:
                         self.add_screen_read(tool_msg, f"{result}\n(Save facts you'll need later with note.)")
                     else:
                         self.messages.append({**tool_msg, "content": str(result)})
+                elif name == "batch":
+                    actions_done += await self.run_batch(tool_msg, args.get("steps"))
                 else:
-                    await self.ui("step", describe(name, args))
-
-                    # Safety check runs in code: risky actions always need the user's OK.
-                    reason = safety.check(name, args, self.elements, self.last_typed_line)
-                    if reason and not await self.ask_permission(reason, name, args):
-                        self.messages.append(
-                            {
-                                **tool_msg,
-                                "content": "BLOCKED by the user – this action was NOT done. "
-                                "Don't try it again. Tell the user what's left, or call ask_user.",
-                            }
-                        )
+                    result, status = await self.do_action(name, args)
+                    if status != "ok":
+                        self.messages.append({**tool_msg, "content": result})
+                        self.check_progress(name, False)
+                        if status == "blocked":
+                            batch_stopped = "Skipped: an earlier step was blocked by the user."
                         continue
-
-                    if name == "scroll":
-                        count = self.scrolls.get(self.current_url, 0)
-                        if count >= MAX_SCROLLS_PER_PAGE:
-                            await self.ui("step", "🛑 Scroll limit for this page – deciding with what was found")
-                            self.messages.append({**tool_msg, "content": SCROLL_REFUSED})
-                            self.check_progress(name, False)
-                            continue
-                        self.scrolls[self.current_url] = count + 1
-
-                    if name == "type":
-                        self.last_typed_line = safety.element_line(self.elements, args.get("element"))
-                    result = await self.safe_run(name, args)
-                    # Show the AI the page after every action, so it can check the result.
+                    actions_done += 1
                     page = await self.page_view()
-                    result = f"{result}{self.check_progress(name, page != self.last_page)}"
+                    result = f"{result}{self.check_progress(name, page != prev_page)}"
+                    more = any(c.function.name in ACTION_OPS for c in calls[i + 1:])
+                    moved = layout(page) != layout(prev_page)
+                    prev_page = page
+                    if more and not moved and actions_done < MAX_BATCH:
+                        self.messages.append({**tool_msg, "content": f"{result} (next step follows)"})
+                        continue
+                    if more:
+                        batch_stopped = BATCH_LIMIT if actions_done >= MAX_BATCH else PAGE_MOVED
+                    # Show the AI the page after the last action, so it can check the result.
                     self.add_with_page(tool_msg, result, page)
 
             if finished:
@@ -439,6 +462,65 @@ class Agent:
         allowed = await self.confirm(f"{reason}: {what}")
         await self.ui("step", "✅ Allowed by you" if allowed else "⛔ Blocked")
         return allowed
+
+    async def do_action(self, name, args):
+        """One browser action, with the safety check and the scroll limit.
+        Returns (result text, status): status "ok", "blocked" (by the user) or "refused" (scroll limit)."""
+        await self.ui("step", describe(name, args))
+
+        # Safety check runs in code: risky actions always need the user's OK.
+        reason = safety.check(name, args, self.elements, self.last_typed_line)
+        if reason and not await self.ask_permission(reason, name, args):
+            return BLOCKED, "blocked"
+
+        if name == "scroll":
+            count = self.scrolls.get(self.current_url, 0)
+            if count >= MAX_SCROLLS_PER_PAGE:
+                await self.ui("step", "🛑 Scroll limit for this page – deciding with what was found")
+                return SCROLL_REFUSED, "refused"
+            self.scrolls[self.current_url] = count + 1
+
+        if name == "type":
+            self.last_typed_line = safety.element_line(self.elements, args.get("element"))
+        return str(await self.safe_run(name, args)), "ok"
+
+    async def run_batch(self, tool_msg, steps):
+        """The batch tool: several actions in a row, the page shown once at the end. Stops at a
+        blocked or failed step, or when the page changes (element numbers may have moved).
+        Returns how many actions ran."""
+        steps = [s for s in (steps or []) if isinstance(s, dict)]
+        count = min(len(steps), MAX_BATCH)
+        await self.ui("step", f"📦 {count} step{'s' if count != 1 else ''} at once")
+        report, page, prev, ran = [], None, self.last_page, 0
+        for n, step in enumerate(steps[:MAX_BATCH], 1):
+            op = step.get("op")
+            args = {k: v for k, v in step.items() if k != "op"}
+            if op not in ACTION_OPS:
+                report.append(f"{n}. '{op}' can't be used in batch – stopped here.")
+                break
+            result, status = await self.do_action(op, args)
+            if status != "ok":
+                report.append(f"{n}. {result}")
+                break
+            ran += 1
+            page = await self.page_view()
+            self.check_progress(op, page != prev)
+            if result.startswith("Error"):
+                report.append(f"{n}. {describe(op, args)} FAILED: {result} – stopped here.")
+                break
+            report.append(f"{n}. {result} ✓")
+            moved = layout(page) != layout(prev)
+            prev = page
+            if moved and n < len(steps):
+                report.append("Stopped: the page changed, so the remaining steps were skipped.")
+                break
+        else:
+            if len(steps) > MAX_BATCH:
+                report.append("Only the first 5 steps were done.")
+        if not steps:
+            report.append("No steps given.")
+        self.add_with_page(tool_msg, "\n".join(report), page or await self.page_view())
+        return ran
 
     async def sheet_op(self, name, args):
         """Google Sheets: the extension downloads the sheet as CSV, DuckDB answers here."""

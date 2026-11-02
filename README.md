@@ -26,6 +26,7 @@ Krify is an AI agent that works inside your browser. You tell it what to do in p
 - 📋 **Plans and fact check**: for longer tasks Krify writes a checklist first; every number in its final answer must have appeared on a page it read
 - ⛔ **Stop anytime**: ends the task instantly
 - 💬 **Follow-ups**: "now sort it", "open the second one"
+- 📦 **Batch steps**: for forms and other sure steps, Krify does up to 5 actions in one go (still asking Allow / Block for risky ones), so a form takes 4 AI calls instead of 7
 - 📉 **Token-saving**: only the latest page view is sent in full, and unchanged pages aren't sent again
 
 ---

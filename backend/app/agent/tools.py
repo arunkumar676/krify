@@ -38,6 +38,13 @@ TOOLS = [
     _tool("scroll", "Scroll the page.", {"direction": {"type": "string", "enum": ["up", "down"]}}, ["direction"]),
     _tool("select_option", "Choose a dropdown option.", {"element": ELEMENT, "option": TEXT}, ["element", "option"]),
     _tool("wait", "Wait for loading (1-10 s).", {"seconds": {"type": "number"}}, ["seconds"]),
+    _tool("batch", "Do up to 5 actions in a row when you're sure of them without looking, e.g. filling a form. "
+          "Each step: {op, ...that action's fields}. You see the page after the last step.",
+          {"steps": {"type": "array", "items": {"type": "object", "properties": {
+              "op": {"type": "string", "enum": ["type", "click", "select_option", "press_key", "hover", "scroll", "wait"]},
+              "element": {"type": "integer"}, "text": TEXT, "submit": {"type": "boolean"}, "option": TEXT,
+              "key": TEXT, "direction": TEXT, "seconds": {"type": "number"}}, "required": ["op"]}}},
+          ["steps"]),
     _tool("plan", "Write/update your checklist; start finished steps with ✔.",
           {"steps": {"type": "array", "items": TEXT}}, ["steps"]),
     _tool("note", "Save a fact for later, e.g. 'Amazon: iPhone 16 128GB ₹69,900'.", {"text": TEXT}, ["text"]),
