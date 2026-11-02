@@ -23,6 +23,8 @@ Krify is an AI agent that works inside your browser. You tell it what to do in p
 - 📝 **Notes and screen reading**: Krify reads the text visible on screen and saves key facts (like prices) as notes, so it doesn't guess
 - 📊 **Google Sheets**: Krify downloads the open sheet as CSV (your own login, private sheets too, nothing saved) and answers questions with SQL in a small in-memory database (DuckDB). Only the answer rows go to the AI. Read-only
 - ⌨️ **Real keyboard when needed**: on Google Sheets/Docs and for shortcuts (Ctrl+Z, Ctrl+End…) Krify presses real keys through Chrome's debugger (Chrome shows a yellow bar while it works). It can jump to a cell, type into it, check the result and undo. Editing a sheet asks Allow / Block first
+- 🖱️ **Real mouse when needed**: right-click, double/triple-click, drag and drop, and clicking a spot on a screenshot (what's under the spot gets the usual safety check)
+- 🔁 **Repeat detector**: the same step 3 times with nothing changing → Krify is told to try another way
 - 📸 **Screenshots**: when text isn't enough (pictures, colours, icons, maps), Krify takes a screenshot with element numbers drawn on it and switches to a model that can see images
 - 📋 **Plans and fact check**: for longer tasks Krify writes a checklist first; every number in its final answer must have appeared on a page it read
 - ⛔ **Stop anytime**: ends the task instantly

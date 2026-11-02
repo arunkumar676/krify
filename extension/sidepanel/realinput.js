@@ -104,6 +104,47 @@ export async function realClick(tabId, x, y, { button = "left", clickCount = 1 }
   }
 }
 
+/** A real mouse move (for menus that open only for a real mouse). */
+export async function realMove(tabId, x, y) {
+  await attach(tabId);
+  await send(tabId, "Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
+}
+
+/** A real drag from one spot to another. Handles both kinds of drag: apps that follow the mouse
+ *  (sliders, Sheets), and "HTML5" drag and drop, where Chrome's own drag events are needed.
+ *  Returns "html5" or "mouse". */
+export async function realDrag(tabId, from, to) {
+  await attach(tabId);
+  let dragData = null;
+  const onEvent = (source, method, params) => {
+    if (source.tabId === tabId && method === "Input.dragIntercepted") dragData = params.data;
+  };
+  chrome.debugger.onEvent.addListener(onEvent);
+  await send(tabId, "Input.setInterceptDrags", { enabled: true }).catch(() => {});
+  const mouse = (type, p, extra = {}) => send(tabId, "Input.dispatchMouseEvent", { type, x: p.x, y: p.y, ...extra });
+  try {
+    await mouse("mouseMoved", from);
+    await mouse("mousePressed", from, { button: "left", buttons: 1, clickCount: 1 });
+    const steps = 12; // move in small steps, like a hand
+    for (let i = 1; i <= steps; i++) {
+      const p = { x: from.x + ((to.x - from.x) * i) / steps, y: from.y + ((to.y - from.y) * i) / steps };
+      await mouse("mouseMoved", p, { button: "left", buttons: 1 });
+      await new Promise((r) => setTimeout(r, 25));
+      if (dragData) break; // an HTML5 drag started: finish it with drag events below
+    }
+    if (dragData) {
+      for (const type of ["dragEnter", "dragOver", "drop"]) {
+        await send(tabId, "Input.dispatchDragEvent", { type, x: to.x, y: to.y, data: dragData });
+      }
+    }
+    await mouse("mouseReleased", to, { button: "left", buttons: 0, clickCount: 1 });
+  } finally {
+    chrome.debugger.onEvent.removeListener(onEvent);
+    await send(tabId, "Input.setInterceptDrags", { enabled: false }).catch(() => {});
+  }
+  return dragData ? "html5" : "mouse";
+}
+
 /** Type text for real into whatever is focused (a Sheets cell, the Name box...).
  *  "\t" presses Tab and "\n" presses Enter, so a whole row can be typed at once. */
 export async function realType(tabId, text) {

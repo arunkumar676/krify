@@ -22,7 +22,7 @@ SHEET_HINT = "[Google Sheet] Call read_text first to see the columns, then sheet
 
 # Batches: actions the AI may send several of in one reply.
 ACTION_OPS = {"open_url", "go_back", "reload", "new_tab", "switch_tab", "close_tab", "click", "hover", "type",
-              "type_here", "go_to_cell", "press_key", "scroll", "select_option", "wait"}
+              "type_here", "go_to_cell", "press_key", "scroll", "select_option", "wait", "click_at", "drag"}
 MAX_BATCH = 5
 BATCH_LIMIT = "Skipped: at most 5 steps at once. Look at the page and continue."
 PAGE_MOVED = ("Skipped: the page changed after an earlier step, so element numbers may be different. "
@@ -42,7 +42,7 @@ def is_sheet(url):
     return "docs.google.com/spreadsheets/" in (url or "")
 
 # Stuck detector: these always count as progress; clicks/keys count only if the page changed.
-PROGRESS_OPS = {"read_text", "sheet_query", "read_cells", "go_to_cell", "type_here", "screenshot", "note", "type", "select_option", "open_url", "new_tab"}
+PROGRESS_OPS = {"read_text", "sheet_query", "read_cells", "go_to_cell", "type_here", "note", "type", "select_option", "open_url", "new_tab"}
 OLD_SCREENSHOT = "[older screenshot removed to save space]"
 IDLE_LIMIT = 5
 MAX_SCROLLS_PER_PAGE = 4
@@ -54,6 +54,10 @@ WRAP_UP_AT = 5  # steps left
 WRAP_UP = (
     "⚠️ Only 5 steps left. Finish now: call done with what you found so far (from your notes), "
     "and say clearly what you couldn't find."
+)
+REPEAT_NOTE = (
+    "\nWarning: you've done this same step 3 times and nothing changed. Don't do it again: try a "
+    "different way (another element, read_text, a fresh screenshot), or call ask_user."
 )
 STUCK_NOTE = (
     "\nWarning: the last 5 steps made no progress (only scrolling, switching or clicking without "
@@ -112,7 +116,15 @@ def describe(name, args):
     """Readable step text for the side panel, e.g. 'click [12]'."""
     match name:
         case "open_url": return f"🌐 Open {args.get('url')}"
-        case "click": return f"🖱️ Click [{args.get('element')}]"
+        case "click" | "click_at":
+            where = f"[{args.get('element')}]" if name == "click" else f"at ({args.get('x')}, {args.get('y')})"
+            count = str(args.get("count") or 1)
+            word = "Right-click" if args.get("button") == "right" else {"2": "Double-click", "3": "Triple-click"}.get(count, "Click")
+            return f"🖱️ {word} {where}"
+        case "drag":
+            a = f"[{args['from_element']}]" if args.get("from_element") is not None else f"({args.get('from_x')}, {args.get('from_y')})"
+            b = f"[{args['to_element']}]" if args.get("to_element") is not None else f"({args.get('to_x')}, {args.get('to_y')})"
+            return f"✋ Drag {a} → {b}"
         case "hover": return f"👆 Hover over [{args.get('element')}]"
         case "type":
             enter = " + Enter" if args.get("submit") else ""
@@ -209,9 +221,25 @@ class Agent:
         self.messages.append(message)
         self.screen_reads = [message]
 
+    def check_repeat(self, name, args, page_changed):
+        """Repeat detector: the same action 3 times within the last 6 steps, with the page never
+        changing (e.g. clicking one spot over and over). Positions within 20px count as the same."""
+        clean = {k: (round(v / 20) if k in ("x", "y", "from_x", "from_y", "to_x", "to_y") and isinstance(v, (int, float))
+                     else v) for k, v in args.items() if not k.startswith("_")}
+        sig = f"{name} {json.dumps(clean, sort_keys=True, default=str)}"
+        if page_changed:
+            self.recent_steps = []
+        self.recent_steps = (self.recent_steps + [sig])[-6:]
+        if self.recent_steps.count(sig) >= 3:
+            self.recent_steps = []
+            return REPEAT_NOTE
+        return ""
+
     def check_progress(self, name, page_changed):
         """Stuck detector: count steps that don't move the task forward."""
-        progress = name in PROGRESS_OPS or (name in ("click", "hover", "press_key", "go_back") and page_changed)
+        progress = name in PROGRESS_OPS or (
+            name in ("click", "click_at", "drag", "hover", "press_key", "go_back", "screenshot") and page_changed
+        )
         self.idle_steps = 0 if progress else self.idle_steps + 1
         if self.idle_steps >= IDLE_LIMIT:
             self.idle_steps = 0
@@ -314,6 +342,8 @@ class Agent:
         self.current_url = ""
         self.scrolls = {}  # url -> times scrolled on that page
         self.edit_allowed = False  # the user allowed editing a Google Sheet/Doc in this task
+        self.recent_steps = []  # for the repeat detector
+        self.shot_page = None  # the page when the last screenshot was taken
         self.last_cell = ""
         nudged = False
         self.add_with_page({"role": "user"}, task, await self.page_view())
@@ -403,7 +433,8 @@ class Agent:
                 elif name == "screenshot":
                     await self.ui("step", "📸 Screenshot")
                     await self.add_screenshot(tool_msg)
-                    self.check_progress(name, False)
+                    self.check_progress(name, self.last_page != self.shot_page)
+                    self.shot_page = self.last_page
                 elif name == "note":
                     await self.ui("step", f"📝 {args.get('text', '')}")
                     self.notes.append(str(args.get("text", ""))[:200])
@@ -440,7 +471,8 @@ class Agent:
                         continue
                     actions_done += 1
                     page = await self.page_view()
-                    result = f"{result}{self.check_progress(name, page != prev_page)}"
+                    changed = page != prev_page
+                    result = f"{result}{self.check_progress(name, changed)}{self.check_repeat(name, args, changed)}"
                     more = any(c.function.name in ACTION_OPS for c in calls[i + 1:])
                     moved = layout(page) != layout(prev_page)
                     prev_page = page
@@ -479,6 +511,11 @@ class Agent:
         await self.ui("step", describe(name, args))
 
         # Safety check runs in code: risky actions always need the user's OK.
+        if name == "click_at":  # no element number: check what's under the spot
+            under = await self.safe_run("element_at", {"x": args.get("x"), "y": args.get("y")})
+            if str(under).startswith("Error"):
+                return str(under), "refused"
+            args = {**args, "_under": str(under)}
         reason = safety.check(name, args, self.elements, self.last_typed_line, self.current_url)
         if reason == "Editing" and self.edit_allowed:
             reason = None  # editing this document was already allowed in this task

@@ -54,8 +54,11 @@ def check(name, args, elements, last_typed_line="", url=""):
     if in_editor and (name == "type_here" or (name == "type" and "name box" not in
                                                element_line(elements, args.get("element")).lower())):
         return "Editing"
-    if name in ("click", "select_option"):
-        line = element_line(elements, args.get("element"))
+    if in_editor and name == "drag":
+        return "Editing"  # dragging in a sheet/doc moves its content
+    if name in ("click", "select_option", "click_at"):
+        # click_at has no element number: the loop looks up what's under the spot ("_under").
+        line = args.get("_under", "") if name == "click_at" else element_line(elements, args.get("element"))
         text = f"{visible_text(line)} {args.get('option', '')}"
         for category, words in RISKY_WORDS.items():
             if _find(words, text):

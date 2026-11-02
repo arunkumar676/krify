@@ -1,7 +1,7 @@
 // Runs browser operations. During a task Krify works in "its" tab, not whatever tab is active,
 // and only sees/uses its own tabs: the one the task started in plus tabs it opened.
 
-import { detachAll, needsRealInput, realClick, realKey, realType, resetRealInput } from "./realinput.js";
+import { detachAll, needsRealInput, realClick, realDrag, realKey, realMove, realType, resetRealInput } from "./realinput.js";
 import { isSheetUrl, sheetCsv } from "./sheets.js";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -160,18 +160,41 @@ async function callInPage(fnName, args = [], tabId = null) {
 }
 
 // Make a screenshot smaller (fewer tokens): at most maxWidth pixels wide, compressed JPEG.
+// Returns { dataUrl, width }.
 async function shrinkImage(dataUrl, maxWidth) {
   const bitmap = await createImageBitmap(await (await fetch(dataUrl)).blob());
   const scale = Math.min(1, maxWidth / bitmap.width);
   const canvas = new OffscreenCanvas(Math.round(bitmap.width * scale), Math.round(bitmap.height * scale));
   canvas.getContext("2d").drawImage(bitmap, 0, 0, canvas.width, canvas.height);
   const blob = await canvas.convertToBlob({ type: "image/jpeg", quality: 0.6 });
-  return new Promise((resolve) => {
+  const url = await new Promise((resolve) => {
     const reader = new FileReader();
     reader.onload = () => resolve(reader.result);
     reader.readAsDataURL(blob);
   });
+  return { dataUrl: url, width: canvas.width };
 }
+
+// ---------- clicks by position (click_at, drag) ----------
+
+// The last screenshot: the AI's x, y are pixels on that (shrunk) picture.
+let lastShot = null; // { tabId, url, scrollX, scrollY, scale }
+
+/** A spot on the last screenshot → a spot on the page. Refuses if the page moved since. */
+async function shotToPage(tab, x, y) {
+  if (!lastShot || lastShot.tabId !== tab.id) throw new Error("Take a screenshot first – x, y are positions on it.");
+  const vp = await callInPage("viewport");
+  if (tab.url !== lastShot.url || vp.scrollX !== lastShot.scrollX || vp.scrollY !== lastShot.scrollY) {
+    throw new Error("The page changed since the last screenshot – take a new screenshot first.");
+  }
+  if (!Number.isFinite(Number(x)) || !Number.isFinite(Number(y))) throw new Error("x and y must be numbers.");
+  return { x: Math.round(Number(x) * lastShot.scale), y: Math.round(Number(y) * lastShot.scale) };
+}
+
+const clickWord = (button, count) =>
+  `${button === "right" ? "Right-clicked" : ["Clicked", "Double-clicked", "Triple-clicked"][count - 1]}`;
+const RIGHT_CLICK_NOTE =
+  " – on normal websites this opens Chrome's own menu, which Krify can't use: press Escape.";
 
 // ---------- Google Sheets: saving ----------
 
@@ -223,7 +246,10 @@ export const operations = {
     } finally {
       await callInPage("showLabels", [false]);
     }
-    return shrinkImage(shot, 1024);
+    const vp = await callInPage("viewport");
+    const { dataUrl, width } = await shrinkImage(shot, 1024);
+    lastShot = { tabId: tab.id, url: tab.url, scrollX: vp.scrollX, scrollY: vp.scrollY, scale: vp.width / width };
+    return dataUrl;
   },
   read_text: ({ scope = "screen" } = {}) => callInPage("readText", [scope]),
   // Google Sheets: the open sheet tab as CSV (the server answers questions about it).
@@ -282,8 +308,58 @@ export const operations = {
   },
 
   // Interact
-  click: ({ element }) => act("click", [element]),
-  hover: ({ element }) => act("hover", [element]),
+  async click({ element, button = "left", count = 1 }) {
+    const n = Math.min(Math.max(Math.round(Number(count)) || 1, 1), 3);
+    const btn = button === "right" ? "right" : "left";
+    if (btn === "left" && n === 1) return act("click", [element]); // a normal click: no debugger needed
+    const tab = await currentTab();
+    const spot = await callInPage("pointAt", [element]);
+    await realClick(tab.id, spot.x, spot.y, { button: btn, clickCount: n });
+    await sleep(300);
+    await waitForLoad(tab.id);
+    const note = btn === "right" && !needsRealInput(tab.url) ? RIGHT_CLICK_NOTE : "";
+    return `${clickWord(btn, n)} [${element}]${note}`;
+  },
+  // What's under a spot of the last screenshot (for the safety check before click_at).
+  async element_at({ x, y }) {
+    const tab = await currentTab();
+    const spot = await shotToPage(tab, x, y);
+    return callInPage("elementAt", [spot.x, spot.y]);
+  },
+  async click_at({ x, y, button = "left", count = 1 }) {
+    const n = Math.min(Math.max(Math.round(Number(count)) || 1, 1), 3);
+    const btn = button === "right" ? "right" : "left";
+    const tab = await currentTab();
+    const spot = await shotToPage(tab, x, y);
+    const what = await callInPage("elementAt", [spot.x, spot.y]);
+    await callInPage("showPoint", [spot.x, spot.y]);
+    await realClick(tab.id, spot.x, spot.y, { button: btn, clickCount: n });
+    await sleep(300);
+    await waitForLoad(tab.id);
+    const note = btn === "right" && !needsRealInput(tab.url) ? RIGHT_CLICK_NOTE : "";
+    return `${clickWord(btn, n)} at (${x}, ${y})${what ? ` – ${what}` : ""}${note}`;
+  },
+  async drag({ from_element, to_element, from_x, from_y, to_x, to_y }) {
+    const tab = await currentTab();
+    const from = from_element != null ? await callInPage("pointAt", [from_element]) : await shotToPage(tab, from_x, from_y);
+    const to = to_element != null ? await callInPage("spotOf", [to_element]) : await shotToPage(tab, to_x, to_y);
+    const kind = await realDrag(tab.id, from, to);
+    await callInPage("showPoint", [to.x, to.y, false]).catch(() => {});
+    if (needsRealInput(tab.url)) edited();
+    await sleep(300);
+    const a = from_element != null ? `[${from_element}]` : `(${from_x}, ${from_y})`;
+    const b = to_element != null ? `[${to_element}]` : `(${to_x}, ${to_y})`;
+    return `Dragged ${a} to ${b}${kind === "html5" ? " (drag and drop)" : ""}`;
+  },
+  async hover({ element, real = false }) {
+    if (!real) return act("hover", [element]);
+    // A real mouse move, for menus that only open for a real mouse.
+    const tab = await currentTab();
+    const spot = await callInPage("pointAt", [element]);
+    await realMove(tab.id, spot.x, spot.y);
+    await sleep(600);
+    return `Hovered over [${element}] with the real mouse`;
+  },
   async type({ element, text, submit = false }) {
     const tab = await currentTab();
     if (!needsRealInput(tab.url)) return act("type", [element, text, Boolean(submit)]);

@@ -9,7 +9,7 @@ if (!window.__krify) {
   const SELECTOR = [
     "a[href]", "button", "input:not([type=hidden])", "textarea", "select", "summary",
     "[role=button]", "[role=link]", "[role=checkbox]", "[role=tab]", "[role=menuitem]",
-    "[role=option]", "[role=switch]", "[contenteditable=true]", "[onclick]",
+    "[role=option]", "[role=switch]", "[contenteditable=true]", "[onclick]", "[draggable=true]",
   ].join(",");
 
   const NAME_BOX = '#t-name-box, input.waffle-name-box, input[aria-label="Name Box" i]';
@@ -270,6 +270,32 @@ if (!window.__krify) {
       return { ...spot, nameBox: el.matches(NAME_BOX) };
     },
 
+    // An element's spot without scrolling (a drag target must already be on screen).
+    spotOf(id) {
+      const el = find(id);
+      if (!isVisible(el)) throw new Error(`[${id}] is not on screen – scroll so both ends of the drag are visible.`);
+      const r = el.getBoundingClientRect();
+      return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+    },
+
+    viewport() {
+      return { width: innerWidth, height: innerHeight, scrollX: Math.round(scrollX), scrollY: Math.round(scrollY) };
+    },
+
+    // What's at a spot, e.g. 'button "Delete"' – so a click by position gets the same safety check.
+    elementAt(x, y) {
+      const hit = document.elementFromPoint(x, y); // Krify's own overlay ignores the mouse, so it's skipped
+      if (!hit) return "";
+      return describe(hit.closest(SELECTOR) || hit);
+    },
+
+    // Show Krify's cursor (and a click ripple) at a spot.
+    async showPoint(x, y, click = true) {
+      if (!this.animate) return;
+      await moveCursorToPoint(x, y);
+      if (click) ripple(x, y);
+    },
+
     // After a real click: is the cursor in this box? Selects its text so typing replaces it.
     focusCheck(id) {
       const el = find(id);
@@ -460,10 +486,12 @@ if (!window.__krify) {
   }
 
   async function moveCursorTo(el) {
-    overlay();
     const r = el.getBoundingClientRect();
-    const x = r.left + Math.min(r.width / 2, 60);
-    const y = r.top + r.height / 2;
+    return moveCursorToPoint(r.left + Math.min(r.width / 2, 60), r.top + r.height / 2);
+  }
+
+  async function moveCursorToPoint(x, y) {
+    overlay();
     view.cursor.style.opacity = "1";
     view.cursor.style.transform = `translate(${x}px, ${y}px)`;
     clearTimeout(view.hideTimer);
