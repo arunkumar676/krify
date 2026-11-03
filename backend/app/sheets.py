@@ -116,6 +116,7 @@ def summary(text, title="", tab=""):
         f"Columns: {columns}\n"
         '"_row" is the row number in the sheet (not a sheet column). Cell address = column letter + _row '
         "(e.g. column B, _row 22 → B22).\n"
+        f"First empty row (where a new row goes): {first_empty_row(text)}.\n"
         f"First rows:\n{first}\n"
         "Use sheet_query with SQL to get the data you need (Google Sheets' grid is a picture)."
     )
@@ -143,6 +144,33 @@ def _cell_pos(ref):
     for letter in match[1]:
         col = col * 26 + ord(letter) - 64
     return int(match[2]), col
+
+
+def first_empty_row(text):
+    """The sheet row number just after the last row that has any data (where a new row goes)."""
+    rows = list(csv.reader(io.StringIO(text)))
+    last = max((i for i, row in enumerate(rows, 1) if any(cell.strip() for cell in row)), default=0)
+    return last + 1
+
+
+def filled_cells(text, start, typed):
+    """Cells that typing `typed` at `start` would overwrite: [(address, current value)].
+    \\t moves one column right, \\n starts the next row (back at the start column, as Sheets does);
+    an empty piece types nothing, so that cell isn't counted."""
+    typed = typed.replace("\\n", "\n").replace("\\t", "\t")
+    r0, c0 = _cell_pos(start)
+    rows = list(csv.reader(io.StringIO(text)))
+    found = []
+    for i, line in enumerate(typed.split("\n")):
+        for j, value in enumerate(line.split("\t")):
+            if not value:
+                continue
+            r, c = r0 + i, c0 + j
+            row = rows[r - 1] if r - 1 < len(rows) else []
+            current = row[c - 1] if c - 1 < len(row) else ""
+            if current.strip():
+                found.append((f"{_letter(c)}{r}", current))
+    return found
 
 
 def cells(text, ref):

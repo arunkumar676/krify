@@ -28,6 +28,10 @@ MAX_BATCH = 5
 BATCH_LIMIT = "Skipped: at most 5 steps at once. Look at the page and continue."
 PAGE_MOVED = ("Skipped: the page changed after an earlier step, so element numbers may be different. "
               "Look at the new page and decide again.")
+OVERWRITE_BLOCKED = (
+    "NOT typed: those cells already have data ({}). The user blocked overwriting them. To add a new "
+    "row, go_to_cell the first EMPTY row: {}."
+)
 BLOCKED = ("BLOCKED by the user – this action was NOT done. "
            "Don't try it again. Tell the user what's left, or call ask_user.")
 DONE_TOO_EARLY ="Not sent: check the page after your steps first, then call done."
@@ -49,6 +53,19 @@ def image_size(data_url):
     except Exception:
         pass
     return None
+
+
+def uses_element(args):
+    """Does this step point at an element number? Only those can hit the wrong thing when the page
+    changes; steps by cell (go_to_cell, type_here, click cell=) or keys can't."""
+    return args.get("element") is not None or args.get("from_element") is not None or args.get("to_element") is not None
+
+
+def _args_of(call):
+    try:
+        return json.loads(call.function.arguments or "{}")
+    except json.JSONDecodeError:
+        return {}
 
 
 def layout(page):
@@ -511,7 +528,8 @@ class Agent:
                     changed = page != prev_page
                     result = f"{result}{self.check_progress(name, changed)}{self.check_repeat(name, args, changed)}"
                     more = any(c.function.name in ACTION_OPS for c in calls[i + 1:])
-                    moved = layout(page) != layout(prev_page)
+                    later = [_args_of(c) for c in calls[i + 1:] if c.function.name in ACTION_OPS]
+                    moved = layout(page) != layout(prev_page) and any(uses_element(a) for a in later)
                     prev_page = page
                     if more and not moved and actions_done < MAX_BATCH:
                         self.messages.append({**tool_msg, "content": f"{result} (next step follows)"})
@@ -546,6 +564,17 @@ class Agent:
         """One browser action, with the safety check and the scroll limit.
         Returns (result text, status): status "ok", "blocked" (by the user) or "refused" (scroll limit)."""
         await self.ui("step", describe(name, args))
+
+        # Typing into a sheet over cells that already hold data: always ask, showing what would be lost.
+        if name == "type_here" and is_sheet(self.current_url):
+            in_the_way, empty_row = await self.cells_in_the_way(str(args.get("text", "")))
+            if in_the_way:
+                keep = f" Block to keep them (Krify will use the first empty row, {empty_row}, instead)." if empty_row else ""
+                allowed = await self.confirm(f"⚠️ Overwriting: {in_the_way}.{keep}")
+                await self.ui("step", "✅ Allowed by you" if allowed else "⛔ Blocked")
+                if not allowed:
+                    return OVERWRITE_BLOCKED.format(in_the_way, empty_row or "last _row + 1"), "blocked"
+                self.edit_allowed = True  # they saw exactly what changes
 
         # Safety check runs in code: risky actions always need the user's OK.
         if name == "click_at" and self.shot_size:  # a spot outside the picture is a misread position
@@ -608,7 +637,7 @@ class Agent:
                 report.append(f"{n}. {describe(op, args)} FAILED: {result} – stopped here.")
                 break
             report.append(f"{n}. {result} ✓")
-            moved = layout(page) != layout(prev)
+            moved = layout(page) != layout(prev) and any(uses_element(s) for s in steps[n:MAX_BATCH])
             prev = page
             if moved and n < len(steps):
                 report.append("Stopped: the page changed, so the remaining steps were skipped.")
@@ -620,6 +649,24 @@ class Agent:
             report.append("No steps given.")
         self.add_with_page(tool_msg, "\n".join(report), page or await self.page_view())
         return ran
+
+    async def cells_in_the_way(self, typed):
+        """What typing `typed` at the selected cell would overwrite, as text for the user
+        ('A125 = 'STU2026124', B125 = 'Rahul', …', or '' if all those cells are empty), and the
+        sheet's first empty row (None if unknown)."""
+        try:
+            live = await self.browser("sheet_active_cell", {})
+            start = str(live.get("cell", "")).upper().split(":")[0]
+            data = await self.browser("sheet_csv", {})
+            found = sheets.filled_cells(data["csv"], start, typed)
+            empty_row = sheets.first_empty_row(data["csv"])
+        except Exception as err:
+            log.warning("Couldn't check the cells before typing: %s", err)
+            return "couldn't check whether these cells are empty – they may hold data", None
+        if not found:
+            return "", empty_row
+        shown = ", ".join(f"{ref} = {value!r}" for ref, value in found[:6])
+        return shown + (f" (+{len(found) - 6} more cells)" if len(found) > 6 else ""), empty_row
 
     async def live_cell(self, ref):
         """One cell that's selected right now: read it from the formula bar – instant, and right

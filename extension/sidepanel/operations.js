@@ -456,9 +456,12 @@ export const operations = {
     // AI models often write Enter/Tab as the two characters \n and \t.
     text = String(text ?? "").replace(/\\n/g, "\n").replace(/\\t/g, "\t");
     await realType(tab.id, text);
+    // Sheets: a value not ended by Tab/Enter stays half-typed, and Escape would throw it away.
+    const save = isSheetUrl(tab.url) && text && !/[\t\n]$/.test(text);
+    if (save) await realKey(tab.id, "Enter");
     edited();
     await sleep(300);
-    return `Typed "${text}" where the cursor is`;
+    return `Typed "${text}" where the cursor is${save ? " (Enter pressed to save it – the cursor moved down one row)" : ""}`;
   },
   scroll: ({ direction }) => callInPage("scroll", [direction]),
   select_option: ({ element, option }) => act("selectOption", [element, option]),

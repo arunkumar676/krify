@@ -86,7 +86,7 @@
 
 ## 12. Google Sheets editing
 - [x] Jump to a cell with the Name box (`go_to_cell`, checked before typing)
-- [ ] Type a row: value + Tab
+- [x] Type a row: value + Tab (one batch, 8.6k tokens; overwrite guard asks before replacing data)
 - [x] Check the cells (`read_cells`: formula bar or after Google saves), undo with Ctrl+Z
 - [x] Ask Allow / Block before editing a sheet (once per task)
 - [ ] Apps Script for big jobs (user clicks Allow)

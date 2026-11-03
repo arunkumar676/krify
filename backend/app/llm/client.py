@@ -122,6 +122,17 @@ async def _try_model(model, messages, tools, on_note):
     return None
 
 
+MAX_WAIT_FOR_SAME = 60  # seconds worth waiting for the task's own model
+
+
+def _short_wait(model, usable):
+    """Seconds until `model` is free again, if it's only out for a short per-minute limit; else 0."""
+    left = _blocked_for(model)
+    if model in usable and _blocked_why.get(model) == "limit" and 0 < left <= MAX_WAIT_FOR_SAME:
+        return left
+    return 0
+
+
 def skip_model(model, seconds=60):
     """Don't use this model for a while (e.g. it keeps sending empty replies)."""
     _blocked_until[model] = time.time() + seconds
@@ -144,12 +155,24 @@ async def ask_ai(messages, tools, preferred, on_note=None, need_vision=False):
     backup = [m for m in usable if MODELS[m]["tier"] == "backup"]
     first = ([preferred] if preferred in usable else []) + [m for m in strong if m != preferred]
 
-    for _ in range(5):
+    for _ in range(6):
+        # The task's model hit a short per-minute limit: wait for it rather than switching mid-task
+        # (other models, especially backups, tend to lose the thread and use more tokens).
+        if wait := _short_wait(preferred, usable):
+            if on_note:
+                await on_note(f"⏳ {_label(preferred)} is busy – waiting {wait:.0f}s for it")
+            await asyncio.sleep(wait)
+        waiting_for_preferred = False
         for model in first:
             if _blocked_for(model) <= 0:
                 result = await _try_model(model, messages, tools, on_note)
                 if result:
                     return result[0], model, result[1]
+                if model == preferred and _short_wait(preferred, usable):
+                    waiting_for_preferred = True
+                    break
+        if waiting_for_preferred:
+            continue
 
         soonest = min((_blocked_for(m) for m in strong), default=None)
         if soonest is not None and 0 < soonest <= MAX_WAIT_FOR_STRONG:
