@@ -29,9 +29,10 @@ TOOLS = [
     _tool("new_tab", "Open a URL in a new tab.", {"url": URL}, ["url"]),
     _tool("switch_tab", "Switch tab.", {"tab": TAB}, ["tab"]),
     _tool("close_tab", "Close a tab you opened.", {"tab": TAB}, ["tab"]),
-    _tool("click", "Click an element. button=right opens its menu; count=2 double-click, 3 triple-click.",
-          {"element": ELEMENT, "button": {"type": "string", "enum": ["left", "right"]}, "count": {"type": "integer"}},
-          ["element"]),
+    _tool("click", "Click an element (or a Google Sheets cell: cell=\"B22\"). button=right opens its menu; "
+          "count=2 double-click, 3 triple-click.",
+          {"element": ELEMENT, "cell": TEXT, "button": {"type": "string", "enum": ["left", "right"]},
+           "count": {"type": "integer"}}),
     _tool("click_at", "Click a spot (x, y) on your latest screenshot, for things without an element number "
           "(Sheets grid, charts, maps). Same button/count as click.",
           {"x": {"type": "number"}, "y": {"type": "number"}, "button": {"type": "string", "enum": ["left", "right"]},

@@ -10,7 +10,9 @@ if (!window.__krify) {
     "a[href]", "button", "input:not([type=hidden])", "textarea", "select", "summary",
     "[role=button]", "[role=link]", "[role=checkbox]", "[role=tab]", "[role=menuitem]",
     "[role=option]", "[role=switch]", "[contenteditable=true]", "[onclick]", "[draggable=true]",
+    "[role=menuitemcheckbox]", "[role=menuitemradio]",
   ].join(",");
+  const POPUP = '[role=menu], [role=listbox], [role=dialog], [role=alertdialog], [aria-modal="true"]';
 
   const NAME_BOX = '#t-name-box, input.waffle-name-box, input[aria-label="Name Box" i]';
 
@@ -71,7 +73,12 @@ if (!window.__krify) {
       const lines = [];
       const seenLinks = new Set();
       let id = 0;
-      for (const el of document.querySelectorAll(SELECTOR)) {
+      // An open menu, dropdown or dialog comes first: on busy pages (Google Sheets has 100+ toolbar
+      // buttons) its items would otherwise fall past the element limit.
+      const popups = [...document.querySelectorAll(POPUP)].filter(isVisible);
+      const inPopups = popups.flatMap((p) => [...p.querySelectorAll(SELECTOR)]);
+      if (inPopups.length) lines.push("(an open menu/dialog is listed first)");
+      for (const el of new Set([...inPopups, ...document.querySelectorAll(SELECTOR)])) {
         // Some sites (e.g. Amazon's "Sort by") hide the real <select> under a custom button.
         const visible = isVisible(el) || (el.tagName === "SELECT" && el.parentElement && isVisible(el.parentElement));
         if (!visible || el.disabled) continue;
@@ -316,6 +323,22 @@ if (!window.__krify) {
         ripple(spot.x, spot.y);
       }
       return { ...spot, value: el.value, focused: document.activeElement === el };
+    },
+
+    // Google Sheets: the middle of the selected cell, from the border Sheets draws around it.
+    activeCellSpot() {
+      const parts = [...document.querySelectorAll(".active-cell-border")]
+        .map((el) => el.getBoundingClientRect())
+        .filter((r) => r.width || r.height);
+      if (!parts.length) throw new Error("Can't see the selected cell on screen – take a screenshot and use click_at.");
+      const left = Math.min(...parts.map((r) => r.left));
+      const right = Math.max(...parts.map((r) => r.right));
+      const top = Math.min(...parts.map((r) => r.top));
+      const bottom = Math.max(...parts.map((r) => r.bottom));
+      if (right - left < 4 || bottom - top < 4) {
+        throw new Error("Can't see the selected cell on screen – take a screenshot and use click_at.");
+      }
+      return { x: (left + right) / 2, y: (top + bottom) / 2 };
     },
 
     nameBoxValue() {

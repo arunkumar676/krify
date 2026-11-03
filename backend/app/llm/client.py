@@ -110,10 +110,22 @@ async def _try_model(model, messages, tools, on_note):
             _blocked_until[model] = time.time() + 120  # busy/down: skip it for 2 minutes
             _blocked_why[model] = "busy"
             reason = "is busy"
+        except openai.APIStatusError as err:
+            # e.g. 413 "request too large" (a small per-minute size limit): use another model for now.
+            log.warning("%s refused the request (%s): %s", model, err.status_code, str(err)[:200])
+            _blocked_until[model] = time.time() + 60
+            _blocked_why[model] = "busy"
+            reason = "can't take a request this big" if err.status_code == 413 else "had a problem"
         if on_note:
             await on_note(f"🔁 {_label(model)} {reason} – switching model")
         return None
     return None
+
+
+def skip_model(model, seconds=60):
+    """Don't use this model for a while (e.g. it keeps sending empty replies)."""
+    _blocked_until[model] = time.time() + seconds
+    _blocked_why[model] = "busy"
 
 
 def has_vision_model():

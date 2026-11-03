@@ -1,5 +1,6 @@
 """The agent loop: ask the AI → run the operation in the browser → show it the new page → repeat."""
 
+import base64
 import json
 import logging
 import re
@@ -9,7 +10,7 @@ from app.agent import safety
 from app.agent.prompt import SYSTEM_PROMPT
 from app.agent.tools import TOOLS
 from app.config import MAX_STEPS
-from app.llm.client import ask_ai, has_vision_model
+from app.llm.client import ask_ai, has_vision_model, skip_model
 
 log = logging.getLogger("krify")
 
@@ -31,6 +32,23 @@ BLOCKED = ("BLOCKED by the user – this action was NOT done. "
            "Don't try it again. Tell the user what's left, or call ask_user.")
 DONE_TOO_EARLY ="Not sent: check the page after your steps first, then call done."
 _VALUES = re.compile(r' \((?:value: ".*?"|empty|checked|unchecked)\)| = ".*?"')
+
+
+def image_size(data_url):
+    """(width, height) of a JPEG data URL, read from its header; None if unknown."""
+    try:
+        data = base64.b64decode(data_url.split(",", 1)[1])
+        i = 2
+        while i + 9 < len(data):
+            if data[i] != 0xFF:
+                i += 1
+                continue
+            if data[i + 1] in (0xC0, 0xC1, 0xC2):  # "start of frame": holds the size
+                return int.from_bytes(data[i + 7:i + 9], "big"), int.from_bytes(data[i + 5:i + 7], "big")
+            i += 2 + int.from_bytes(data[i + 2:i + 4], "big")
+    except Exception:
+        pass
+    return None
 
 
 def layout(page):
@@ -117,7 +135,8 @@ def describe(name, args):
     match name:
         case "open_url": return f"🌐 Open {args.get('url')}"
         case "click" | "click_at":
-            where = f"[{args.get('element')}]" if name == "click" else f"at ({args.get('x')}, {args.get('y')})"
+            where = (f"cell {args['cell']}" if args.get("cell") else f"[{args.get('element')}]") if name == "click" \
+                else f"at ({args.get('x')}, {args.get('y')})"
             count = str(args.get("count") or 1)
             word = "Right-click" if args.get("button") == "right" else {"2": "Double-click", "3": "Triple-click"}.get(count, "Click")
             return f"🖱️ {word} {where}"
@@ -289,12 +308,15 @@ class Agent:
             self.messages.append({**tool_msg, "content": f"Couldn't take a screenshot: {result}"})
             return
         self.drop_screenshots()
+        self.shot_size = image_size(result)
+        size = "{}×{}".format(*self.shot_size) if self.shot_size else "1024 wide"
         # Tool results must be text for most providers, so the image goes in a user message after it.
         self.messages.append({**tool_msg, "content": "Screenshot taken – it's in the next message."})
         image_msg = {
             "role": "user",
             "content": [
-                {"type": "text", "text": "Screenshot of the current screen. Numbers in boxes = element numbers."},
+                {"type": "text", "text": f"Screenshot of the current screen, {size} pixels (click_at uses these "
+                                         "pixels, x from the left, y from the top). Numbers in boxes = element numbers."},
                 {"type": "image_url", "image_url": {"url": result}},
             ],
         }
@@ -343,9 +365,11 @@ class Agent:
         self.scrolls = {}  # url -> times scrolled on that page
         self.edit_allowed = False  # the user allowed editing a Google Sheet/Doc in this task
         self.recent_steps = []  # for the repeat detector
+        self.shot_size = None  # (width, height) of the last screenshot
         self.shot_page = None  # the page when the last screenshot was taken
         self.last_cell = ""
         nudged = False
+        empty_replies = 0
         self.add_with_page({"role": "user"}, task, await self.page_view())
 
         for step in range(MAX_STEPS):
@@ -360,6 +384,19 @@ class Agent:
             if used_model != model:
                 model = used_model  # keep using the model that still has free quota
                 self.model = model
+
+            if not reply.tool_calls and not (reply.content or "").strip():
+                # An empty reply is never "done": ask again, and after that use another model.
+                empty_replies += 1
+                if empty_replies >= 3:
+                    await self.finish("error", "The AI models kept sending empty replies. Please try again in a minute.")
+                    return
+                if empty_replies == 2:
+                    skip_model(model)
+                    await self.ui("step", "🔁 Empty reply from the AI – switching model")
+                self.messages.append({"role": "user", "content": NUDGE})
+                continue
+            empty_replies = 0
 
             if not reply.tool_calls:  # plain text instead of an operation
                 self.messages.append({"role": "assistant", "content": reply.content or ""})
@@ -511,6 +548,15 @@ class Agent:
         await self.ui("step", describe(name, args))
 
         # Safety check runs in code: risky actions always need the user's OK.
+        if name == "click_at" and self.shot_size:  # a spot outside the picture is a misread position
+            w, h = self.shot_size
+            try:
+                x, y = float(args.get("x")), float(args.get("y"))
+            except (TypeError, ValueError):
+                x = y = -1
+            if not (0 <= x <= w and 0 <= y <= h):
+                return (f"NOT clicked: ({args.get('x')}, {args.get('y')}) is outside the screenshot, which is "
+                        f"{w}×{h} pixels. Use pixel positions on the picture."), "refused"
         if name == "click_at":  # no element number: check what's under the spot
             under = await self.safe_run("element_at", {"x": args.get("x"), "y": args.get("y")})
             if str(under).startswith("Error"):

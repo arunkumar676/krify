@@ -193,6 +193,11 @@ async function shotToPage(tab, x, y) {
 
 const clickWord = (button, count) =>
   `${button === "right" ? "Right-clicked" : ["Clicked", "Double-clicked", "Triple-clicked"][count - 1]}`;
+// Sheets draws its right-click menu where page text can't be read (checked: not in the page,
+// its frames or shadow parts), so the AI is pointed to what works.
+const SHEETS_MENU_NOTE =
+  " – a menu opened, but it can't be read as text: take a screenshot to see it, or use the top menu bar" +
+  " (Insert, Format, Data…) whose items are listed. Escape closes it.";
 const RIGHT_CLICK_NOTE =
   " – on normal websites this opens Chrome's own menu, which Krify can't use: press Escape.";
 
@@ -308,11 +313,26 @@ export const operations = {
   },
 
   // Interact
-  async click({ element, button = "left", count = 1 }) {
+  async click({ element, cell, button = "left", count = 1 }) {
     const n = Math.min(Math.max(Math.round(Number(count)) || 1, 1), 3);
     const btn = button === "right" ? "right" : "left";
+    if (cell) {
+      // Google Sheets: a cell by address – go there, then click the middle of the selected cell.
+      const tab = await currentTab();
+      await operations.go_to_cell({ cell });
+      const spot = await callInPage("activeCellSpot");
+      await callInPage("showPoint", [spot.x, spot.y]);
+      await realClick(tab.id, spot.x, spot.y, { button: btn, clickCount: n });
+      await sleep(400);
+      return `${clickWord(btn, n)} cell ${String(cell).toUpperCase()}${btn === "right" ? SHEETS_MENU_NOTE : ""}`;
+    }
     if (btn === "left" && n === 1) return act("click", [element]); // a normal click: no debugger needed
     const tab = await currentTab();
+    if (isSheetUrl(tab.url)) {
+      // On Sheets the numbered elements are toolbar parts or Sheets' hidden cell editor, not cells:
+      // right-clicking that editor opens Chrome's own text menu.
+      throw new Error('On Google Sheets, right-click or double-click cells with click(cell="B22"), not element numbers.');
+    }
     const spot = await callInPage("pointAt", [element]);
     await realClick(tab.id, spot.x, spot.y, { button: btn, clickCount: n });
     await sleep(300);
@@ -336,7 +356,7 @@ export const operations = {
     await realClick(tab.id, spot.x, spot.y, { button: btn, clickCount: n });
     await sleep(300);
     await waitForLoad(tab.id);
-    const note = btn === "right" && !needsRealInput(tab.url) ? RIGHT_CLICK_NOTE : "";
+    const note = btn !== "right" ? "" : isSheetUrl(tab.url) ? SHEETS_MENU_NOTE : needsRealInput(tab.url) ? "" : RIGHT_CLICK_NOTE;
     return `${clickWord(btn, n)} at (${x}, ${y})${what ? ` – ${what}` : ""}${note}`;
   },
   async drag({ from_element, to_element, from_x, from_y, to_x, to_y }) {
@@ -396,11 +416,18 @@ export const operations = {
     if (!/^[A-Z]{1,3}[0-9]{1,7}(:[A-Z]{1,3}[0-9]{1,7})?$/.test(ref)) {
       throw new Error(`"${cell}" isn't a cell like A130 or a range like A1:C5.`);
     }
-    const box = await callInPage("nameBox");
-    await realClick(tab.id, box.x, box.y);
-    await sleep(250);
-    if (!(await callInPage("selectNameBox"))) {
-      throw new Error("Couldn't put the cursor in the Name box – nothing was typed. Stop and tell the user.");
+    // Click the Name box. If something else kept the focus (an open menu, a cell being edited),
+    // press Escape – it only closes/cancels, never changes saved data – and try once more.
+    for (let attempt = 1; ; attempt++) {
+      const box = await callInPage("nameBox");
+      await realClick(tab.id, box.x, box.y);
+      await sleep(250);
+      if (await callInPage("selectNameBox")) break;
+      if (attempt === 2) {
+        throw new Error("Couldn't put the cursor in the Name box – nothing was typed. Stop and tell the user.");
+      }
+      await realKey(tab.id, "Escape");
+      await sleep(250);
     }
     await realType(tab.id, ref);
     await realKey(tab.id, "Enter");

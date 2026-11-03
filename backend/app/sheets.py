@@ -57,7 +57,11 @@ def _load(text):
         with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
             f.write(text)
         con = duckdb.connect(":memory:")
-        con.execute("CREATE TABLE sheet AS SELECT * FROM read_csv_auto(?, header = true)", [path])
+        # _row = the row's number in the sheet (row 1 holds the column names), for go_to_cell.
+        con.execute(
+            "CREATE TABLE sheet AS SELECT ROW_NUMBER() OVER () + 1 AS _row, * FROM read_csv_auto(?, header = true)",
+            [path],
+        )
     finally:
         os.remove(path)
     # From here on the AI's SQL can't read files or the network, and can't switch that back on.
@@ -106,7 +110,9 @@ def summary(text, title="", tab=""):
     where = " – ".join(p for p in (f'"{title}"' if title else "", f'tab "{tab}"' if tab else "") if p)
     return (
         f"Google Sheet {where}: {count} rows, in SQL table `sheet`.\n"
-        f"Columns: {columns}\nFirst rows:\n{first}\n"
+        f"Columns: {columns}\n"
+        '"_row" is the row number in the sheet: use it for cell addresses (e.g. _row 22, column B → B22).\n'
+        f"First rows:\n{first}\n"
         "Use sheet_query with SQL to get the data you need (Google Sheets' grid is a picture)."
     )
 
