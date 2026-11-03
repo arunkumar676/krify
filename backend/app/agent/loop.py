@@ -4,11 +4,13 @@ import base64
 import json
 import logging
 import re
+from urllib.parse import urlparse
 
 from app import history, sheets
 from app.agent import safety
-from app.agent.prompt import SYSTEM_PROMPT
+from app.agent.prompt import SYSTEM_PROMPT, where_line
 from app.agent.tools import TOOLS
+from app.agent.understand import understand
 from app.config import MAX_STEPS
 from app.llm.client import ask_ai, has_vision_model, skip_model
 
@@ -18,6 +20,7 @@ READ_OPS = {"get_page_info", "get_elements", "read_text", "sheet_query", "read_c
 SHEET_OPS = {"sheet_query", "read_cells"}
 OLD_PAGE = "\n[older page view removed to save space]"
 OLD_SCREEN = "[older screen text removed to save space – use your notes]"
+MAX_READ_SITES = 3  # newest page text is kept for this many sites
 SHEET_HINT = "[Google Sheet] Call read_text first to see the columns, then sheet_query with SQL."
 
 
@@ -73,6 +76,18 @@ def layout(page):
     return _VALUES.sub("", page or "")
 
 
+def site_of(url):
+    """'https://www.amazon.in/s?k=x' -> 'amazon.in' ('' for new tabs and browser pages)."""
+    try:
+        parsed = urlparse(url or "")
+    except ValueError:
+        return ""
+    if parsed.scheme not in ("http", "https"):
+        return ""
+    host = parsed.hostname or ""
+    return host[4:] if host.startswith("www.") else host
+
+
 def is_sheet(url):
     return "docs.google.com/spreadsheets/" in (url or "")
 
@@ -94,6 +109,23 @@ REPEAT_NOTE = (
     "\nWarning: you've done this same step 3 times and nothing changed. Don't do it again: try a "
     "different way (another element, read_text, a fresh screenshot), or call ask_user."
 )
+NEW_SITE = ("\n[New site: {}] Check your plan still fits this site. If not, call plan with the fixed "
+            "steps (keep ✔ on finished ones).")
+SAME_READ = ("You already read this – the text is exactly the same as last time. Don't read it again: "
+             "save what you need with note, or if it's not there, note \"not found\" and move on with your plan.")
+WRONG_PRODUCT = (
+    "NOT saved: the user asked for {} but your note doesn't say it, so this may be a different product "
+    "(iPhone 16 is not iPhone 16e; Sponsored results are often other models). Check the product name on "
+    "the page. Find the right product, or if this really is it, call note again with its full name."
+)
+PRODUCT_REJECTED = (
+    "REJECTED – not sent to the user. The user asked for {} but your answer doesn't say it. Check each "
+    "price is for exactly that product (e.g. iPhone 17e or 16 is not 16e), then call done again naming "
+    "the exact product (model + storage) for each price."
+)
+WRONG_PAGE = ("\n⚠️ This page's title doesn't mention {} – it may be a different product than the user "
+              "asked for. Check the product name before using any price from it.")
+SAME_PLAN = "That's the same plan you already have – no need to repeat it. Continue with the next step."
 STUCK_NOTE = (
     "\nWarning: the last 5 steps made no progress (only scrolling, switching or clicking without "
     "the page changing). Stop wandering: read_text to see what's on screen, try a different "
@@ -125,6 +157,19 @@ def clean_text_reply(text):
 
 
 _NUMBER = re.compile(r"\d[\d,]*(?:\.\d+)?")
+
+
+def missing_words(task, text):
+    """Model words from the task (letters + digits: 16e, s24, 256gb) that the text doesn't mention."""
+    flat = re.sub(r"[^a-z0-9]", "", text.lower())  # "256 GB", "Apple-iPhone-17e" -> "256gb", "appleiphone17e"
+    words = {w for w in re.findall(r"[a-z0-9]+", task.lower()) if re.search(r"\d", w) and re.search(r"[a-z]", w)}
+    return sorted(w for w in words if w not in flat)
+
+
+def missing_models(task, note):
+    """Model words missing from a note or answer that has a price – a sign the price is for a
+    different product."""
+    return missing_words(task, note) if re.search(r"\d{3}|₹|\$", note) else []
 
 
 def unverified_numbers(text, seen):
@@ -201,18 +246,26 @@ class Agent:
             await ui(kind, text)
 
         self.task_id = None  # database id of the running task
+        self.product_text = ""  # the user's own words, for the wrong-product checks
+        self.current_title = ""
+        self.location = None  # where the user is, sent by the side panel with each task
         self.model = None  # model the task is currently using
 
         self.ui = ui_and_log  # async (type, text) -> None
         self.messages = [{"role": "system", "content": SYSTEM_PROMPT}]
         self.page_views = []  # (message, text_before_page_view) – trimmed later to save tokens
         self.last_page = None
-        self.screen_reads = []  # read_text results – only the newest is kept in full
+        self.screen_reads = {}  # site -> its newest read_text result (older ones are trimmed)
         self.screenshot_msgs = []  # messages holding a screenshot – dropped when the page changes
         self.tokens = 0
         # Per task: shown to the AI at every step so it keeps the goal in view.
         self.task_text = ""
+        self.goal = ""
+        self.done_when = ""
         self.plan = []
+        self.sites = set()  # sites seen this task – a new one triggers a plan check
+        self.last_task = ""  # previous task, so the planner understands follow-ups
+        self.last_status = ""  # how the previous task ended ("ask" = the next message is an answer)
         self.notes = []
         self.seen = []  # everything read from pages this task – used by the fact check
         self.fact_check_failed = False
@@ -220,15 +273,23 @@ class Agent:
     def header(self):
         """'[Your task] … [Your plan] … [Your notes] …' – sent with every page view."""
         lines = [f"[Your task] {self.task_text}"]
+        if self.goal:
+            lines.append(f"[Goal] {self.goal}")
         if self.plan:
             lines.append("[Your plan] " + " | ".join(f"{i}. {s}" for i, s in enumerate(self.plan, 1)))
         if self.notes:
             lines.append("[Your notes] " + " | ".join(self.notes))
+        if self.done_when:
+            lines.append(f"[Done when] {self.done_when}")
         return "\n".join(lines)
 
     def check_facts(self, summary):
         """Fact check before 'done': every number (3+ digits) in the answer must have appeared on a
-        page Krify read this task. Returns a rejection message, or None if the answer may go out."""
+        page Krify read this task, and a priced answer must name the product asked for (16e, 256gb).
+        Returns a rejection message, or None if the answer may go out."""
+        if (models := missing_models(self.product_text, summary)) and not self.product_check_failed:
+            self.product_check_failed = True
+            return PRODUCT_REJECTED.format(", ".join(models))
         missing = unverified_numbers(summary, self.seen)
         if not missing:
             return None
@@ -245,17 +306,22 @@ class Agent:
         self.messages = self.messages[:1]
         self.page_views = []
         self.last_page = None
-        self.screen_reads = []
+        self.screen_reads = {}
         self.screenshot_msgs = []
+        self.last_task = self.last_status = ""
 
     def add_screen_read(self, message, text):
-        """Keep only the newest screen text in full. Facts worth keeping go into notes,
-        which stay in the chat (as the note calls themselves)."""
-        for old in self.screen_reads:
+        """Keep the newest screen text of each site in full (at most MAX_READ_SITES sites), so a
+        price read on one site is still there while on the next – the AI often forgets to note it."""
+        site = site_of(self.current_url) or "this page"
+        old = self.screen_reads.pop(site, None)
+        if old:
             old["content"] = OLD_SCREEN
-        message["content"] = text
+        while len(self.screen_reads) >= MAX_READ_SITES:  # dicts keep order: drop the oldest site
+            self.screen_reads.pop(next(iter(self.screen_reads)))["content"] = OLD_SCREEN
+        message["content"] = f"[Read from {site}]\n{text}"
         self.messages.append(message)
-        self.screen_reads = [message]
+        self.screen_reads[site] = message
 
     def check_repeat(self, name, args, page_changed):
         """Repeat detector: the same action 3 times within the last 6 steps, with the page never
@@ -302,6 +368,7 @@ class Agent:
             self.elements = elements
             self.seen.append(elements)
             self.current_url = info.get("url", "")
+            self.current_title = str(info.get("title") or "")
             tabs = f"[Tabs] {info['tabs']}\n" if info.get("tabs") else ""
             if is_sheet(self.current_url):
                 elements = f"{SHEET_HINT}\n{elements}"
@@ -348,6 +415,11 @@ class Agent:
             message["content"] = f"{text}\n\n{self.header()}\n[Page unchanged since the last view.]"
             self.messages.append(message)
             return
+        site = site_of(self.current_url)
+        if site and site not in self.sites:
+            if self.plan and self.sites:  # the first site was known when planning
+                text += NEW_SITE.format(site)
+            self.sites.add(site)
         for old_msg, old_text in self.page_views:
             old_msg["content"] = old_text + OLD_PAGE
         message["content"] = f"{text}\n\n{self.header()}\n{page}"
@@ -367,16 +439,32 @@ class Agent:
 
     def end_task(self, status, summary):
         """Save how the task ended (done / ask / stopped / error) in the history."""
+        self.last_status = status
         if self.task_id:
             history.finish_task(self.task_id, status, summary, self.tokens, self.model)
 
-    async def run(self, task, model):
+    async def run(self, task, model, location=None):
+        self.location = location
+        where = where_line(location)
+        self.messages[0]["content"] = f"{SYSTEM_PROMPT}\n\n{where}" if where else SYSTEM_PROMPT
+        # The user's message may answer the agent's ask_user: then carry on with the same task.
+        continuing = self.last_status == "ask"
+        if continuing:  # same task: keep the goal, plan, notes and what was read so far
+            self.product_text = f"{self.product_text} {task}"
+            self.task_text = f"{self.task_text}\n(You asked the user; they answered: {task})"
+            self.seen.append(task)
+        else:
+            self.product_text = task
+            self.task_text, self.notes, self.sites = task, [], set()
+            self.goal, self.plan, self.done_when = "", [], ""
+            self.seen = [task]  # numbers the user gave count as known
         self.idle_steps = 0
         self.tokens = 0
         self.model = model
         self.task_id = history.start_task(task, model)
-        self.task_text, self.plan, self.notes = task, [], []
-        self.seen = [task]  # numbers the user gave count as known
+        self.last_read = ""  # newest read_text result, to catch reading the same text again
+        self.note_warnings = set()  # wrong-product warnings already given (the 2nd try is saved)
+        self.product_check_failed = False  # final answer sent back once for not naming the product
         self.fact_check_failed = False
         self.current_url = ""
         self.scrolls = {}  # url -> times scrolled on that page
@@ -387,7 +475,11 @@ class Agent:
         self.last_cell = ""
         nudged = False
         empty_replies = 0
-        self.add_with_page({"role": "user"}, task, await self.page_view())
+        page = await self.page_view()
+        if not continuing:
+            await self.make_plan(task, page, model)
+        self.last_task = self.task_text
+        self.add_with_page({"role": "user"}, task, page)
 
         for step in range(MAX_STEPS):
             if MAX_STEPS - step == WRAP_UP_AT:
@@ -424,7 +516,7 @@ class Agent:
                     nudged = True
                     continue
                 if kind == "done" and (rejection := self.check_facts(text)):
-                    await self.ui("step", "🔍 Fact check: answer has numbers not seen on any page – checking again")
+                    await self.ui("step", "🔍 Fact check: answer sent back to be checked")
                     self.messages.append({"role": "user", "content": rejection})
                     continue
                 await self.finish(kind, text)
@@ -466,15 +558,18 @@ class Agent:
                 elif name == "done":
                     summary = args.get("summary", "Done.")
                     if rejection := self.check_facts(summary):
-                        await self.ui("step", "🔍 Fact check: answer has numbers not seen on any page – checking again")
+                        await self.ui("step", "🔍 Fact check: answer sent back to be checked")
                         self.messages.append({**tool_msg, "content": rejection})
                         continue
                     self.messages.append({**tool_msg, "content": "Reported to the user."})
                     await self.finish("done", summary)
                     finished = True
+                elif name == "plan" and [str(s) for s in (args.get("steps") or [])][:8] == self.plan:
+                    self.messages.append({**tool_msg, "content": SAME_PLAN})
                 elif name == "plan":
+                    title = "📋 Plan updated:" if self.plan else "📋 Plan:"
                     self.plan = [str(s) for s in (args.get("steps") or [])][:8]
-                    await self.ui("step", "📋 Plan:\n" + "\n".join(f"{i}. {s}" for i, s in enumerate(self.plan, 1)))
+                    await self.ui("step", f"{title}\n" + "\n".join(f"{i}. {s}" for i, s in enumerate(self.plan, 1)))
                     self.messages.append(
                         {**tool_msg, "content": "Plan saved – you'll see it at every step. Call plan again to "
                                                 "update it; start finished steps with ✔."}
@@ -490,9 +585,17 @@ class Agent:
                     self.check_progress(name, self.last_page != self.shot_page)
                     self.shot_page = self.last_page
                 elif name == "note":
-                    await self.ui("step", f"📝 {args.get('text', '')}")
-                    self.notes.append(str(args.get("text", ""))[:200])
-                    self.messages.append({**tool_msg, "content": "Saved."})
+                    text = str(args.get("text", ""))
+                    missing = missing_models(self.product_text, text)
+                    if missing and tuple(missing) not in self.note_warnings:
+                        # e.g. the task says "iPhone 16e" but the note says "iPhone 16" (a sponsored result).
+                        self.note_warnings.add(tuple(missing))
+                        await self.ui("step", f"🔍 Note doesn't mention {', '.join(missing)} – checking the product")
+                        self.messages.append({**tool_msg, "content": WRONG_PRODUCT.format(", ".join(missing))})
+                    else:
+                        await self.ui("step", f"📝 {text}")
+                        self.notes.append(text[:200])
+                        self.messages.append({**tool_msg, "content": "Saved."})
                     self.check_progress(name, False)
                 elif name in READ_OPS:
                     on_sheet = name in SHEET_OPS | {"read_text"} and is_sheet(self.current_url)
@@ -504,12 +607,19 @@ class Agent:
                         result = f"Error: {name} only works on a Google Sheets page."
                     else:
                         result = await self.safe_run(name, args)
-                    self.check_progress(name, False)
+                    same_read = name == "read_text" and str(result) == self.last_read
+                    stuck = self.check_progress("same_read" if same_read else name, False)
                     self.seen.append(str(result))
                     if name == "get_elements":
                         self.elements = str(result)
                         self.add_with_page(tool_msg, "Elements:", result)
+                    elif same_read:
+                        # Reading the same unchanged text again (seen 6× in a row on Amazon): say so.
+                        self.messages.append({**tool_msg, "content": SAME_READ + stuck})
                     elif name == "read_text":
+                        self.last_read = str(result)
+                        if not on_sheet and (models := missing_words(self.product_text, f"{self.current_title} {self.current_url}")):
+                            result = f"{result}{WRONG_PAGE.format(', '.join(models))}"
                         self.add_screen_read(tool_msg, f"{result}\n(Save facts you'll need later with note.)")
                     else:
                         self.messages.append({**tool_msg, "content": str(result)})
@@ -549,6 +659,17 @@ class Agent:
             f"Stopped after {MAX_STEPS} steps (safety limit). What Krify found so far:\n{found}\n"
             "Try a simpler or more specific task for the rest.",
         )
+
+    async def make_plan(self, task, page, model):
+        """Plan from the AI's own knowledge before the first action. It never asks the user anything:
+        questions come later from the agent, once it has seen the real options on a site."""
+        result, tokens = await understand(task, page, self.last_task, model, self.location, on_note=lambda t: self.ui("step", t))
+        self.tokens += tokens
+        if not result:
+            return
+        self.goal, self.plan, self.done_when = result["goal"], result["steps"], result["done_when"]
+        steps = "\n".join(f"{i}. {s}" for i, s in enumerate(self.plan, 1))
+        await self.ui("step", f"🎯 Goal: {self.goal}\n📋 Plan:\n{steps}")
 
     async def ask_permission(self, reason, name, args):
         """Show Allow / Block in the side panel. Returns True only if the user allows."""

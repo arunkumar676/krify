@@ -45,6 +45,16 @@
         <ul id="modelList" class="model-list" role="listbox" hidden></ul>
       </div>
     </div>
+    <div class="location-row" title="Krify uses sites and prices for this country">
+      📍 Location
+      <select id="countrySelect"></select>
+      <button type="button" id="gpsBtn" class="small"
+              title="Asks for location permission; your city helps with &quot;near me&quot; tasks">Use exact location</button>
+      <span id="placeLabel" class="place" hidden>
+        <span id="placeText"></span>
+        <button type="button" id="forgetPlaceBtn" class="small" title="Forget exact location">✕</button>
+      </span>
+    </div>
     <textarea id="taskInput" rows="2" placeholder="What should I do?"></textarea>
     <div class="row">
       <button id="newBtn" class="small" title="Forget this chat">New chat</button>

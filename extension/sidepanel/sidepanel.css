@@ -66,6 +66,9 @@ textarea:focus { outline: 2px solid #5b5bd6; outline-offset: -1px; }
 .row { display: flex; gap: 6px; align-items: center; }
 .spacer { flex: 1; }
 .model-row { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #444; }
+.location-row { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #444; flex-wrap: wrap; }
+.location-row select { font-size: 12px; padding: 3px 4px; border: 1px solid #ccc; border-radius: 6px; }
+.location-row .place { display: flex; align-items: center; gap: 4px; }
 
 /* model picker: name on the left, today's usage on the right */
 .model-picker { position: relative; flex: 1; min-width: 0; }

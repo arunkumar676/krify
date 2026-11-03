@@ -73,10 +73,11 @@ async def _try_model(model, messages, tools, on_note):
     """One model, with in-place retries. Returns (message, tokens) or None (model now blocked)."""
     provider = provider_of(model)
     chat = _for_provider(messages, provider)
+    tool_args = {"tools": tools, "tool_choice": "auto"} if tools else {}  # no tools: a plain text reply
     for attempt in range(3):
         try:
             response = await _clients[provider].chat.completions.create(
-                model=model_name(model), messages=chat, tools=tools, tool_choice="auto", **MODELS[model]["extra"]
+                model=model_name(model), messages=chat, **tool_args, **MODELS[model]["extra"]
             )
             u = response.usage
             tokens = (u.total_tokens if u else 0) or 0

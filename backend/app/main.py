@@ -1,7 +1,7 @@
 """Krify server. Run:  uv run python -m app.main
 
 The side panel connects to ws://127.0.0.1:8765/ws.
-Side panel → server: {"type": "task", "text", "model"} | {"type": "stop"} | {"type": "reset"}
+Side panel → server: {"type": "task", "text", "model", "location": {"country", "place"}} | {"type": "stop"} | {"type": "reset"}
                      | {"type": "result", "id", "ok", "value" | "error"}
                      | {"type": "confirm_result", "id", "allow"}
                      | {"type": "history"} | {"type": "history_delete", "text"} | {"type": "history_clear"}
@@ -98,9 +98,9 @@ async def websocket_endpoint(ws: WebSocket):
             }
         )
 
-    async def run_task(text, model):
+    async def run_task(text, model, location):
         try:
-            await agent.run(text, model)
+            await agent.run(text, model, location)
         except asyncio.CancelledError:  # Stop button
             agent.close_open_calls()
             agent.end_task("stopped", "Stopped by you.")
@@ -137,7 +137,8 @@ async def websocket_endpoint(ws: WebSocket):
                 else:
                     model = msg.get("model") if msg.get("model") in MODELS else next(iter(MODELS))
                     log.info("Task (%s): %s", model, msg.get("text"))
-                    task = asyncio.create_task(run_task(msg.get("text", ""), model))
+                    location = msg.get("location") if isinstance(msg.get("location"), dict) else None
+                    task = asyncio.create_task(run_task(msg.get("text", ""), model, location))
             elif kind == "confirm_result":
                 future = confirms.get(msg.get("id"))
                 if future and not future.done():

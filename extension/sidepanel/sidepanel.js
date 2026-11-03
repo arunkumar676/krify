@@ -1,3 +1,4 @@
+import { currentLocation, initLocation } from "./location.js";
 import { beginTask, resetTabs, runOperation, setWorking } from "./operations.js";
 
 const SERVER_URL = "ws://127.0.0.1:8765/ws";
@@ -145,7 +146,7 @@ async function start() {
   taskInput.value = "";
   await beginTask(); // Krify works in the tab you're looking at
   setBusy(true);
-  send({ type: "task", text, model: selectedModel });
+  send({ type: "task", text, model: selectedModel, location: currentLocation() });
 }
 
 // ---------- model picker (list comes from the server, choice is remembered) ----------
@@ -303,6 +304,10 @@ $("clearYesBtn").onclick = () => {
   send({ type: "history_clear" });
   $("clearConfirm").hidden = true;
 };
+
+// ---------- location (country + optional exact place) ----------
+
+initLocation((text) => addEntry("step", text));
 
 // ---------- "Show cursor" switch (remembered between sessions) ----------
 
