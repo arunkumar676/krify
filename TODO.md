@@ -81,8 +81,8 @@
 - [x] Turn on the debugger permission (Chrome shows a yellow bar; only when needed)
 - [x] Real keys and shortcuts (Tab, Enter, Ctrl+Z, Ctrl+C/V, Ctrl+End)
 - [x] Drag and drop (both kinds; tested on the-internet drag_and_drop)
-- [ ] Right, double, triple click (built; Sheets test pending)
-- [ ] Click by position (x, y) from a screenshot (built; Sheets test pending)
+- [x] Right, double, triple click (Sheets cells by address: `click(cell="B22")`)
+- [x] Click by position (x, y) from a screenshot (spots outside the picture are refused)
 
 ## 12. Google Sheets editing
 - [x] Jump to a cell with the Name box (`go_to_cell`, checked before typing)

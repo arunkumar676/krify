@@ -103,15 +103,19 @@ def summary(text, title="", tab=""):
         first = _as_csv([d[0] for d in cur.description], cur.fetchall())
     finally:
         con.close()
+    # The sheet's own column letters (A = its first column; _row was added by Krify, it has none),
+    # so the AI never counts columns to build a cell address.
     columns = ", ".join(
-        f'"{name}" ({_TYPES.get(kind, kind.lower())}' + (", % sign removed" if name in percent else "") + ")"
-        for name, kind, *_ in info
+        f'"{name}" ({_TYPES.get(kind, kind.lower())}, column {_letter(i)}'
+        + (", % sign removed" if name in percent else "") + ")"
+        for i, (name, kind, *_) in enumerate((c for c in info if c[0] != "_row"), 1)
     )
     where = " – ".join(p for p in (f'"{title}"' if title else "", f'tab "{tab}"' if tab else "") if p)
     return (
         f"Google Sheet {where}: {count} rows, in SQL table `sheet`.\n"
         f"Columns: {columns}\n"
-        '"_row" is the row number in the sheet: use it for cell addresses (e.g. _row 22, column B → B22).\n'
+        '"_row" is the row number in the sheet (not a sheet column). Cell address = column letter + _row '
+        "(e.g. column B, _row 22 → B22).\n"
         f"First rows:\n{first}\n"
         "Use sheet_query with SQL to get the data you need (Google Sheets' grid is a picture)."
     )
@@ -119,6 +123,15 @@ def summary(text, title="", tab=""):
 
 _CELL = re.compile(r"^([A-Z]{1,3})(\d{1,7})$")
 MAX_CELLS = 60
+
+
+def _letter(n):
+    """Column number → letters, like in Sheets: 1 → A, 27 → AA."""
+    name = ""
+    while n:
+        n, rest = divmod(n - 1, 26)
+        name = chr(65 + rest) + name
+    return name
 
 
 def _cell_pos(ref):
@@ -146,11 +159,7 @@ def cells(text, ref):
     for r in range(r1, r2 + 1):
         row = rows[r - 1] if r - 1 < len(rows) else []
         for c in range(c1, c2 + 1):
-            name = ""
-            n = c
-            while n:
-                n, rest = divmod(n - 1, 26)
-                name = chr(65 + rest) + name
+            name = _letter(c)
             value = row[c - 1] if c - 1 < len(row) else ""
             lines.append(f"{name}{r}: {value!r}" if value else f"{name}{r}: (empty)")
     return "\n".join(lines)
@@ -179,16 +188,22 @@ def query(text, sql):
     try:
         cur = con.execute(sql)
         columns, rows = [d[0] for d in cur.description], cur.fetchall()
+        # Which sheet column each answer column is, e.g. "First Name" = column B (no counting needed).
+        sheet_cols = [name for name, *_ in con.execute("DESCRIBE sheet").fetchall() if name != "_row"]
+        letters = [f'"{c}" = column {_letter(sheet_cols.index(c) + 1)}' for c in columns if c in sheet_cols]
+        if not letters and "_row" in columns:  # only row numbers asked: give every column's letter
+            letters = [f'"{c}" = {_letter(i)}' for i, c in enumerate(sheet_cols[:30], 1)]
+        where = f"\n(in the sheet: {', '.join(letters)}; cell = letter + _row)" if letters else ""
         # Top-N: never hide a tie. If the rewrite doesn't work for this query, keep the original answer.
         if (tied_sql := _with_ties(sql)) is not None:
             try:
                 tied = con.execute(tied_sql).fetchall()
                 if len(tied) > len(rows):
                     note = f"\n(includes {len(tied) - len(rows)} more row(s) tied with the last one – report them all)"
-                    return _as_csv(columns, tied) + note
+                    return _as_csv(columns, tied) + note + where
             except duckdb.Error:
                 pass
-        return _as_csv(columns, rows)
+        return _as_csv(columns, rows) + where
     except duckdb.Error as err:
         raise ValueError(f"SQL error: {str(err).splitlines()[0]}. Fix the query and try again.") from None
     finally:
