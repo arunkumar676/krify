@@ -1,5 +1,5 @@
 import { currentLocation, initLocation } from "./location.js";
-import { beginTask, resetTabs, runOperation, setWorking } from "./operations.js";
+import { beginTask, resetTabs, runOperation, setWorking, showAgentTab, showMyTab } from "./operations.js";
 
 const SERVER_URL = "ws://127.0.0.1:8765/ws";
 
@@ -73,6 +73,7 @@ function connect() {
         }
         break;
       case "confirm":
+        showMyTab(); // you answer here, so show this panel's tab
         showConfirm(msg.id, msg.text);
         break;
       case "step":
@@ -81,10 +82,12 @@ function connect() {
       case "done":
         addEntry("done", `✅ ${msg.text}`);
         setBusy(false);
+        showMyTab();
         break;
       case "ask":
         addEntry("ask", `❓ ${msg.text}`);
         setBusy(false);
+        showMyTab();
         taskInput.focus();
         break;
       case "stopped":
@@ -96,6 +99,7 @@ function connect() {
       case "error":
         addEntry("error", `⚠️ ${msg.text}`);
         setBusy(false);
+        showMyTab();
         break;
     }
   };
@@ -128,6 +132,7 @@ function showConfirm(id, text) {
     send({ type: "confirm_result", id, allow: ok });
     buttons.remove();
     box.classList.add(ok ? "allowed" : "blocked");
+    showAgentTab(); // back to the tab Krify is working in
   };
   allow.onclick = () => answer(true);
   block.onclick = () => answer(false);

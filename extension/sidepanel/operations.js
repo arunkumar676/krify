@@ -8,6 +8,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ---------- Krify's tabs ----------
 
+// The tab this panel belongs to (each tab where you click Krify gets its own panel and chat).
+export const MY_TAB = Number(new URLSearchParams(location.search).get("tab")) || null;
+
 let agentTabId = null; // tab Krify is working in during a task
 const krifyTabs = []; // tab ids in the order Krify got them; [0] is the starting tab
 const openedByKrify = new Set(); // only these may be closed by Krify
@@ -38,12 +41,30 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 
 // A link that opens in a new tab (target="_blank"): follow it there.
 chrome.tabs.onCreated.addListener((tab) => {
-  if (working && agentTabId !== null && tab.openerTabId === agentTabId) {
+  if (working && agentTabId !== null && tab.openerTabId === agentTabId && !krifyTabs.includes(tab.id)) {
     krifyTabs.push(tab.id);
     openedByKrify.add(tab.id);
     agentTabId = tab.id;
   }
 });
+
+/** Krify needs you (Allow/Block, a question, the answer): the panel can't follow Krify to the
+ *  tabs it opens (Chrome only opens a panel after a click), so bring this panel's tab to the front. */
+export async function showMyTab() {
+  if (MY_TAB === null) return;
+  try {
+    const tab = await chrome.tabs.update(MY_TAB, { active: true });
+    await chrome.windows.update(tab.windowId, { focused: true });
+  } catch {
+    // tab closed
+  }
+}
+
+/** Back to the tab Krify works in (after you answered in this panel's tab). */
+export async function showAgentTab() {
+  if (MY_TAB === null || !working || agentTabId === null || agentTabId === MY_TAB) return;
+  await chrome.tabs.update(agentTabId, { active: true }).catch(() => {});
+}
 
 async function currentTab() {
   // During a task: Krify's tab. Otherwise (manual test buttons): the tab you're looking at.
@@ -391,9 +412,9 @@ export const operations = {
     if (!/^https?:\/\//i.test(url)) url = `https://${url}`;
     const current = await currentTab();
     const tab = await chrome.tabs.create({ url, active: true, windowId: current.windowId, index: current.index + 1 });
-    krifyTabs.push(tab.id);
+    if (!krifyTabs.includes(tab.id)) krifyTabs.push(tab.id);
     openedByKrify.add(tab.id);
-    await setWorkingIn(agentTabId, false);
+    await setWorkingIn(current.id, false);
     agentTabId = tab.id;
     await waitForLoad(tab.id);
     return `Opened ${url} in new tab ${krifyTabs.length}`;

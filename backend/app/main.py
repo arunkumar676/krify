@@ -29,6 +29,10 @@ log = logging.getLogger("krify")
 
 app = FastAPI(title="Krify")
 
+# Each tab's Krify panel has its own connection (its own chat), but only one task runs at a time:
+# free AI limits are shared, and two agents would fight over the browser.
+running = {"task": None}
+
 
 @app.get("/")
 def health():
@@ -134,11 +138,14 @@ async def websocket_endpoint(ws: WebSocket):
             elif kind == "task":
                 if task and not task.done():
                     await ui("error", "Krify is still working. Press Stop first.")
+                elif running["task"] and not running["task"].done():
+                    await ui("error", "Krify is busy with a task in another tab. Stop it there first.")
                 else:
                     model = msg.get("model") if msg.get("model") in MODELS else next(iter(MODELS))
                     log.info("Task (%s): %s", model, msg.get("text"))
                     location = msg.get("location") if isinstance(msg.get("location"), dict) else None
                     task = asyncio.create_task(run_task(msg.get("text", ""), model, location))
+                    running["task"] = task
             elif kind == "confirm_result":
                 future = confirms.get(msg.get("id"))
                 if future and not future.done():

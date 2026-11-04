@@ -6,6 +6,5 @@
   "permissions": ["sidePanel", "scripting", "tabs", "storage", "debugger", "geolocation"],
   "host_permissions": ["<all_urls>"],
   "background": { "service_worker": "background.js" },
-  "side_panel": { "default_path": "sidepanel/sidepanel.html" },
   "action": { "default_title": "Open Krify" }
 }
