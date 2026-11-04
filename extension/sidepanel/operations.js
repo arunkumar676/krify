@@ -135,24 +135,90 @@ async function setWorkingIn(tabId, on) {
   }
 }
 
+// ---------- embedded pages (iframes) ----------
+// An embedded page (payment box, login box, form) is a separate page inside the main one.
+// Its elements are numbered after the main page's, and each number remembers which page it's in.
+
+const MAX_ELEMENTS = 100; // in total
+const MAIN_SHARE = 80; // the main page's part when there are embedded pages, so theirs still fit
+const FRAME_TEXT = 1200; // characters of text read per embedded page
+const elementFrame = new Map(); // element number → frame id (0 = main page)
+
+// In-page functions whose first argument is an element number.
+const ELEMENT_FNS = new Set(["click", "hover", "type", "pointAt", "spotOf", "focusCheck", "selectOption"]);
+
+/** The tab's embedded pages worth looking at, in page order: [{ frameId, label }]. */
+async function embeddedPages(tabId) {
+  try {
+    await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, files: ["content.js"] });
+    const results = await chrome.scripting.executeScript({
+      target: { tabId, allFrames: true },
+      func: () => window.__krify?.frameInfo(),
+    });
+    return results
+      .filter((r) => r.frameId !== 0 && r.result?.usable)
+      .sort((a, b) => a.frameId - b.frameId)
+      .map((r) => ({ frameId: r.frameId, label: r.result.label }));
+  } catch {
+    return []; // a page Krify can't reach: just the main page
+  }
+}
+
+/** Run an in-page function in the main page and every embedded page (errors ignored). */
+async function callInAllFrames(fnName, args = []) {
+  const tab = await webTab();
+  try {
+    await chrome.scripting.executeScript({ target: { tabId: tab.id, allFrames: true }, files: ["content.js"] });
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id, allFrames: true },
+      func: (name, a) => window.__krify?.[name](...a),
+      args: [fnName, args],
+    });
+  } catch {
+    await callInPage(fnName, args, null, 0);
+  }
+}
+
+/** pointAt/spotOf as a spot on the main page (embedded pages report spots inside themselves). */
+async function spotIn(fnName, element) {
+  const spot = await callInPage(fnName, [element]);
+  const frameId = elementFrame.get(String(element)) ?? 0;
+  if (frameId === 0) return spot;
+  const off = await callInPage("frameOffset", [], null, frameId);
+  return { ...spot, x: spot.x + off.x, y: spot.y + off.y };
+}
+
 // Inject content.js (if needed), then call one of its functions inside the page.
-async function callInPage(fnName, args = [], tabId = null) {
+// frameId: which page – 0 is the main page; by default an element's own page.
+async function callInPage(fnName, args = [], tabId = null, frameId = null) {
   const tab = tabId !== null ? await chrome.tabs.get(tabId) : await webTab();
-  await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["content.js"] });
-  const animate = await showCursor();
-  const [result] = await chrome.scripting.executeScript({
-    target: { tabId: tab.id },
-    func: async (name, a, animate, glow) => {
-      try {
-        window.__krify.animate = animate;
-        if (name !== "setWorking") window.__krify.setWorking(glow); // re-show after page loads
-        return { ok: true, value: await window.__krify[name](...a) };
-      } catch (err) {
-        return { ok: false, error: err.message };
-      }
-    },
-    args: [fnName, args, animate, working && animate],
-  });
+  if (frameId === null) frameId = ELEMENT_FNS.has(fnName) ? elementFrame.get(String(args[0])) ?? 0 : 0;
+  const target = { tabId: tab.id, frameIds: [frameId] };
+  let result;
+  try {
+    await chrome.scripting.executeScript({ target, files: ["content.js"] });
+    const animate = await showCursor();
+    [result] = await chrome.scripting.executeScript({
+      target,
+      func: async (name, a, animate, glow) => {
+        try {
+          window.__krify.animate = animate;
+          if (name !== "setWorking") window.__krify.setWorking(glow); // re-show after page loads
+          return { ok: true, value: await window.__krify[name](...a) };
+        } catch (err) {
+          return { ok: false, error: err.message };
+        }
+      },
+      args: [fnName, args, animate, working && animate],
+    });
+  } catch (err) {
+    // The embedded page went away (closed or reloaded).
+    if (frameId !== 0) {
+      const what = ELEMENT_FNS.has(fnName) ? `Element [${args[0]}] not found` : "The embedded page went away";
+      throw new Error(`${what}. The page may have changed – get the elements again.`);
+    }
+    throw err;
+  }
   const res = result?.result;
   if (!res) throw new Error("No answer from the page. Try again.");
   if (!res.ok) throw new Error(res.error);
@@ -238,25 +304,57 @@ export const operations = {
     if (krifyTabs.length > 1) info.tabs = await tabList();
     return info;
   },
-  get_elements: () => callInPage("getElements"),
+  async get_elements() {
+    // Main page first, then each embedded page, numbered on from where the last one stopped.
+    const tab = await webTab();
+    const frames = await embeddedPages(tab.id);
+    if (frames.length) await callInAllFrames("forget"); // old numbers must not linger anywhere
+    elementFrame.clear();
+    const main = await callInPage("getElements", [0, frames.length ? MAIN_SHARE : MAX_ELEMENTS], null, 0);
+    const parts = main.text ? [main.text] : [];
+    let last = main.count;
+    for (const { frameId, label } of frames) {
+      if (last >= MAX_ELEMENTS) break;
+      let inner;
+      try {
+        inner = await callInPage("getElements", [last, MAX_ELEMENTS - last], null, frameId);
+      } catch {
+        continue; // went away meanwhile
+      }
+      if (!inner.count) continue;
+      for (let n = last + 1; n <= last + inner.count; n++) elementFrame.set(String(n), frameId);
+      parts.push(`--- inside embedded page "${label}" ---\n${inner.text}`);
+      last += inner.count;
+    }
+    return parts.join("\n") || "(no interactive elements visible)";
+  },
   async screenshot() {
     // Element numbers drawn on → picture of the visible area → labels removed → shrink.
     const tab = await currentTab();
     await chrome.tabs.update(tab.id, { active: true }); // only the visible tab can be captured
-    await callInPage("showLabels", [true]);
+    await callInAllFrames("showLabels", [true]); // embedded pages draw their own numbers
     await sleep(150);
     let shot;
     try {
       shot = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "jpeg", quality: 70 });
     } finally {
-      await callInPage("showLabels", [false]);
+      await callInAllFrames("showLabels", [false]);
     }
     const vp = await callInPage("viewport");
     const { dataUrl, width } = await shrinkImage(shot, 1024);
     lastShot = { tabId: tab.id, url: tab.url, scrollX: vp.scrollX, scrollY: vp.scrollY, scale: vp.width / width };
     return dataUrl;
   },
-  read_text: ({ scope = "screen" } = {}) => callInPage("readText", [scope]),
+  async read_text({ scope = "screen" } = {}) {
+    // The main page's text, then each embedded page's (shorter), under its own heading.
+    const tab = await webTab();
+    const parts = [await callInPage("readText", [scope], null, 0)];
+    for (const { frameId, label } of await embeddedPages(tab.id)) {
+      const text = await callInPage("readText", [scope, FRAME_TEXT], null, frameId).catch(() => "");
+      if (text && !text.startsWith("(no text")) parts.push(`--- inside embedded page "${label}" ---\n${text}`);
+    }
+    return parts.join("\n");
+  },
   // Google Sheets: the open sheet tab as CSV (the server answers questions about it).
   async sheet_csv() {
     const tab = await currentTab();
@@ -333,7 +431,7 @@ export const operations = {
       // right-clicking that editor opens Chrome's own text menu.
       throw new Error('On Google Sheets, right-click or double-click cells with click(cell="B22"), not element numbers.');
     }
-    const spot = await callInPage("pointAt", [element]);
+    const spot = await spotIn("pointAt", element);
     await realClick(tab.id, spot.x, spot.y, { button: btn, clickCount: n });
     await sleep(300);
     await waitForLoad(tab.id);
@@ -361,8 +459,8 @@ export const operations = {
   },
   async drag({ from_element, to_element, from_x, from_y, to_x, to_y }) {
     const tab = await currentTab();
-    const from = from_element != null ? await callInPage("pointAt", [from_element]) : await shotToPage(tab, from_x, from_y);
-    const to = to_element != null ? await callInPage("spotOf", [to_element]) : await shotToPage(tab, to_x, to_y);
+    const from = from_element != null ? await spotIn("pointAt", from_element) : await shotToPage(tab, from_x, from_y);
+    const to = to_element != null ? await spotIn("spotOf", to_element) : await shotToPage(tab, to_x, to_y);
     const kind = await realDrag(tab.id, from, to);
     await callInPage("showPoint", [to.x, to.y, false]).catch(() => {});
     if (needsRealInput(tab.url)) edited();
@@ -375,7 +473,7 @@ export const operations = {
     if (!real) return act("hover", [element]);
     // A real mouse move, for menus that only open for a real mouse.
     const tab = await currentTab();
-    const spot = await callInPage("pointAt", [element]);
+    const spot = await spotIn("pointAt", element);
     await realMove(tab.id, spot.x, spot.y);
     await sleep(600);
     return `Hovered over [${element}] with the real mouse`;
@@ -385,7 +483,7 @@ export const operations = {
     if (!needsRealInput(tab.url)) return act("type", [element, text, Boolean(submit)]);
     // Google Sheets/Docs ignore JavaScript typing: click the box for real, check the cursor is
     // really in it (never Ctrl+A: in Sheets that selects every cell), then type for real.
-    const spot = await callInPage("pointAt", [element]);
+    const spot = await spotIn("pointAt", element);
     if (spot.nameBox) return operations.go_to_cell({ cell: text });
     await realClick(tab.id, spot.x, spot.y);
     await sleep(200);

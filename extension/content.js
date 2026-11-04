@@ -127,12 +127,20 @@ if (!window.__krify) {
       };
     },
 
-    getElements() {
+    // Forget the element numbers (before a new list is made across the page and its embedded pages).
+    forget() {
       for (const el of listed.values()) el.removeAttribute("data-krify-id");
       listed.clear();
+      return "ok";
+    },
+
+    // Numbers start after `start`: embedded pages continue the main page's numbering.
+    // Returns { text, count } – the side panel joins the main page and embedded pages.
+    getElements(start = 0, max = MAX_ELEMENTS) {
+      this.forget();
       const lines = [];
       const seenLinks = new Set();
-      let id = 0;
+      let id = start;
       // An open menu, dropdown or dialog comes first: on busy pages (Google Sheets has 100+ toolbar
       // buttons) its items would otherwise fall past the element limit.
       const popups = deepAll(POPUP).filter(isVisible);
@@ -155,19 +163,49 @@ if (!window.__krify) {
         el.setAttribute("data-krify-id", String(id));
         listed.set(String(id), el);
         lines.push(`[${id}] ${text}`);
-        if (id >= MAX_ELEMENTS) { lines.push("(more elements not shown)"); break; }
+        if (id - start >= max) { lines.push("(more elements not shown)"); break; }
       }
       const below = document.documentElement.scrollHeight - (scrollY + innerHeight);
       if (below > 50) lines.push("(more content below – scroll down to see it)");
-      return lines.join("\n") || "(no interactive elements visible)";
+      return { text: lines.join("\n"), count: id - start };
+    },
+
+    // ---------- embedded pages (iframes) ----------
+
+    // Is this embedded page worth looking at? Tiny/hidden ones are trackers and ads.
+    frameInfo() {
+      const usable = innerWidth >= 50 && innerHeight >= 30 && document.body?.childElementCount > 0;
+      return { usable, label: clean(document.title || location.hostname || "embedded page", 40) };
+    },
+
+    // Where this embedded page sits on the main page, so real mouse clicks land in the right spot.
+    // Only possible when each page in between is from the same site.
+    frameOffset() {
+      let x = 0;
+      let y = 0;
+      for (let w = window; w !== top; w = w.parent) {
+        let box = null;
+        try {
+          box = w.frameElement;
+        } catch {
+          // another site's page: can't look at it
+        }
+        if (!box) {
+          throw new Error("That element is in an embedded page from another site – real mouse actions can't reach it yet. Use a normal click or type.");
+        }
+        const r = box.getBoundingClientRect();
+        x += r.left + box.clientLeft;
+        y += r.top + box.clientTop;
+      }
+      return { x, y };
     },
 
     // "screen" (default): only the text visible right now, line by line – prices, answers, etc.
     // "page": the whole page from the top (long, cut at MAX_TEXT).
     // Both walk the text nodes ourselves (not body.innerText) so text inside shadow roots is read too.
-    readText(scope = "screen") {
+    readText(scope = "screen", max = null) {
       const wholePage = scope === "page";
-      const limit = wholePage ? MAX_TEXT : MAX_SCREEN_TEXT;
+      const limit = max || (wholePage ? MAX_TEXT : MAX_SCREEN_TEXT);
       const lines = [];
       let line = "";
       let lineTop = null;
@@ -233,6 +271,7 @@ if (!window.__krify) {
 
     // Glowing border around the page while a task runs.
     setWorking(on) {
+      if (window !== top) return "ok"; // only around the main page, not each embedded page
       if (!on && !view.root) return "ok"; // nothing shown, nothing to hide
       overlay().querySelector(".working").classList.toggle("on", on);
       return "ok";
