@@ -145,7 +145,7 @@ const FRAME_TEXT = 1200; // characters of text read per embedded page
 const elementFrame = new Map(); // element number → frame id (0 = main page)
 
 // In-page functions whose first argument is an element number.
-const ELEMENT_FNS = new Set(["click", "hover", "type", "pointAt", "spotOf", "focusCheck", "selectOption"]);
+const ELEMENT_FNS = new Set(["click", "hover", "type", "pointAt", "spotOf", "focusCheck", "selectOption", "scrollAt"]);
 
 /** The tab's embedded pages worth looking at, in page order: [{ frameId, label }]. */
 async function embeddedPages(tabId) {
@@ -561,7 +561,9 @@ export const operations = {
     await sleep(300);
     return `Typed "${text}" where the cursor is${save ? " (Enter pressed to save it – the cursor moved down one row)" : ""}`;
   },
-  scroll: ({ direction }) => callInPage("scroll", [direction]),
+  // With an element: scroll the box/embedded page it's in. Without: the main page.
+  scroll: ({ direction, element }) =>
+    element != null ? callInPage("scrollAt", [element, direction]) : callInPage("scroll", [direction]),
   select_option: ({ element, option }) => act("selectOption", [element, option]),
 
   // Control

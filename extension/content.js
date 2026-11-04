@@ -85,6 +85,25 @@ if (!window.__krify) {
     return el;
   }
 
+  // Can this box scroll by itself (not the whole page)?
+  function canScroll(box) {
+    if (box.scrollHeight <= box.clientHeight + 4) return false;
+    return /(auto|scroll|overlay)/.test(getComputedStyle(box).overflowY);
+  }
+
+  // Visible boxes with more to scroll to, at most 5 (cheap size checks first, style only then).
+  function scrollBoxes() {
+    const found = [];
+    for (const el of deepAll("*")) {
+      if (el === document.body || el === document.documentElement || el.clientHeight < 60) continue;
+      if (el.scrollHeight <= el.clientHeight + 4 || !canScroll(el) || !isVisible(el)) continue;
+      if (found.some((outer) => outer.contains(el))) continue; // the inner one scrolls with it
+      found.push(el);
+      if (found.length >= 5) break;
+    }
+    return found;
+  }
+
   function labelOf(el) {
     return clean(
       el.getAttribute("aria-label") ||
@@ -165,8 +184,26 @@ if (!window.__krify) {
         lines.push(`[${id}] ${text}`);
         if (id - start >= max) { lines.push("(more elements not shown)"); break; }
       }
+      // Panels that scroll on their own (chat lists, popups): numbered so the AI can scroll them.
+      for (const box of scrollBoxes()) {
+        if (id - start >= max) break;
+        id += 1;
+        box.setAttribute("data-krify-id", String(id));
+        listed.set(String(id), box);
+        lines.push(`[${id}] scrollable box "${labelOf(box) ? clean(labelOf(box), 30) : ""}" (scroll with element=${id} to see more)`);
+      }
       const below = document.documentElement.scrollHeight - (scrollY + innerHeight);
-      if (below > 50) lines.push("(more content below – scroll down to see it)");
+      if (window === top) {
+        if (below > 50) lines.push("(more content below – scroll down to see it)");
+      } else if (document.documentElement.scrollHeight > innerHeight + 4) {
+        // An embedded page that scrolls gets its own number, even when none of its buttons are in view.
+        id += 1;
+        const page = document.documentElement;
+        page.setAttribute("data-krify-id", String(id));
+        listed.set(String(id), page);
+        const at = below > 50 ? (scrollY > 4 ? "more above and below" : "more below") : "at the bottom";
+        lines.push(`[${id}] this embedded page (${at} – scroll with element=${id})`);
+      }
       return { text: lines.join("\n"), count: id - start };
     },
 
@@ -494,10 +531,18 @@ if (!window.__krify) {
     },
 
     async scroll(direction) {
-      const before = scrollY;
-      scrollBy({ top: (direction === "up" ? -1 : 1) * innerHeight * 0.8, behavior: this.animate ? "smooth" : "instant" });
-      if (this.animate) await sleep(600);
-      return scrollY === before ? `Can't scroll ${direction} any more` : `Scrolled ${direction}`;
+      return scrollIn(document.scrollingElement || document.documentElement, direction, window === top ? "the page" : "the embedded page");
+    },
+
+    // Scroll the box an element sits in: a scrollable panel (chat list, popup), or else this
+    // page itself – which, inside an embedded page, scrolls just that embedded page.
+    async scrollAt(id, direction) {
+      const el = find(id);
+      let box = null;
+      for (let p = el; p && p !== document.body && p !== document.documentElement; p = parentOf(p)) {
+        if (p.nodeType === 1 && canScroll(p)) { box = p; break; }
+      }
+      return box ? scrollIn(box, direction, `the box [${id}]`) : this.scroll(direction);
     },
 
     async selectOption(id, option) {
@@ -522,6 +567,22 @@ if (!window.__krify) {
       return `Selected "${match.text.trim()}" in [${id}]`;
     },
   };
+
+  // Scroll a box (or the page's own scroller) up/down by most of its height, or straight to its
+  // top/bottom, and say where it is now – so the AI knows how much is left.
+  async function scrollIn(box, direction, name) {
+    const before = box.scrollTop;
+    const behavior = window.__krify.animate ? "smooth" : "instant";
+    if (direction === "top") box.scrollTo({ top: 0, behavior });
+    else if (direction === "bottom") box.scrollTo({ top: box.scrollHeight, behavior });
+    else box.scrollBy({ top: (direction === "up" ? -1 : 1) * box.clientHeight * 0.8, behavior });
+    await sleep(window.__krify.animate ? 600 : 50);
+    const room = box.scrollHeight - box.clientHeight;
+    const where = room <= 0 ? "" : box.scrollTop >= room - 4 ? "at the bottom" : box.scrollTop <= 4 ? "at the top"
+      : `${Math.round((box.scrollTop / room) * 100)}% down, more below`;
+    if (box.scrollTop === before) return `Can't scroll ${name} ${direction} any more${where ? ` (${where})` : ""}`;
+    return `Scrolled ${name} ${direction}${where ? ` – now ${where}` : ""}`;
+  }
 
   function find(id) {
     const el = listed.get(String(id));

@@ -216,7 +216,9 @@ def describe(name, args):
         case "type_here": return f"⌨️ Type \"{args.get('text')}\" where the cursor is"
         case "go_to_cell": return f"📍 Go to cell {args.get('cell')}"
         case "read_cells": return f"📊 Read cells {args.get('cells')}"
-        case "scroll": return f"↕️ Scroll {args.get('direction')}"
+        case "scroll":
+            where = f" the box at [{args['element']}]" if args.get("element") is not None else ""
+            return f"↕️ Scroll{where} {args.get('direction')}"
         case "select_option": return f"📋 Choose \"{args.get('option')}\" in [{args.get('element')}]"
         case "new_tab": return f"🗂️ New tab: {args.get('url')}"
         case "switch_tab": return f"🗂️ Switch to tab {args.get('tab')}"
@@ -723,11 +725,13 @@ class Agent:
             self.last_cell = str(args.get("cell", ""))
 
         if name == "scroll":
-            count = self.scrolls.get(self.current_url, 0)
+            # Scrolling a box (embedded page, chat list) has its own limit, apart from the page's.
+            key = self.current_url + (" box" if args.get("element") is not None else "")
+            count = self.scrolls.get(key, 0)
             if count >= MAX_SCROLLS_PER_PAGE:
                 await self.ui("step", "🛑 Scroll limit for this page – deciding with what was found")
                 return SCROLL_REFUSED, "refused"
-            self.scrolls[self.current_url] = count + 1
+            self.scrolls[key] = count + 1
 
         if name == "type":
             self.last_typed_line = safety.element_line(self.elements, args.get("element"))

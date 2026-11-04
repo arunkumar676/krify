@@ -53,7 +53,9 @@ TOOLS = [
           {"cell": TEXT}, ["cell"]),
     _tool("read_cells", "Google Sheets: exact values of a cell or range now, e.g. A130 or A128:C130.",
           {"cells": TEXT}, ["cells"]),
-    _tool("scroll", "Scroll the page.", {"direction": {"type": "string", "enum": ["up", "down"]}}, ["direction"]),
+    _tool("scroll", "Scroll the page (top/bottom: jump there). element = scroll only the box/embedded page "
+          "holding that element.",
+          {"direction": {"type": "string", "enum": ["up", "down", "top", "bottom"]}, "element": ELEMENT}, ["direction"]),
     _tool("select_option", "Choose a dropdown option.", {"element": ELEMENT, "option": TEXT}, ["element", "option"]),
     _tool("wait", "Wait for loading (1-10 s).", {"seconds": {"type": "number"}}, ["seconds"]),
     _tool("batch", "Do up to 5 actions in a row when you're sure of them without looking, e.g. filling a form. "
