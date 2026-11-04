@@ -14,7 +14,11 @@ if (!window.__krify) {
   ].join(",");
   const POPUP = '[role=menu], [role=listbox], [role=dialog], [role=alertdialog], [aria-modal="true"]';
 
-  const NAME_BOX = '#t-name-box, input.waffle-name-box, input[aria-label="Name Box" i]';
+  // Element number → element, from the latest getElements (also finds elements inside shadow roots,
+  // which a page-wide querySelector can't).
+  const listed = new Map();
+
+  const NAME_BOX ='#t-name-box, input.waffle-name-box, input[aria-label="Name Box" i]';
 
   const clean = (s, max = 50) => {
     s = (s || "").replace(/\s+/g, " ").trim();
@@ -29,6 +33,58 @@ if (!window.__krify) {
     return style.visibility !== "hidden" && style.display !== "none" && Number(style.opacity) > 0.05;
   }
 
+  // ---------- shadow DOM: parts of a page sealed inside a component ----------
+  // Normal searches stop at a component's shadow root; these helpers look inside it too.
+
+  // Open roots are on el.shadowRoot. Closed ones need the extension-only API, asked only for
+  // custom elements (tag with "-") so busy pages stay fast. Krify's own overlay is skipped.
+  function shadowOf(el) {
+    if (el.tagName === "KRIFY-OVERLAY") return null;
+    if (el.shadowRoot) return el.shadowRoot;
+    return el.tagName.includes("-") ? chrome.dom?.openOrClosedShadowRoot?.(el) || null : null;
+  }
+
+  // Every text node in page order, including text inside shadow roots.
+  function* textNodes(root) {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) {
+      const node = walker.currentNode;
+      if (node.nodeType === Node.TEXT_NODE) {
+        yield node;
+      } else {
+        const shadow = shadowOf(node);
+        if (shadow) yield* textNodes(shadow);
+      }
+    }
+  }
+
+  // Every element matching `selector`, in page order, including those inside shadow roots.
+  function deepAll(selector, root = document) {
+    const found = [];
+    for (const el of root.querySelectorAll("*")) {
+      if (el.matches(selector)) found.push(el);
+      const shadow = shadowOf(el);
+      if (shadow) found.push(...deepAll(selector, shadow));
+    }
+    return found;
+  }
+
+  // The parent, stepping out of a shadow root to the component that holds it.
+  const parentOf = (el) => el.parentElement || el.getRootNode()?.host || null;
+
+  // Like el.closest(selector), but also looks past shadow root edges.
+  function closestDeep(el, selector) {
+    for (let p = el; p; p = parentOf(p)) if (p.matches?.(selector)) return p;
+    return null;
+  }
+
+  // The focused element, even when it sits inside a component.
+  function activeDeep() {
+    let el = document.activeElement;
+    for (let shadow = el && shadowOf(el); shadow?.activeElement; shadow = shadowOf(el)) el = shadow.activeElement;
+    return el;
+  }
+
   function labelOf(el) {
     return clean(
       el.getAttribute("aria-label") ||
@@ -38,7 +94,10 @@ if (!window.__krify) {
       el.getAttribute("title") ||
       el.querySelector("img[alt]")?.alt ||
       el.getAttribute("name") ||
-      (el.type === "submit" ? el.value : "")
+      (el.type === "submit" ? el.value : "") ||
+      // A button inside a component often gets its label from the component itself.
+      el.getRootNode()?.host?.getAttribute("aria-label") ||
+      el.getRootNode()?.host?.innerText
     );
   }
 
@@ -69,22 +128,23 @@ if (!window.__krify) {
     },
 
     getElements() {
-      document.querySelectorAll("[data-krify-id]").forEach((el) => el.removeAttribute("data-krify-id"));
+      for (const el of listed.values()) el.removeAttribute("data-krify-id");
+      listed.clear();
       const lines = [];
       const seenLinks = new Set();
       let id = 0;
       // An open menu, dropdown or dialog comes first: on busy pages (Google Sheets has 100+ toolbar
       // buttons) its items would otherwise fall past the element limit.
-      const popups = [...document.querySelectorAll(POPUP)].filter(isVisible);
-      const inPopups = popups.flatMap((p) => [...p.querySelectorAll(SELECTOR)]);
+      const popups = deepAll(POPUP).filter(isVisible);
+      const inPopups = popups.flatMap((p) => deepAll(SELECTOR, p));
       if (inPopups.length) lines.push("(an open menu/dialog is listed first)");
-      for (const el of new Set([...inPopups, ...document.querySelectorAll(SELECTOR)])) {
+      for (const el of new Set([...inPopups, ...deepAll(SELECTOR)])) {
         // Some sites (e.g. Amazon's "Sort by") hide the real <select> under a custom button.
         const visible = isVisible(el) || (el.tagName === "SELECT" && el.parentElement && isVisible(el.parentElement));
         if (!visible || el.disabled) continue;
         // Fewer tokens: inside an already-listed link/button = same click; same link target = listed once
         // (shops link each product from its picture AND its title).
-        if (el.parentElement?.closest("[data-krify-id]")) continue;
+        if (parentOf(el) && closestDeep(parentOf(el), "[data-krify-id]")) continue;
         if (el.tagName === "A" && el.href) {
           if (seenLinks.has(el.href)) continue;
           seenLinks.add(el.href);
@@ -93,6 +153,7 @@ if (!window.__krify) {
         if (/"\s*"/.test(text) && !/input|textarea|select/.test(text)) continue; // skip unlabeled
         id += 1;
         el.setAttribute("data-krify-id", String(id));
+        listed.set(String(id), el);
         lines.push(`[${id}] ${text}`);
         if (id >= MAX_ELEMENTS) { lines.push("(more elements not shown)"); break; }
       }
@@ -103,25 +164,23 @@ if (!window.__krify) {
 
     // "screen" (default): only the text visible right now, line by line – prices, answers, etc.
     // "page": the whole page from the top (long, cut at MAX_TEXT).
+    // Both walk the text nodes ourselves (not body.innerText) so text inside shadow roots is read too.
     readText(scope = "screen") {
-      if (scope === "page") {
-        const text = (document.body?.innerText || "").replace(/\n{3,}/g, "\n\n").trim();
-        return text.length > MAX_TEXT ? text.slice(0, MAX_TEXT) + "\n…(text cut, page is long)" : text;
-      }
+      const wholePage = scope === "page";
+      const limit = wholePage ? MAX_TEXT : MAX_SCREEN_TEXT;
       const lines = [];
       let line = "";
       let lineTop = null;
       let size = 0;
       const range = document.createRange();
-      const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-      while (walker.nextNode()) {
-        const node = walker.currentNode;
+      for (const node of textNodes(document.body)) {
         const text = node.nodeValue.replace(/\s+/g, " ").trim();
         const parent = node.parentElement;
         if (!text || !parent || /^(SCRIPT|STYLE|NOSCRIPT|TEMPLATE)$/.test(parent.tagName)) continue;
         range.selectNodeContents(node);
         const r = range.getBoundingClientRect();
-        if (r.width < 1 || r.height < 1 || r.bottom < 0 || r.top > innerHeight) continue; // off screen
+        if (r.width < 1 || r.height < 1) continue; // not laid out
+        if (!wholePage && (r.bottom < 0 || r.top > innerHeight)) continue; // off screen
         if (parent.checkVisibility && !parent.checkVisibility({ opacityProperty: true, visibilityProperty: true })) continue;
         // Text at about the same height belongs to the same visual line.
         if (lineTop !== null && Math.abs(r.top - lineTop) > 6) {
@@ -131,13 +190,13 @@ if (!window.__krify) {
         line = line ? `${line} ${text}` : text;
         lineTop = r.top;
         size += text.length + 1;
-        if (size > MAX_SCREEN_TEXT) {
-          line += " …(more on screen not shown)";
+        if (size > limit) {
+          line += wholePage ? " …(text cut, page is long)" : " …(more on screen not shown)";
           break;
         }
       }
       if (line) lines.push(line);
-      return lines.join("\n") || "(no text visible on screen – try scrolling)";
+      return lines.join("\n") || (wholePage ? "(no text on this page)" : "(no text visible on screen – try scrolling)");
     },
 
     // Google Sheets: name of the open sheet tab (the data itself is fetched by sheets.js).
@@ -159,12 +218,12 @@ if (!window.__krify) {
       if (!on) return "ok";
       const layer = document.createElement("div");
       layer.className = "labels";
-      for (const el of document.querySelectorAll("[data-krify-id]")) {
+      for (const [id, el] of listed) {
         const r = el.getBoundingClientRect();
         if (r.bottom < 0 || r.top > innerHeight || r.width < 2) continue;
         const tag = document.createElement("div");
         tag.className = "num";
-        tag.textContent = el.getAttribute("data-krify-id");
+        tag.textContent = id;
         Object.assign(tag.style, { left: `${Math.max(0, r.left)}px`, top: `${Math.max(0, r.top)}px` });
         layer.append(tag);
       }
@@ -291,9 +350,15 @@ if (!window.__krify) {
 
     // What's at a spot, e.g. 'button "Delete"' – so a click by position gets the same safety check.
     elementAt(x, y) {
-      const hit = document.elementFromPoint(x, y); // Krify's own overlay ignores the mouse, so it's skipped
+      let hit = document.elementFromPoint(x, y); // Krify's own overlay ignores the mouse, so it's skipped
       if (!hit) return "";
-      return describe(hit.closest(SELECTOR) || hit);
+      // Inside a component, the page only reports the component: look inside it.
+      for (let shadow = shadowOf(hit); shadow; shadow = shadowOf(hit)) {
+        const inner = shadow.elementFromPoint(x, y);
+        if (!inner || inner === hit) break;
+        hit = inner;
+      }
+      return describe(closestDeep(hit, SELECTOR) || hit);
     },
 
     // Show Krify's cursor (and a click ripple) at a spot.
@@ -306,7 +371,8 @@ if (!window.__krify) {
     // After a real click: is the cursor in this box? Selects its text so typing replaces it.
     focusCheck(id) {
       const el = find(id);
-      if (document.activeElement !== el && !el.contains(document.activeElement)) return false;
+      const active = activeDeep();
+      if (active !== el && !el.contains(active)) return false;
       el.select?.();
       return true;
     },
@@ -375,7 +441,7 @@ if (!window.__krify) {
     },
 
     async pressKey(key) {
-      const target = document.activeElement || document.body;
+      const target = activeDeep() || document.body;
       if (this.animate) {
         showKey(key);
         await sleep(400);
@@ -419,8 +485,8 @@ if (!window.__krify) {
   };
 
   function find(id) {
-    const el = document.querySelector(`[data-krify-id="${id}"]`);
-    if (!el) throw new Error(`Element [${id}] not found. The page may have changed – get the elements again.`);
+    const el = listed.get(String(id));
+    if (!el?.isConnected) throw new Error(`Element [${id}] not found. The page may have changed – get the elements again.`);
     return el;
   }
 
