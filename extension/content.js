@@ -2,8 +2,7 @@
 // Injected on demand; safe to inject more than once.
 
 if (!window.__krify) {
-  const MAX_ELEMENTS = 100; // visible-on-screen only; fewer = smaller AI requests
-  const MAX_TEXT = 2500; // keep AI requests small (free token limits)
+  const MAX_ELEMENTS = 200; // visible-on-screen only; fewer = smaller AI requests
   const MAX_SCREEN_TEXT = 3000;
 
   const SELECTOR = [
@@ -18,7 +17,7 @@ if (!window.__krify) {
   // which a page-wide querySelector can't).
   const listed = new Map();
 
-  const NAME_BOX ='#t-name-box, input.waffle-name-box, input[aria-label="Name Box" i]';
+  const NAME_BOX = '#t-name-box, input.waffle-name-box, input[aria-label="Name Box" i]';
 
   const clean = (s, max = 50) => {
     s = (s || "").replace(/\s+/g, " ").trim();
@@ -67,6 +66,30 @@ if (!window.__krify) {
       if (shadow) found.push(...deepAll(selector, shadow));
     }
     return found;
+  }
+
+  // Repeated rows/cards (tables, lists, grids), counted by code: the AI miscounts long lists by eye.
+  // A group = a parent with 5+ children that look alike (same tag + classes) and have text.
+  // Groups sitting inside an item of a bigger group (e.g. the cells of one row) are left out.
+  function listCounts() {
+    const sig = (el) => el.tagName + "." + [...el.classList].filter((c) => !/active|selected|hover|focus|odd|even/i.test(c)).sort().join(".");
+    const groups = [];
+    for (const parent of deepAll("*")) {
+      if (parent.children.length < 5 || parent.tagName === "SELECT") continue;
+      const tally = new Map();
+      for (const kid of parent.children) {
+        if (!kid.textContent.trim() || kid.getBoundingClientRect().height < 1) continue;
+        const key = sig(kid);
+        tally.set(key, [...(tally.get(key) || []), kid]);
+      }
+      const items = [...tally.values()].sort((a, b) => b.length - a.length)[0];
+      if (items && items.length >= 5) groups.push(items);
+    }
+    const kept = groups.filter((g) => !groups.some((h) => h !== g && h.length >= g.length && h.some((item) => item.contains(g[0]))));
+    return kept
+      .sort((a, b) => b.length - a.length)
+      .slice(0, 4)
+      .map((g) => `${g.length} rows like "${clean(g[0].innerText || g[0].textContent, 60)}"`);
   }
 
   // The parent, stepping out of a shadow root to the component that holds it.
@@ -238,11 +261,11 @@ if (!window.__krify) {
     },
 
     // "screen" (default): only the text visible right now, line by line – prices, answers, etc.
-    // "page": the whole page from the top (long, cut at MAX_TEXT).
+    // "page": the whole page from the top, all of it (can be long).
     // Both walk the text nodes ourselves (not body.innerText) so text inside shadow roots is read too.
     readText(scope = "screen", max = null) {
       const wholePage = scope === "page";
-      const limit = max || (wholePage ? MAX_TEXT : MAX_SCREEN_TEXT);
+      const limit = max || (wholePage ? Infinity : MAX_SCREEN_TEXT);
       const lines = [];
       let line = "";
       let lineTop = null;
@@ -271,6 +294,11 @@ if (!window.__krify) {
         }
       }
       if (line) lines.push(line);
+      if (wholePage && lines.length) {
+        const counts = listCounts();
+        if (counts.length) lines.push(`[Exact counts of repeated rows loaded on this page: ${counts.join("; ")}. ` +
+          "Use these, don't count by eye. Rows on other pages / behind 'Load more' are not included.]");
+      }
       return lines.join("\n") || (wholePage ? "(no text on this page)" : "(no text visible on screen – try scrolling)");
     },
 

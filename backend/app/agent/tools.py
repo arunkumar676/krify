@@ -16,7 +16,8 @@ URL = {"type": "string", "description": "Full URL"}
 TEXT = {"type": "string"}
 
 TOOLS = [
-    _tool("read_text", "Read text on screen (prices, facts). scope=page reads the whole page.",
+    _tool("read_text", "Read text on screen (prices, facts). scope=page reads the whole page "
+          "and gives exact row counts of its lists/tables (use for 'how many').",
           {"scope": {"type": "string", "enum": ["screen", "page"]}}),
     _tool("sheet_query", "Google Sheets: one SQL SELECT (DuckDB) on table sheet; quote column names, e.g. "
           "SELECT \"First Name\", \"Math Score\" FROM sheet WHERE \"Math Score\" = (SELECT MAX(\"Math Score\") FROM sheet)",
