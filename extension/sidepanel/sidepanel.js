@@ -48,7 +48,10 @@ function setConnected(on) {
 
 function connect() {
   ws = new WebSocket(SERVER_URL);
-  ws.onopen = () => setConnected(true);
+  ws.onopen = () => {
+    setConnected(true);
+    send({ type: "dev_mode", on: devModeToggle.checked }); // resync after (re)connect
+  };
   ws.onclose = () => {
     setConnected(false);
     setBusy(false);
@@ -74,6 +77,9 @@ function connect() {
       case "confirm":
         showConfirm(msg.id, msg.text);
         break;
+      case "plan_review":
+        showPlanReview(msg.id, msg.steps);
+        break;
       case "step":
         addEntry("step", msg.text);
         break;
@@ -87,8 +93,11 @@ function connect() {
         taskInput.focus();
         break;
       case "stopped":
-        // Any open Allow / Block question no longer matters.
+        // Any open Allow / Block question, or plan review, no longer matters.
         logEl.querySelectorAll(".entry.confirm .row").forEach((row) => row.remove());
+        logEl.querySelectorAll(".entry.plan-review .row, .entry.plan-review .plan-step-add").forEach((el) => el.remove());
+        logEl.querySelectorAll(".entry.plan-review input").forEach((input) => (input.disabled = true));
+        logEl.querySelectorAll(".entry.plan-review .plan-step-remove").forEach((btn) => btn.remove());
         addEntry("stopped", "⛔ Stopped.");
         setBusy(false);
         break;
@@ -130,6 +139,75 @@ function showConfirm(id, text) {
   };
   allow.onclick = () => answer(true);
   block.onclick = () => answer(false);
+}
+
+// Medium/large task: show the proposed plan (each step editable) and wait for
+// Approve / Update / Reject before Krify does anything on the page.
+function showPlanReview(id, steps) {
+  logEl.querySelector(".hint")?.remove();
+  const box = document.createElement("div");
+  box.className = "entry plan-review";
+
+  const title = document.createElement("div");
+  title.innerHTML = `<strong>📋 Krify's plan – review before it starts:</strong>`;
+
+  const list = document.createElement("div");
+  list.className = "plan-steps";
+
+  const addRow = (text) => {
+    const row = document.createElement("div");
+    row.className = "plan-step-row";
+    const input = document.createElement("input");
+    input.type = "text";
+    input.value = text;
+    const remove = document.createElement("button");
+    remove.className = "plan-step-remove";
+    remove.type = "button";
+    remove.textContent = "✕";
+    remove.title = "Remove this step";
+    remove.onclick = () => row.remove();
+    row.append(input, remove);
+    list.append(row);
+  };
+  (steps || []).forEach(addRow);
+
+  const addBtn = document.createElement("button");
+  addBtn.className = "plan-step-add";
+  addBtn.type = "button";
+  addBtn.textContent = "+ Add step";
+  addBtn.onclick = () => addRow("");
+
+  const buttons = document.createElement("div");
+  buttons.className = "row";
+  const approve = document.createElement("button");
+  approve.className = "allow";
+  approve.textContent = "✅ Approve";
+  const update = document.createElement("button");
+  update.className = "update";
+  update.textContent = "✏️ Update";
+  const reject = document.createElement("button");
+  reject.className = "block";
+  reject.textContent = "❌ Reject";
+  buttons.append(approve, update, reject);
+
+  box.append(title, list, addBtn, buttons);
+  logEl.append(box);
+  logEl.scrollTop = logEl.scrollHeight;
+
+  const currentSteps = () =>
+    [...list.querySelectorAll("input")].map((i) => i.value.trim()).filter(Boolean);
+
+  const answer = (action) => {
+    send({ type: "plan_review_result", id, action, steps: currentSteps() });
+    addBtn.remove();
+    buttons.remove();
+    list.querySelectorAll(".plan-step-remove").forEach((btn) => btn.remove());
+    list.querySelectorAll("input").forEach((input) => (input.disabled = true));
+    box.classList.add(action === "reject" ? "blocked" : "allowed");
+  };
+  approve.onclick = () => answer("approve");
+  update.onclick = () => answer("update");
+  reject.onclick = () => answer("reject");
 }
 
 function send(msg) {
@@ -312,6 +390,29 @@ chrome.storage.local.get("showCursor").then(({ showCursor = true }) => {
 });
 cursorToggle.addEventListener("change", () => {
   chrome.storage.local.set({ showCursor: cursorToggle.checked });
+});
+
+// ---------- "Dev mode" switch (debug trace under the final answer; synced to the server) ----------
+
+const devModeToggle = $("devModeToggle");
+chrome.storage.local.get("devMode").then(({ devMode = false }) => {
+  devModeToggle.checked = devMode;
+  send({ type: "dev_mode", on: devMode });
+});
+devModeToggle.addEventListener("change", () => {
+  chrome.storage.local.set({ devMode: devModeToggle.checked });
+  send({ type: "dev_mode", on: devModeToggle.checked });
+});
+
+// ---------- "Unrestricted" switch (skip content.js's token-saving caps; purely extension-side,
+// read fresh by operations.js on every page call – no server involvement needed) ----------
+
+const unrestrictedToggle = $("unrestrictedToggle");
+chrome.storage.local.get("unrestricted").then(({ unrestricted = false }) => {
+  unrestrictedToggle.checked = unrestricted;
+});
+unrestrictedToggle.addEventListener("change", () => {
+  chrome.storage.local.set({ unrestricted: unrestrictedToggle.checked });
 });
 
 // ---------- manual test buttons ----------

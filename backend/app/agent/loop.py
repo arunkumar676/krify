@@ -1,5 +1,6 @@
 """The agent loop: ask the AI → run the operation in the browser → show it the new page → repeat."""
 
+import ast
 import base64
 import json
 import logging
@@ -14,7 +15,7 @@ from app.llm.client import ask_ai, has_vision_model, skip_model
 
 log = logging.getLogger("krify")
 
-READ_OPS = {"get_page_info", "get_elements", "read_text", "sheet_query", "read_cells"}
+READ_OPS = {"get_page_info", "get_elements", "find_elements", "find_text", "read_text", "sheet_query", "read_cells", "inspect"}
 SHEET_OPS = {"sheet_query", "read_cells"}
 OLD_PAGE = "\n[older page view removed to save space]"
 OLD_SCREEN = "[older screen text removed to save space – use your notes]"
@@ -28,6 +29,7 @@ MAX_BATCH = 5
 BATCH_LIMIT = "Skipped: at most 5 steps at once. Look at the page and continue."
 PAGE_MOVED = ("Skipped: the page changed after an earlier step, so element numbers may be different. "
               "Look at the new page and decide again.")
+STEP_FAILED = "Skipped: an earlier step in this batch failed. Look at the page and decide again."
 OVERWRITE_BLOCKED = (
     "NOT typed: those cells already have data ({}). The user blocked overwriting them. To add a new "
     "row, go_to_cell the first EMPTY row: {}."
@@ -35,6 +37,8 @@ OVERWRITE_BLOCKED = (
 BLOCKED = ("BLOCKED by the user – this action was NOT done. "
            "Don't try it again. Tell the user what's left, or call ask_user.")
 DONE_TOO_EARLY ="Not sent: check the page after your steps first, then call done."
+PLAN_NOT_APPROVED = ("Skipped: waiting for the user to approve your plan. If they asked for changes, "
+                     "revise it and call plan again.")
 _VALUES = re.compile(r' \((?:value: ".*?"|empty|checked|unchecked)\)| = ".*?"')
 
 
@@ -55,10 +59,13 @@ def image_size(data_url):
     return None
 
 
+ELEMENT_FIELDS = ("element", "from_element", "to_element")
+
+
 def uses_element(args):
     """Does this step point at an element number? Only those can hit the wrong thing when the page
     changes; steps by cell (go_to_cell, type_here, click cell=) or keys can't."""
-    return args.get("element") is not None or args.get("from_element") is not None or args.get("to_element") is not None
+    return any(args.get(f) is not None for f in ELEMENT_FIELDS)
 
 
 def _args_of(call):
@@ -73,11 +80,52 @@ def layout(page):
     return _VALUES.sub("", page or "")
 
 
+def preview(text, limit=160):
+    """Short one-line preview of a read result, for the dev-mode debug trace."""
+    text = re.sub(r"\s+", " ", text or "").strip()
+    return text if len(text) <= limit else text[:limit] + "…"
+
+
+_ELEMENT_ID = re.compile(r"^\[(\d+)\] ", re.MULTILINE)
+_STATUS_LINE = re.compile(r"^\[Status\] (.*)$", re.MULTILINE)
+
+
+def merge_elements(elements, found):
+    """Fold find_elements matches into the stored element blob (by id), so safety.check's
+    element_line() can see elements discovered outside the shown window this turn."""
+    have = set(_ELEMENT_ID.findall(elements or ""))
+    new_lines = [ln for ln in (found or "").splitlines()
+                 if (m := re.match(r"^\[(\d+)\] ", ln)) and m.group(1) not in have]
+    return f"{elements}\n" + "\n".join(new_lines) if new_lines else elements
+
+
+_ELEMENT_LINE = re.compile(r'^\[(\d+)\] (\S+) "([^"]+)"', re.MULTILINE)
+MAX_AMBIGUITY_GROUPS = 3  # don't let this line itself get huge on a very repetitive page
+
+
+def ambiguity_hint(elements):
+    """Flag elements that share a role+label (e.g. three identical 'Add to cart' buttons): the
+    model is meant to call inspect ref=<id> first to tell them apart, but a low-effort model often
+    skips that unless nudged."""
+    groups = {}
+    for eid, role, label in _ELEMENT_LINE.findall(elements or ""):
+        groups.setdefault((role, label), []).append(eid)
+    dupes = [(label, ids) for (role, label), ids in groups.items() if len(ids) > 1]
+    if not dupes:
+        return ""
+    lines = [
+        f"⚠️ Same label on {','.join(f'[{i}]' for i in ids)} (\"{label}\") – call inspect ref=<one of "
+        "them> to see which is which before clicking."
+        for label, ids in dupes[:MAX_AMBIGUITY_GROUPS]
+    ]
+    return "\n".join(lines)
+
+
 def is_sheet(url):
     return "docs.google.com/spreadsheets/" in (url or "")
 
 # Stuck detector: these always count as progress; clicks/keys count only if the page changed.
-PROGRESS_OPS = {"read_text", "sheet_query", "read_cells", "go_to_cell", "type_here", "note", "type", "select_option", "open_url", "new_tab"}
+PROGRESS_OPS = {"read_text", "find_text", "sheet_query", "read_cells", "go_to_cell", "type_here", "note", "type", "select_option", "open_url", "new_tab"}
 OLD_SCREENSHOT = "[older screenshot removed to save space]"
 IDLE_LIMIT = 5
 MAX_SCROLLS_PER_PAGE = 4
@@ -96,8 +144,13 @@ REPEAT_NOTE = (
 )
 STUCK_NOTE = (
     "\nWarning: the last 5 steps made no progress (only scrolling, switching or clicking without "
-    "the page changing). Stop wandering: read_text to see what's on screen, try a different "
+    "the page changing). Stop wandering: find_text(\"...\") to jump straight to specific "
+    "information anywhere on the page, read_text to see what's on screen, try a different "
     "element, or call ask_user."
+)
+UNNOTED_READ = (
+    "\n(The text you read before this was dropped – you didn't note anything from it. If you "
+    "still need it, note facts right after reading them next time.)"
 )
 
 
@@ -127,17 +180,136 @@ def clean_text_reply(text):
 _NUMBER = re.compile(r"\d[\d,]*(?:\.\d+)?")
 
 
+def joined_pages(seen):
+    """Everything read this task, as one string, thousands separators stripped (so ₹69,900
+    matches 69900)."""
+    return re.sub(r"(?<=\d),(?=\d)", "", "\n".join(seen))
+
+
+def is_seen(number, pages):
+    """Is `number` (plain digits, no thousands separators) really in `pages` – not just a
+    fragment of a bigger number (so "900" doesn't match inside "69900")."""
+    return bool(re.search(rf"(?<![\d.]){re.escape(str(number))}(?![\d])", pages))
+
+
 def unverified_numbers(text, seen):
     """Numbers with 3+ digits in `text` (prices, years…) that appear nowhere in `seen`.
     Thousands separators are ignored, so ₹69,900 matches 69900."""
-    pages = re.sub(r"(?<=\d),(?=\d)", "", "\n".join(seen))
+    pages = joined_pages(seen)
     missing = []
     for raw in _NUMBER.findall(text or ""):
         number = raw.replace(",", "").rstrip(".")
         if sum(c.isdigit() for c in number) < 3 or raw in missing:
             continue
-        if not re.search(rf"(?<![\d.]){re.escape(number)}(?![\d])", pages):
+        if not is_seen(number, pages):
             missing.append(raw.rstrip(".,"))
+    return missing
+
+
+# A derived number (a count/total/difference computed from numbers actually read) is let through
+# the fact check if the summary SHOWS the arithmetic and every number it used was really seen –
+# instead of requiring the result itself to appear verbatim, which a calculation never will.
+_TOKEN = re.compile(r"\d[\d,]*(?:\.\d+)?|[+\-*/()=×]")
+_SAFE_OPS = {ast.Add: lambda a, b: a + b, ast.Sub: lambda a, b: a - b,
+             ast.Mult: lambda a, b: a * b, ast.Div: lambda a, b: a / b if b else None}
+
+
+def _tokens(chunk):
+    """`chunk` reduced to just its numbers and + - * / ( ) = × (dropping words between them, e.g.
+    "12 pages × 20 rows + 17 on the last page = 257" reads as "12 × 20 + 17 = 257") – joined with
+    spaces, not glued together, so two numbers with only a dropped word between them (no real
+    operator) fail to parse as arithmetic instead of silently becoming one wrong number."""
+    return " ".join(_TOKEN.findall(chunk))
+
+
+def _candidate_expressions(text):
+    """Where the summary most likely shows its working: inside parentheses (the shape the prompt
+    asks for, and naturally self-contained even next to an earlier bare mention of the same
+    number, e.g. "There are 257 users (12 × 20 + 17 = 257)."), or – with no parentheses – a whole
+    sentence, so "12 × 20 + 17 = 257 users total." still works on its own."""
+    text = text or ""
+    for group in re.findall(r"\(([^()]*)\)", text):
+        tokens = _tokens(group)
+        if tokens:
+            yield tokens
+    for sentence in re.split(r"(?<=[.!?])\s+|\n+", re.sub(r"\([^()]*\)", " ", text)):
+        tokens = _tokens(sentence)
+        if tokens:
+            yield tokens
+
+
+def _safe_eval(expr):
+    """Evaluate a plain arithmetic expression (digits, + - * / and parens only; no eval()/exec())
+    and return (value, operands), or None if it isn't valid simple arithmetic."""
+    expr = expr.replace(",", "").replace("×", "*").strip()
+    if not expr or not re.fullmatch(r"[\d.\s+\-*/()]+", expr):
+        return None
+    try:
+        tree = ast.parse(expr, mode="eval")
+    except SyntaxError:
+        return None
+    operands = []
+
+    def ev(node):
+        if isinstance(node, ast.Expression):
+            return ev(node.body)
+        if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+            operands.append(node.value)
+            return node.value
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
+            value = ev(node.operand)
+            return None if value is None else -value
+        if isinstance(node, ast.BinOp) and type(node.op) in _SAFE_OPS:
+            left, right = ev(node.left), ev(node.right)
+            return None if left is None or right is None else _SAFE_OPS[type(node.op)](left, right)
+        return None  # anything else (a name, a call, …) – not plain arithmetic, reject
+
+    value = ev(tree)
+    return (value, operands) if value is not None else None
+
+
+def explained_by_calculation(raw_number, text, seen):
+    """True if `raw_number` is the result of arithmetic shown in `text`, using only numbers that
+    were actually seen this task."""
+    target = float(raw_number.replace(",", ""))
+    pages = joined_pages(seen)
+    for expr in _candidate_expressions(text):
+        result = _safe_eval(expr.split("=")[0])
+        if not result:
+            continue
+        value, operands = result
+        if abs(value - target) > 0.01:
+            continue
+        if all(is_seen(int(o) if float(o).is_integer() else o, pages) for o in operands):
+            return True
+    return False
+
+
+def unexplained_numbers(text, seen):
+    """unverified_numbers(), minus any that the summary itself derives (and shows the working for)
+    from numbers that were really seen – e.g. a page-count × page-size total."""
+    return [n for n in unverified_numbers(text, seen) if not explained_by_calculation(n, text, seen)]
+
+
+# Proper-noun-ish phrases: quoted text, or 2+ consecutive Capitalized Words (product/brand names).
+_PHRASE = re.compile(r'"([^"]{3,60})"|\b[A-Z][\w&-]*(?:\s+[A-Z][\w&-]*)+\b')
+PHRASE_STOPWORDS = {
+    "the", "and", "for", "with", "your", "you", "this", "that", "add", "cart", "page", "shop",
+    "task", "plan", "notes", "current", "elements", "click", "done", "yes", "no",
+}
+
+
+def unverified_phrases(text, seen):
+    """Proper-noun-ish phrases in `text` whose significant words don't all appear anywhere in
+    `seen`. A token-level match (not exact substring, unlike unverified_numbers) so rewording
+    doesn't false-positive, but an outright invented product/brand name still gets caught."""
+    pages = "\n".join(seen).lower()
+    missing = []
+    for match in _PHRASE.finditer(text or ""):
+        phrase = (match.group(1) or match.group(0)).strip()
+        words = [w for w in re.findall(r"[A-Za-z]+", phrase.lower()) if len(w) > 2 and w not in PHRASE_STOPWORDS]
+        if words and not all(w in pages for w in words) and phrase not in missing:
+            missing.append(phrase)
     return missing
 
 
@@ -180,7 +352,10 @@ def describe(name, args):
         case "reload": return "🔄 Reload"
         case "wait": return f"⏳ Wait {args.get('seconds')}s"
         case "get_page_info" | "get_elements": return "👀 Look at the page"
+        case "find_elements": return f"🔎 Looking for \"{args.get('query')}\""
+        case "find_text": return f"🔎 Searching the page for \"{args.get('query')}\""
         case "read_text": return "📖 Read the whole page" if args.get("scope") == "page" else "📖 Read the screen"
+        case "inspect": return f"🔍 Looking closer at [{args['ref']}]" if args.get("ref") else "🔍 Looking at the page structure"
         case "sheet_query": return f"📊 Ask the sheet: {args.get('sql')}"
         case _: return f"{name} {args}"
 
@@ -188,11 +363,14 @@ def describe(name, args):
 class Agent:
     """One agent per side-panel connection. Keeps the chat so follow-ups work."""
 
-    def __init__(self, browser, ui, confirm):
+    def __init__(self, browser, ui, confirm, plan_review):
         self.browser = browser  # async (name, args) -> str, raises on failure
         self.confirm = confirm  # async (text) -> bool: ask the user Allow / Block
+        self.plan_review = plan_review  # async (steps) -> (action, steps): Approve / Update / Reject a plan
         self.elements = ""  # latest numbered element list, used by the safety check
         self.last_typed_line = ""
+        self.dev_mode = False  # debug trace (tools used + what they found) appended to the answer
+        self.trace = []  # this task's trace, built only while dev_mode is on
 
         async def ui_and_log(kind, text):
             log.info("[%s] %s", kind, text)
@@ -208,14 +386,18 @@ class Agent:
         self.page_views = []  # (message, text_before_page_view) – trimmed later to save tokens
         self.last_page = None
         self.screen_reads = []  # read_text results – only the newest is kept in full
+        self.notes_at_last_read = 0  # len(self.notes) as of the last screen read – for the unnoted-read nudge
         self.screenshot_msgs = []  # messages holding a screenshot – dropped when the page changes
         self.tokens = 0
         # Per task: shown to the AI at every step so it keeps the goal in view.
         self.task_text = ""
         self.plan = []
+        self.plan_approved = False  # has the user signed off on the current self.plan?
         self.notes = []
         self.seen = []  # everything read from pages this task – used by the fact check
         self.fact_check_failed = False
+        self.last_status = ""  # the page's own [Status] line as of the last page view
+        self.ui_check_failed = False
 
     def header(self):
         """'[Your task] … [Your plan] … [Your notes] …' – sent with every page view."""
@@ -227,18 +409,39 @@ class Agent:
         return "\n".join(lines)
 
     def check_facts(self, summary):
-        """Fact check before 'done': every number (3+ digits) in the answer must have appeared on a
-        page Krify read this task. Returns a rejection message, or None if the answer may go out."""
-        missing = unverified_numbers(summary, self.seen)
-        if not missing:
+        """Fact check before 'done': every number (3+ digits) and proper-noun-ish name in the
+        answer must have appeared on a page Krify read this task, or (for a number) be arithmetic
+        shown in the summary over numbers that were. Returns a rejection message, or None if the
+        answer may go out."""
+        numbers = unexplained_numbers(summary, self.seen)
+        phrases = unverified_phrases(summary, self.seen)
+        if not numbers and not phrases:
             return None
         if self.fact_check_failed:  # second time: let it through, but tell the user honestly
             return None
         self.fact_check_failed = True
+        parts = []
+        if numbers:
+            parts.append(f"numbers ({', '.join(numbers)})")
+        if phrases:
+            parts.append(f"names ({', '.join(phrases)})")
         return (
-            "REJECTED – not sent to the user. These numbers in your answer were not seen on any page you read: "
-            f"{', '.join(missing)}. Use read_text to find the real values, report only numbers you actually "
-            "saw (no estimates or your own calculations), then call done again."
+            f"REJECTED – not sent to the user. These {' and '.join(parts)} in your answer were not seen on any "
+            "page you read (and aren't arithmetic shown over numbers that were). Use read_text to find the real "
+            "values, report only what you actually saw or correctly computed from it (no guesses or made-up "
+            "names), then call done again."
+        )
+
+    def check_ui_state(self):
+        """UI check before 'done': reject once if the page is showing a status/error message
+        (see content.js's [Status] line), so the model can't declare success while the page is
+        still complaining. Returns a rejection message, or None if the answer may go out."""
+        if not self.last_status or self.ui_check_failed:
+            return None
+        self.ui_check_failed = True
+        return (
+            f"REJECTED – not sent to the user. The page is showing: \"{self.last_status}\". Make sure this "
+            "isn't an error before calling done – read it, fix the problem, or call ask_user."
         )
 
     def reset(self):
@@ -247,15 +450,19 @@ class Agent:
         self.last_page = None
         self.screen_reads = []
         self.screenshot_msgs = []
+        self.notes_at_last_read = len(self.notes)
 
     def add_screen_read(self, message, text):
         """Keep only the newest screen text in full. Facts worth keeping go into notes,
         which stay in the chat (as the note calls themselves)."""
+        if self.screen_reads and len(self.notes) == self.notes_at_last_read:
+            text = f"{text}{UNNOTED_READ}"  # the previous read is about to be dropped, unnoted
         for old in self.screen_reads:
             old["content"] = OLD_SCREEN
         message["content"] = text
         self.messages.append(message)
         self.screen_reads = [message]
+        self.notes_at_last_read = len(self.notes)
 
     def check_repeat(self, name, args, page_changed):
         """Repeat detector: the same action 3 times within the last 6 steps, with the page never
@@ -302,7 +509,11 @@ class Agent:
             self.elements = elements
             self.seen.append(elements)
             self.current_url = info.get("url", "")
+            self.last_status = match.group(1) if (match := _STATUS_LINE.search(elements)) else ""
             tabs = f"[Tabs] {info['tabs']}\n" if info.get("tabs") else ""
+            if hint := ambiguity_hint(elements):
+                self.boost_next = True
+                elements = f"{elements}\n{hint}"
             if is_sheet(self.current_url):
                 elements = f"{SHEET_HINT}\n{elements}"
             return f"{tabs}[Current page] {info.get('title')} – {info.get('url')}\n{elements}"
@@ -358,9 +569,15 @@ class Agent:
     async def finish(self, kind, text):
         """Send the final message, with how many tokens the task used, and save the result."""
         log.info("Task used %d tokens", self.tokens)
-        if kind == "done" and (missing := unverified_numbers(text, self.seen)):
-            text = f"{text}\n⚠️ Krify couldn't confirm these numbers on the pages it read: {', '.join(missing)}"
+        if kind == "done":
+            if missing := unexplained_numbers(text, self.seen):
+                text = f"{text}\n⚠️ Krify couldn't confirm these numbers on the pages it read: {', '.join(missing)}"
+            if missing := unverified_phrases(text, self.seen):
+                text = f"{text}\n⚠️ Krify couldn't confirm these names on the pages it read: {', '.join(missing)}"
         self.end_task(kind, text)
+        if self.dev_mode and self.trace:
+            steps = "\n".join(f"{i}. {t}" for i, t in enumerate(self.trace, 1))
+            text = f"{text}\n\n🔍 Debug trace:\n{steps}"
         if kind == "done":
             text = f"{text}\n· used {self.tokens / 1000:.1f}k tokens"
         await self.ui(kind, text)
@@ -373,11 +590,16 @@ class Agent:
     async def run(self, task, model):
         self.idle_steps = 0
         self.tokens = 0
+        self.trace = []
         self.model = model
         self.task_id = history.start_task(task, model)
         self.task_text, self.plan, self.notes = task, [], []
+        self.plan_approved = False
         self.seen = [task]  # numbers the user gave count as known
         self.fact_check_failed = False
+        self.last_status = ""
+        self.ui_check_failed = False
+        self.notes_at_last_read = 0
         self.current_url = ""
         self.scrolls = {}  # url -> times scrolled on that page
         self.edit_allowed = False  # the user allowed editing a Google Sheet/Doc in this task
@@ -385,6 +607,7 @@ class Agent:
         self.shot_size = None  # (width, height) of the last screenshot
         self.shot_page = None  # the page when the last screenshot was taken
         self.last_cell = ""
+        self.boost_next = True  # the first reply (interpreting the raw task) gets more thought
         nudged = False
         empty_replies = 0
         self.add_with_page({"role": "user"}, task, await self.page_view())
@@ -395,8 +618,9 @@ class Agent:
                 self.messages.append({"role": "user", "content": WRAP_UP})
             reply, used_model, tokens = await ask_ai(
                 self.messages, TOOLS, model, on_note=lambda t: self.ui("step", t),
-                need_vision=bool(self.screenshot_msgs),
+                need_vision=bool(self.screenshot_msgs), boost=self.boost_next,
             )
+            self.boost_next = False
             self.tokens += tokens
             if used_model != model:
                 model = used_model  # keep using the model that still has free quota
@@ -422,6 +646,10 @@ class Agent:
                     # Might be nonsense (weak models do this). Ask once for a proper operation.
                     self.messages.append({"role": "user", "content": NUDGE})
                     nudged = True
+                    continue
+                if kind == "done" and (rejection := self.check_ui_state()):
+                    await self.ui("step", "🔍 Checking the page isn't showing an error before finishing")
+                    self.messages.append({"role": "user", "content": rejection})
                     continue
                 if kind == "done" and (rejection := self.check_facts(text)):
                     await self.ui("step", "🔍 Fact check: answer has numbers not seen on any page – checking again")
@@ -459,12 +687,19 @@ class Agent:
 
                 if finished:
                     self.messages.append({**tool_msg, "content": "Skipped."})
+                elif name in ACTION_OPS | {"batch", "done"} and self.plan and not self.plan_approved:
+                    self.messages.append({**tool_msg, "content": PLAN_NOT_APPROVED})
+                    self.check_progress(name, False)
                 elif name in ACTION_OPS and batch_stopped:
                     self.messages.append({**tool_msg, "content": batch_stopped})
                 elif name == "done" and actions_done:
                     self.messages.append({**tool_msg, "content": DONE_TOO_EARLY})
                 elif name == "done":
                     summary = args.get("summary", "Done.")
+                    if rejection := self.check_ui_state():
+                        await self.ui("step", "🔍 Checking the page isn't showing an error before finishing")
+                        self.messages.append({**tool_msg, "content": rejection})
+                        continue
                     if rejection := self.check_facts(summary):
                         await self.ui("step", "🔍 Fact check: answer has numbers not seen on any page – checking again")
                         self.messages.append({**tool_msg, "content": rejection})
@@ -473,12 +708,32 @@ class Agent:
                     await self.finish("done", summary)
                     finished = True
                 elif name == "plan":
-                    self.plan = [str(s) for s in (args.get("steps") or [])][:8]
-                    await self.ui("step", "📋 Plan:\n" + "\n".join(f"{i}. {s}" for i, s in enumerate(self.plan, 1)))
-                    self.messages.append(
-                        {**tool_msg, "content": "Plan saved – you'll see it at every step. Call plan again to "
-                                                "update it; start finished steps with ✔."}
-                    )
+                    steps = [str(s) for s in (args.get("steps") or [])][:8]
+                    if not self.plan_approved:
+                        decision, edited = await self.plan_review(steps)
+                        self.plan = edited
+                        shown = "\n".join(f"{i}. {s}" for i, s in enumerate(self.plan, 1))
+                        if decision == "approve":
+                            self.plan_approved = True
+                            await self.ui("step", f"✅ Plan approved:\n{shown}")
+                            self.messages.append({**tool_msg, "content": f"Plan approved by the user:\n{shown}\nProceed with it."})
+                        elif decision == "reject":
+                            self.messages.append({**tool_msg, "content": "Plan rejected by the user."})
+                            await self.finish("stopped", "You rejected the plan.")
+                            finished = True
+                        else:  # "update"
+                            await self.ui("step", f"✏️ You edited the plan – checking it with Krify:\n{shown}")
+                            self.messages.append(
+                                {**tool_msg, "content": f"The user edited your plan to:\n{shown}\nReview it, adjust "
+                                                        "if needed, and call plan again to re-propose it."}
+                            )
+                    else:
+                        self.plan = steps
+                        await self.ui("step", "📋 Plan:\n" + "\n".join(f"{i}. {s}" for i, s in enumerate(self.plan, 1)))
+                        self.messages.append(
+                            {**tool_msg, "content": "Plan saved – you'll see it at every step. Call plan again to "
+                                                    "update it; start finished steps with ✔."}
+                        )
                     self.check_progress(name, False)
                 elif name == "ask_user":
                     self.messages.append({**tool_msg, "content": "Question shown. The user's answer comes next."})
@@ -506,13 +761,20 @@ class Agent:
                         result = await self.safe_run(name, args)
                     self.check_progress(name, False)
                     self.seen.append(str(result))
+                    if self.dev_mode:
+                        self.trace.append(f"{label} → {preview(str(result))}")
                     if name == "get_elements":
                         self.elements = str(result)
                         self.add_with_page(tool_msg, "Elements:", result)
-                    elif name == "read_text":
+                    elif name == "find_elements":
+                        self.elements = merge_elements(self.elements, str(result))
+                        self.messages.append({**tool_msg, "content": str(result)})
+                    elif name in ("read_text", "find_text"):
                         self.add_screen_read(tool_msg, f"{result}\n(Save facts you'll need later with note.)")
                     else:
                         self.messages.append({**tool_msg, "content": str(result)})
+                    if name in ("find_elements", "inspect"):
+                        self.boost_next = True  # it already flagged this page as unclear – help it decide
                 elif name == "batch":
                     actions_done += await self.run_batch(tool_msg, args.get("steps"))
                 else:
@@ -524,18 +786,19 @@ class Agent:
                             batch_stopped = "Skipped: an earlier step was blocked by the user."
                         continue
                     actions_done += 1
+                    failed = result.startswith("Error")
                     page = await self.page_view()
                     changed = page != prev_page
                     result = f"{result}{self.check_progress(name, changed)}{self.check_repeat(name, args, changed)}"
                     more = any(c.function.name in ACTION_OPS for c in calls[i + 1:])
                     later = [_args_of(c) for c in calls[i + 1:] if c.function.name in ACTION_OPS]
-                    moved = layout(page) != layout(prev_page) and any(uses_element(a) for a in later)
+                    moved = failed or (layout(page) != layout(prev_page) and any(uses_element(a) for a in later))
                     prev_page = page
                     if more and not moved and actions_done < MAX_BATCH:
                         self.messages.append({**tool_msg, "content": f"{result} (next step follows)"})
                         continue
                     if more:
-                        batch_stopped = BATCH_LIMIT if actions_done >= MAX_BATCH else PAGE_MOVED
+                        batch_stopped = BATCH_LIMIT if actions_done >= MAX_BATCH else (STEP_FAILED if failed else PAGE_MOVED)
                     # Show the AI the page after the last action, so it can check the result.
                     self.add_with_page(tool_msg, result, page)
 
@@ -563,7 +826,10 @@ class Agent:
     async def do_action(self, name, args):
         """One browser action, with the safety check and the scroll limit.
         Returns (result text, status): status "ok", "blocked" (by the user) or "refused" (scroll limit)."""
-        await self.ui("step", describe(name, args))
+        label = describe(name, args)
+        await self.ui("step", label)
+        if self.dev_mode:
+            self.trace.append(label)
 
         # Typing into a sheet over cells that already hold data: always ask, showing what would be lost.
         if name == "type_here" and is_sheet(self.current_url):
@@ -591,6 +857,18 @@ class Agent:
             if str(under).startswith("Error"):
                 return str(under), "refused"
             args = {**args, "_under": str(under)}
+        for field in ELEMENT_FIELDS:  # the page may have changed since the model looked – check first
+            element_id = args.get(field)
+            if element_id is None:
+                continue
+            expected = safety.element_line(self.elements, element_id)
+            if not expected:
+                continue  # nothing recorded to compare against – not our problem to flag
+            live = str(await self.safe_run("describe_element", {"element": element_id}))
+            if live != expected:
+                now = f', now "{live}"' if live else ", now gone"
+                return (f'NOT done: [{element_id}] has changed since you looked (expected "{expected}"{now}) '
+                        "– get the elements again."), "refused"
         reason = safety.check(name, args, self.elements, self.last_typed_line, self.current_url)
         if reason == "Editing" and self.edit_allowed:
             reason = None  # editing this document was already allowed in this task

@@ -27,6 +27,8 @@ export function resetTabs() {
   krifyTabs.length = 0;
   openedByKrify.clear();
   agentTabId = null;
+  frameMap = [];
+  lastFrameId = null;
 }
 
 chrome.tabs.onRemoved.addListener((tabId) => {
@@ -113,6 +115,14 @@ async function showCursor() {
   return showCursor;
 }
 
+// "Unrestricted" mode: skip content.js's token-saving caps (element/text limits) and send the
+// full page data instead – for a high-context model where you'd rather pay more tokens than miss
+// something the caps would otherwise cut.
+async function showUnrestricted() {
+  const { unrestricted = false } = await chrome.storage.local.get("unrestricted");
+  return unrestricted;
+}
+
 // True while the agent runs a task (set by the side panel). Drives the glowing page border.
 let working = false;
 
@@ -135,29 +145,111 @@ async function setWorkingIn(tabId, on) {
   }
 }
 
-// Inject content.js (if needed), then call one of its functions inside the page.
-async function callInPage(fnName, args = [], tabId = null) {
+// Inject content.js (if needed), then call one of its functions inside the page. frameId: target
+// one specific frame (an iframe found by acrossFrames/resolveElement) instead of the main frame.
+async function callInPage(fnName, args = [], tabId = null, frameId = null) {
   const tab = tabId !== null ? await chrome.tabs.get(tabId) : await webTab();
-  await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["content.js"] });
+  const target = frameId != null ? { tabId: tab.id, frameIds: [frameId] } : { tabId: tab.id };
+  await chrome.scripting.executeScript({ target, files: ["content.js"] });
   const animate = await showCursor();
+  const unrestricted = await showUnrestricted();
   const [result] = await chrome.scripting.executeScript({
-    target: { tabId: tab.id },
-    func: async (name, a, animate, glow) => {
+    target,
+    func: async (name, a, animate, glow, unrestricted) => {
       try {
         window.__krify.animate = animate;
+        window.__krify.unrestricted = unrestricted;
         if (name !== "setWorking") window.__krify.setWorking(glow); // re-show after page loads
         return { ok: true, value: await window.__krify[name](...a) };
       } catch (err) {
         return { ok: false, error: err.message };
       }
     },
-    args: [fnName, args, animate, working && animate],
+    args: [fnName, args, animate, working && animate, unrestricted],
   });
   const res = result?.result;
   if (!res) throw new Error("No answer from the page. Try again.");
   if (!res.ok) throw new Error(res.error);
   return res.value;
 }
+
+// ---------- iframes ----------
+// content.js itself never needs to know about frames: injected with allFrames, each frame gets
+// its own independent window.__krify, numbering its own elements 1..N exactly as it always has.
+// Everything frame-aware lives here: run it in every frame, then fold each frame's own numbering
+// onto one running [N] the model sees, and remember where each id really lives so actions on it
+// can be routed back to the right frame.
+
+let frameMap = []; // [{globalId, frameId, localId}], rebuilt on every full element listing
+let lastFrameId = null; // frame of the last action the model aimed at a specific element
+
+// Same inject-then-call as callInPage, but across every frame in the tab. A frame that fails to
+// inject (cross-origin without access, sandboxed, about:blank) is just missing from the result,
+// not an error – same spirit as "Protected or closed page: nothing to show" elsewhere.
+async function callInAllFrames(fnName, args = [], tabId = null) {
+  const tab = tabId !== null ? await chrome.tabs.get(tabId) : await webTab();
+  const target = { tabId: tab.id, allFrames: true };
+  await chrome.scripting.executeScript({ target, files: ["content.js"] });
+  const animate = await showCursor();
+  const unrestricted = await showUnrestricted();
+  const results = await chrome.scripting.executeScript({
+    target,
+    func: async (name, a, animate, glow, unrestricted) => {
+      try {
+        window.__krify.animate = animate;
+        window.__krify.unrestricted = unrestricted;
+        if (name !== "setWorking") window.__krify.setWorking(glow);
+        return { ok: true, value: await window.__krify[name](...a), url: location.href };
+      } catch (err) {
+        return { ok: false, error: err.message, url: location.href };
+      }
+    },
+    args: [fnName, args, animate, working && animate, unrestricted],
+  });
+  return results.map((r) => ({ frameId: r.frameId, ...r.result }));
+}
+
+// Rewrites each line's leading "[id]" (plain, or indented like inspect()'s tree) into a new,
+// globally-unique id continuing the running counter, and records where it really lives.
+function relabel(text, frameId, map) {
+  return String(text ?? "").replace(/^(\s*)\[(\d+)\] /gm, (_, indent, localId) => {
+    const globalId = map.length + 1;
+    map.push({ globalId, frameId, localId: Number(localId) });
+    return `${indent}[${globalId}] `;
+  });
+}
+
+// get_elements/find_elements/read_text/find_text/inspect(no ref): run across every frame, relabel
+// onto one numbering, and show any iframe's content as its own labelled block.
+async function acrossFrames(fnName, args) {
+  const frames = await callInAllFrames(fnName, args);
+  frameMap = [];
+  const main = frames.find((f) => f.frameId === 0);
+  const parts = [relabel(main?.ok ? main.value : "(can't read the main page)", 0, frameMap)];
+  for (const f of frames) {
+    if (f.frameId === 0 || !f.ok) continue;
+    const body = relabel(f.value, f.frameId, frameMap);
+    if (body.trim()) parts.push(`--- iframe: ${f.url} ---\n${body}`);
+  }
+  return parts.join("\n\n");
+}
+
+// A global element id -> where it really lives. Ordinary main-frame ids (almost all of them)
+// resolve to themselves untouched, exactly as before this feature existed.
+function resolveElement(id) {
+  const hit = frameMap.find((m) => m.globalId === Number(id));
+  if (!hit || hit.frameId === 0) return { frameId: null, localId: id };
+  return { frameId: hit.frameId, localId: hit.localId };
+}
+
+// A frame-routed action's result echoes content.js's own (local) id back – show the model its id instead.
+function renumber(text, localId, globalId) {
+  return localId === globalId ? text : text.replace(`[${localId}]`, `[${globalId}]`);
+}
+
+const IFRAME_UNSUPPORTED = (element, what) =>
+  new Error(`[${element}] is inside an iframe – ${what} isn't supported there yet. Try a single left-click, ` +
+    "typing, or screenshot + click_at.");
 
 // Make a screenshot smaller (fewer tokens): at most maxWidth pixels wide, compressed JPEG.
 // Returns { dataUrl, width }.
@@ -225,8 +317,8 @@ async function waitForSave() {
 }
 
 // Run an in-page action, then give the page time to react or load.
-async function act(fnName, args) {
-  const value = await callInPage(fnName, args);
+async function act(fnName, args, frameId = null) {
+  const value = await callInPage(fnName, args, null, frameId);
   await waitForLoad((await currentTab()).id);
   return value;
 }
@@ -238,7 +330,9 @@ export const operations = {
     if (krifyTabs.length > 1) info.tabs = await tabList();
     return info;
   },
-  get_elements: () => callInPage("getElements"),
+  get_elements: () => acrossFrames("getElements", []),
+  find_elements: ({ query } = {}) => acrossFrames("findElements", [query]),
+  find_text: ({ query } = {}) => acrossFrames("findText", [query]),
   async screenshot() {
     // Element numbers drawn on → picture of the visible area → labels removed → shrink.
     const tab = await currentTab();
@@ -256,7 +350,12 @@ export const operations = {
     lastShot = { tabId: tab.id, url: tab.url, scrollX: vp.scrollX, scrollY: vp.scrollY, scale: vp.width / width };
     return dataUrl;
   },
-  read_text: ({ scope = "screen" } = {}) => callInPage("readText", [scope]),
+  read_text: ({ scope = "screen" } = {}) => acrossFrames("readText", [scope]),
+  inspect({ ref, filter = "interactive", depth } = {}) {
+    if (ref == null) return acrossFrames("getAccessibilityTree", [{ filter, depth }]);
+    const { frameId, localId } = resolveElement(ref);
+    return callInPage("getAccessibilityTree", [{ ref: localId, filter, depth }], null, frameId);
+  },
   // Google Sheets: the open sheet tab as CSV (the server answers questions about it).
   async sheet_csv() {
     const tab = await currentTab();
@@ -326,7 +425,13 @@ export const operations = {
       await sleep(400);
       return `${clickWord(btn, n)} cell ${String(cell).toUpperCase()}${btn === "right" ? SHEETS_MENU_NOTE : ""}`;
     }
-    if (btn === "left" && n === 1) return act("click", [element]); // a normal click: no debugger needed
+    const { frameId, localId } = resolveElement(element);
+    if (btn === "left" && n === 1) {
+      lastFrameId = frameId;
+      const result = await act("click", [localId], frameId); // a normal click: no debugger needed
+      return renumber(result, localId, element);
+    }
+    if (frameId != null) throw IFRAME_UNSUPPORTED(element, "right-click/double-click/triple-click");
     const tab = await currentTab();
     if (isSheetUrl(tab.url)) {
       // On Sheets the numbered elements are toolbar parts or Sheets' hidden cell editor, not cells:
@@ -346,6 +451,11 @@ export const operations = {
     const spot = await shotToPage(tab, x, y);
     return callInPage("elementAt", [spot.x, spot.y]);
   },
+  // What [id] currently points at (for the staleness check before acting on an element number).
+  describe_element: ({ element } = {}) => {
+    const { frameId, localId } = resolveElement(element);
+    return callInPage("describeId", [localId], null, frameId);
+  },
   async click_at({ x, y, button = "left", count = 1 }) {
     const n = Math.min(Math.max(Math.round(Number(count)) || 1, 1), 3);
     const btn = button === "right" ? "right" : "left";
@@ -361,6 +471,9 @@ export const operations = {
   },
   async drag({ from_element, to_element, from_x, from_y, to_x, to_y }) {
     const tab = await currentTab();
+    for (const id of [from_element, to_element]) {
+      if (id != null && resolveElement(id).frameId != null) throw IFRAME_UNSUPPORTED(id, "drag");
+    }
     const from = from_element != null ? await callInPage("pointAt", [from_element]) : await shotToPage(tab, from_x, from_y);
     const to = to_element != null ? await callInPage("spotOf", [to_element]) : await shotToPage(tab, to_x, to_y);
     const kind = await realDrag(tab.id, from, to);
@@ -372,7 +485,13 @@ export const operations = {
     return `Dragged ${a} to ${b}${kind === "html5" ? " (drag and drop)" : ""}`;
   },
   async hover({ element, real = false }) {
-    if (!real) return act("hover", [element]);
+    const { frameId, localId } = resolveElement(element);
+    if (!real) {
+      lastFrameId = frameId;
+      const result = await act("hover", [localId], frameId);
+      return renumber(result, localId, element);
+    }
+    if (frameId != null) throw IFRAME_UNSUPPORTED(element, "a real mouse hover");
     // A real mouse move, for menus that only open for a real mouse.
     const tab = await currentTab();
     const spot = await callInPage("pointAt", [element]);
@@ -382,7 +501,13 @@ export const operations = {
   },
   async type({ element, text, submit = false }) {
     const tab = await currentTab();
-    if (!needsRealInput(tab.url)) return act("type", [element, text, Boolean(submit)]);
+    const { frameId, localId } = resolveElement(element);
+    if (!needsRealInput(tab.url)) {
+      lastFrameId = frameId;
+      const result = await act("type", [localId, text, Boolean(submit)], frameId);
+      return renumber(result, localId, element);
+    }
+    if (frameId != null) throw IFRAME_UNSUPPORTED(element, "real keyboard typing (needed for Google Sheets/Docs)");
     // Google Sheets/Docs ignore JavaScript typing: click the box for real, check the cursor is
     // really in it (never Ctrl+A: in Sheets that selects every cell), then type for real.
     const spot = await callInPage("pointAt", [element]);
@@ -442,7 +567,8 @@ export const operations = {
     const tab = await currentTab();
     const times = Math.min(Math.max(Math.round(Number(repeat)) || 1, 1), 20);
     const simple = ["Enter", "Escape", "Tab", "ArrowDown", "ArrowUp"].includes(key);
-    if (simple && times === 1 && !needsRealInput(tab.url)) return act("pressKey", [key]);
+    // Targets the frame the last type/click aimed at – its own activeElement, not the <iframe> tag.
+    if (simple && times === 1 && !needsRealInput(tab.url)) return act("pressKey", [key], lastFrameId);
     // Shortcuts, other keys, and Google Sheets/Docs: real key presses.
     await callInPage("showKeyBadge", [key]).catch(() => {});
     await realKey(tab.id, key, times);
@@ -464,7 +590,11 @@ export const operations = {
     return `Typed "${text}" where the cursor is${save ? " (Enter pressed to save it – the cursor moved down one row)" : ""}`;
   },
   scroll: ({ direction }) => callInPage("scroll", [direction]),
-  select_option: ({ element, option }) => act("selectOption", [element, option]),
+  async select_option({ element, option }) {
+    const { frameId, localId } = resolveElement(element);
+    const result = await act("selectOption", [localId, option], frameId);
+    return renumber(result, localId, element);
+  },
 
   // Control
   async wait({ seconds = 2 }) {

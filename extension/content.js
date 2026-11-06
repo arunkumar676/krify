@@ -2,9 +2,25 @@
 // Injected on demand; safe to inject more than once.
 
 if (!window.__krify) {
-  const MAX_ELEMENTS = 100; // visible-on-screen only; fewer = smaller AI requests
+  const MAX_SHOWN = 100; // described in getElements() text + drawn by showLabels() on screenshots
+  const MAX_NUMBERED = 400; // hard ceiling: every qualifying visible element up to this gets an id
+  const MAX_FIND_CHARS = 2000; // find_elements response budget (sheets.py-style cap)
   const MAX_TEXT = 2500; // keep AI requests small (free token limits)
   const MAX_SCREEN_TEXT = 3000;
+  const MAX_TREE_CHARS = 4000; // inspect() tree view: errors out past this instead of cutting silently
+
+
+  // inspect(): implicit roles for non-interactive structural context (headings, regions, text).
+  const STRUCTURAL_ROLE = {
+    H1: "heading", H2: "heading", H3: "heading", H4: "heading", H5: "heading", H6: "heading",
+    LI: "listitem", UL: "list", OL: "list", TABLE: "table", TR: "row", TD: "cell", TH: "cell",
+    NAV: "navigation", MAIN: "main", HEADER: "banner", FOOTER: "contentinfo",
+    SECTION: "region", ARTICLE: "article", ASIDE: "complementary", IMG: "img",
+  };
+
+  const LANDMARK_ROLES = new Set(
+    ["navigation", "main", "banner", "contentinfo", "region", "article", "complementary", "table", "list"]
+  );
 
   const SELECTOR = [
     "a[href]", "button", "input:not([type=hidden])", "textarea", "select", "summary",
@@ -12,6 +28,7 @@ if (!window.__krify) {
     "[role=option]", "[role=switch]", "[contenteditable=true]", "[onclick]", "[draggable=true]",
     "[role=menuitemcheckbox]", "[role=menuitemradio]",
   ].join(",");
+  
   const POPUP = '[role=menu], [role=listbox], [role=dialog], [role=alertdialog], [aria-modal="true"]';
 
   const NAME_BOX = '#t-name-box, input.waffle-name-box, input[aria-label="Name Box" i]';
@@ -21,12 +38,27 @@ if (!window.__krify) {
     return s.length > max ? s.slice(0, max) + "…" : s;
   };
 
-  function isVisible(el) {
+  // CSS-visible (has size, not hidden/display:none/near-zero-opacity) regardless of scroll position.
+  function isRendered(el) {
     const rect = el.getBoundingClientRect();
     if (rect.width < 2 || rect.height < 2) return false;
-    if (rect.bottom < 0 || rect.top > innerHeight || rect.right < 0 || rect.left > innerWidth) return false;
     const style = getComputedStyle(el);
     return style.visibility !== "hidden" && style.display !== "none" && Number(style.opacity) > 0.05;
+  }
+
+  function isVisible(el) {
+    const rect = el.getBoundingClientRect();
+    if (rect.bottom < 0 || rect.top > innerHeight || rect.right < 0 || rect.left > innerWidth) return false;
+    return isRendered(el);
+  }
+
+  // Some sites (e.g. Amazon's "Sort by") hide the real <select> under a custom-styled button –
+  // treat it as visible enough if its visible wrapper is on screen. In unrestricted mode "visible"
+  // means CSS-visible anywhere in the document, not just the current viewport, so off-screen
+  // elements (above/below the fold) are found too.
+  function visibleEnough(el) {
+    const vis = window.__krify.unrestricted ? isRendered : isVisible;
+    return vis(el) || (el.tagName === "SELECT" && el.parentElement && vis(el.parentElement));
   }
 
   function labelOf(el) {
@@ -40,6 +72,33 @@ if (!window.__krify) {
       el.getAttribute("name") ||
       (el.type === "submit" ? el.value : "")
     );
+  }
+
+  // Status/error/validation messages a site shows dynamically (toasts, banners, inline form
+  // errors) – ARIA conventions a well-built site already uses for accessibility, reused here so
+  // Krify can see "it failed" even when the message isn't itself a clickable element.
+  const STATUS_SELECTOR = '[role="alert"], [role="status"], [aria-live="polite"], [aria-live="assertive"]';
+
+  function statusSignals() {
+    const seen = new Set();
+    const lines = [];
+    for (const r of allRoots()) {
+      for (const el of r.querySelectorAll(STATUS_SELECTOR)) {
+        if (!visibleEnough(el)) continue;
+        const text = clean(el.innerText, 150);
+        if (!text || seen.has(text)) continue;
+        seen.add(text);
+        lines.push(text);
+      }
+      for (const el of r.querySelectorAll(":invalid")) {
+        if (!visibleEnough(el) || !el.validationMessage) continue;
+        const text = clean(`${labelOf(el) || el.name || el.type}: ${el.validationMessage}`, 150);
+        if (seen.has(text)) continue;
+        seen.add(text);
+        lines.push(text);
+      }
+    }
+    return lines.slice(0, 5).join(" | ");
   }
 
   function describe(el) {
@@ -59,6 +118,143 @@ if (!window.__krify) {
     return `${role} "${label}"`;
   }
 
+  // find_elements(): common UI-action synonyms, so searching "sign out" also matches "Logout".
+  // Kept small and regex-based (no embeddings/fuzzy-NLP – this is plain JS, no build step).
+  const ALIASES = [
+    /sign ?in|log ?in|logon/i, /sign ?out|log ?out|logoff|exit account/i, /sign ?up|register|create account/i,
+    /delete|remove|discard|trash/i, /save|submit|confirm|apply/i, /cancel|close|dismiss/i,
+    /edit|modify|change/i, /search|find/i,
+  ];
+  function matchesQuery(text, query) {
+    const q = query.toLowerCase();
+    const group = ALIASES.find((re) => re.test(q));
+    return group ? group.test(text) : text.toLowerCase().includes(q);
+  }
+
+  // Every open shadow root nested anywhere under `root` (including shadow roots inside other
+  // shadow roots), plus `root` itself – so the scans below also see modern web components' own
+  // content, not just the page's light DOM. Closed shadow roots are invisible to el.shadowRoot by
+  // design (no way around that, same as any extension).
+  function allRoots(root = document) {
+    const roots = [root];
+    for (const el of root.querySelectorAll("*")) if (el.shadowRoot) roots.push(...allRoots(el.shadowRoot));
+    return roots;
+  }
+
+  // Clears and reassigns data-krify-id on the same visible/interactive elements getElements()
+  // has always used, so get_elements, find_elements and inspect() always agree on what [12] means.
+  // Every qualifying element gets an id (up to MAX_NUMBERED), not just the first MAX_SHOWN – so
+  // click/type/etc. can reach anything find_elements() turns up, even past the default shown list.
+  function numberElements() {
+    const roots = allRoots();
+    for (const r of roots) r.querySelectorAll("[data-krify-id]").forEach((el) => el.removeAttribute("data-krify-id"));
+    const seenLinks = new Set();
+    const candidates = [];
+    // An open menu, dropdown or dialog comes first: on busy pages (Google Sheets has 100+ toolbar
+    // buttons) its items would otherwise fall past the shown-elements window.
+    const popups = roots.flatMap((r) => [...r.querySelectorAll(POPUP)]).filter(window.__krify.unrestricted ? isRendered : isVisible);
+    const inPopups = new Set(popups.flatMap((p) => [...p.querySelectorAll(SELECTOR)]));
+    for (const el of new Set([...inPopups, ...roots.flatMap((r) => [...r.querySelectorAll(SELECTOR)])])) {
+      const visible = visibleEnough(el);
+      if (!visible || el.disabled) continue;
+      // Fewer tokens: inside an already-listed link/button = same click; same link target = listed once
+      // (shops link each product from its picture AND its title).
+      if (el.parentElement?.closest("[data-krify-cand]")) continue;
+      if (el.tagName === "A" && el.href) {
+        if (seenLinks.has(el.href)) continue;
+        seenLinks.add(el.href);
+      }
+      const text = describe(el);
+      if (/"\s*"/.test(text) && !/input|textarea|select/.test(text)) continue; // skip unlabeled
+      el.setAttribute("data-krify-cand", "1"); // temporary marker for the containment check above
+      candidates.push({ el, text, rect: el.getBoundingClientRect() });
+    }
+    candidates.forEach(({ el }) => el.removeAttribute("data-krify-cand"));
+    // Visual reading order (top to bottom, left to right), popups first – not raw DOM order, so
+    // which elements land in the shown window reflects what a person scanning the page would
+    // reach first, not an accident of markup order.
+    candidates.sort((a, b) => {
+      const pa = inPopups.has(a.el), pb = inPopups.has(b.el);
+      if (pa !== pb) return pa ? -1 : 1;
+      return a.rect.top - b.rect.top || a.rect.left - b.rect.left;
+    });
+    const numbered = [];
+    for (const { el, text } of candidates) {
+      const id = numbered.length + 1;
+      el.setAttribute("data-krify-id", String(id));
+      numbered.push({ id, el, text });
+      if (!window.__krify.unrestricted && id >= MAX_NUMBERED) break;
+    }
+    return { numbered, hasPopup: inPopups.size > 0 };
+  }
+
+  // ---------- inspect(): accessibility-tree view ----------
+
+  // An element's own text, not counting text that belongs to its children (so a container's
+  // line doesn't just repeat what its children already show).
+  function ownText(el) {
+    let text = "";
+    for (const node of el.childNodes) {
+      if (node.nodeType === Node.TEXT_NODE) text += node.nodeValue;
+    }
+    return clean(text, 80);
+  }
+
+  // Walk up from a numbered element to the nearest landmark-ish ancestor (or up to 4 levels),
+  // so ref=<element> zooms into the card/section around it, not just its own (usually empty)
+  // descendants.
+  function containerOf(el) {
+    let node = el;
+    for (let i = 0; i < 4 && node.parentElement; i++) {
+      node = node.parentElement;
+      const role = node.getAttribute("role") || STRUCTURAL_ROLE[node.tagName];
+      if (role && LANDMARK_ROLES.has(role)) return node;
+    }
+    return node;
+  }
+
+  // One tree line for an element, or null if it's just layout (skipped, not a dead end –
+  // its children are still visited at the same depth).
+  function treeLine(el, filter) {
+    const id = el.getAttribute("data-krify-id");
+    if (id) return `[${id}] ${describe(el)}`;
+    if (filter !== "all") return null;
+    const role = el.getAttribute("role") || STRUCTURAL_ROLE[el.tagName];
+    if (!role) return null;
+    if (role === "img") {
+      const alt = clean(el.getAttribute("alt") || el.getAttribute("aria-label") || "", 60);
+      return alt ? `img "${alt}"` : null;
+    }
+    const text = ownText(el);
+    if (!text && !LANDMARK_ROLES.has(role)) return null; // empty non-landmark: not worth a line
+    return text ? `${role} "${text}"` : role;
+  }
+
+  function buildTree(root, filter, maxDepth) {
+    const lines = [];
+    let truncated = false;
+    function visit(el, depth) {
+      if (truncated) return;
+      const line = treeLine(el, filter);
+      if (line !== null) {
+        lines.push("  ".repeat(depth) + line);
+        if (!window.__krify.unrestricted && lines.join("\n").length > MAX_TREE_CHARS) {
+          truncated = true;
+          return;
+        }
+      }
+      const nextDepth = line !== null ? depth + 1 : depth; // layout wrappers don't cost depth
+      if (nextDepth > maxDepth) return;
+      for (const child of [...el.children, ...(el.shadowRoot?.children || [])]) {
+        if (!(window.__krify.unrestricted ? isRendered : isVisible)(child)) continue;
+        visit(child, nextDepth);
+        if (truncated) return;
+      }
+    }
+    visit(root, 0);
+    return { lines, truncated };
+  }
+
   window.__krify = {
     getPageInfo() {
       return {
@@ -69,44 +265,104 @@ if (!window.__krify) {
     },
 
     getElements() {
-      document.querySelectorAll("[data-krify-id]").forEach((el) => el.removeAttribute("data-krify-id"));
+      const { numbered, hasPopup } = numberElements();
       const lines = [];
-      const seenLinks = new Set();
-      let id = 0;
-      // An open menu, dropdown or dialog comes first: on busy pages (Google Sheets has 100+ toolbar
-      // buttons) its items would otherwise fall past the element limit.
-      const popups = [...document.querySelectorAll(POPUP)].filter(isVisible);
-      const inPopups = popups.flatMap((p) => [...p.querySelectorAll(SELECTOR)]);
-      if (inPopups.length) lines.push("(an open menu/dialog is listed first)");
-      for (const el of new Set([...inPopups, ...document.querySelectorAll(SELECTOR)])) {
-        // Some sites (e.g. Amazon's "Sort by") hide the real <select> under a custom button.
-        const visible = isVisible(el) || (el.tagName === "SELECT" && el.parentElement && isVisible(el.parentElement));
-        if (!visible || el.disabled) continue;
-        // Fewer tokens: inside an already-listed link/button = same click; same link target = listed once
-        // (shops link each product from its picture AND its title).
-        if (el.parentElement?.closest("[data-krify-id]")) continue;
-        if (el.tagName === "A" && el.href) {
-          if (seenLinks.has(el.href)) continue;
-          seenLinks.add(el.href);
-        }
-        const text = describe(el);
-        if (/"\s*"/.test(text) && !/input|textarea|select/.test(text)) continue; // skip unlabeled
-        id += 1;
-        el.setAttribute("data-krify-id", String(id));
-        lines.push(`[${id}] ${text}`);
-        if (id >= MAX_ELEMENTS) { lines.push("(more elements not shown)"); break; }
+      const status = statusSignals();
+      if (status) lines.push(`[Status] ${status}`);
+      if (hasPopup) lines.push("(an open menu/dialog is listed first)");
+      const shown = this.unrestricted ? numbered : numbered.slice(0, MAX_SHOWN);
+      for (const { id, text } of shown) lines.push(`[${id}] ${text}`);
+      if (!this.unrestricted && numbered.length > MAX_SHOWN) {
+        lines.push(`(${numbered.length - MAX_SHOWN} more elements not shown – use find_elements("text") to search for one)`);
+      }
+      if (!this.unrestricted && numbered.length >= MAX_NUMBERED) {
+        lines.push(`(page has more than ${MAX_NUMBERED} elements; some may be unreachable)`);
       }
       const below = document.documentElement.scrollHeight - (scrollY + innerHeight);
       if (below > 50) lines.push("(more content below – scroll down to see it)");
       return lines.join("\n") || "(no interactive elements visible)";
     },
 
+    // Search ALL numbered elements (not just the shown window above) by label text – for pages
+    // with more elements than getElements() describes by default. Tolerates common UI synonyms
+    // (see matchesQuery/ALIASES). Any id it returns is already clickable/typeable immediately.
+    findElements(query) {
+      const q = clean(query || "", 200);
+      if (!q) return "(empty query)";
+      const { numbered } = numberElements();
+      const matches = numbered.filter(({ text }) => matchesQuery(text, q));
+      if (!matches.length) return `(no elements match "${q}")`;
+      const lines = [];
+      let chars = 0;
+      for (const { id, text } of matches) {
+        const line = `[${id}] ${text}`;
+        chars += line.length + 1;
+        if (!this.unrestricted && chars > MAX_FIND_CHARS) {
+          lines.push(`…(${matches.length - lines.length} more matches not shown – narrow your search)`);
+          break;
+        }
+        lines.push(line);
+      }
+      return lines.join("\n");
+    },
+
+    // Finds ANY text on the page (not just clickable elements, and not limited by read_text's
+    // length cap, or to what's currently scrolled into view), scrolls to it, and reads what's
+    // around it. Walks the DOM ourselves (rather than the native window.find()) so matching is
+    // something we control: window.find()'s matching depends on hidden selection/anchor state and
+    // can miss a phrase split across sibling elements (e.g. a styled heading like "Testimonial" +
+    // "s" in separate spans) even when it's plainly on the page.
+    async findText(query) {
+      const q = clean(query || "", 200).toLowerCase();
+      if (!q) return "(empty query)";
+      const norm = (s) => (s || "").replace(/\s+/g, " ").trim().toLowerCase();
+      // Smallest element whose own text contains the full query – descending into a child that
+      // also contains it in full, so a match split across siblings resolves to their common
+      // ancestor instead of the whole page.
+      function findContainer(el) {
+        if (/^(SCRIPT|STYLE|NOSCRIPT|TEMPLATE)$/.test(el.tagName)) return null;
+        if (el.checkVisibility && !el.checkVisibility({ opacityProperty: true, visibilityProperty: true })) return null;
+        if (!norm(el.innerText).includes(q)) return null;
+        for (const child of [...el.children, ...(el.shadowRoot?.children || [])]) {
+          const found = findContainer(child);
+          if (found) return found;
+        }
+        return el;
+      }
+      const match = findContainer(document.body);
+      if (!match) return `(no text found matching "${query}")`;
+      await bringIntoView(match);
+      return this.readText("screen");
+    },
+
+    // Structure around the page or one element – headings, regions, nearby text – for when the
+    // flat element list above doesn't make clear what goes with what (e.g. several "Add to cart"
+    // buttons with no indication which belongs to which product).
+    getAccessibilityTree({ ref, filter = "interactive", depth = 8 } = {}) {
+      numberElements(); // refresh ids so they match what a fresh getElements() would assign
+      const root = ref ? containerOf(find(ref)) : document.body;
+      const { lines, truncated } = buildTree(root, filter, Math.max(1, Number(depth) || 8));
+      if (truncated) {
+        return "Too much structure to show from here. Try a smaller depth, or ref=<element number> to zoom into one part.";
+      }
+      return lines.join("\n") || "(nothing to show here)";
+    },
+
     // "screen" (default): only the text visible right now, line by line – prices, answers, etc.
-    // "page": the whole page from the top (long, cut at MAX_TEXT).
+    // "page": the whole page (long: keeps the start and end, cuts the middle at MAX_TEXT – totals/
+    // pagination summaries are usually at one end or the other). Unrestricted mode: "screen" reads
+    // the whole page too (same as "page", uncapped) – the on-screen-only restriction is a cap like
+    // the others, not a fixed meaning of the default scope.
     readText(scope = "screen") {
-      if (scope === "page") {
+      if (scope === "page" || this.unrestricted) {
         const text = (document.body?.innerText || "").replace(/\n{3,}/g, "\n\n").trim();
-        return text.length > MAX_TEXT ? text.slice(0, MAX_TEXT) + "\n…(text cut, page is long)" : text;
+        if (this.unrestricted || text.length <= MAX_TEXT) return text;
+        const TAIL_CHARS = 700; // totals/pagination summaries often live at the very end
+        const head = text.slice(0, MAX_TEXT - TAIL_CHARS);
+        const tail = text.slice(-TAIL_CHARS);
+        return `${head}\n…(${text.length - MAX_TEXT} chars cut – page is long)…\n${tail}\n`
+          + "(if what you need isn't above, try find_text(\"...\") instead – it searches the WHOLE "
+          + "page and jumps straight to a match)";
       }
       const lines = [];
       let line = "";
@@ -131,7 +387,7 @@ if (!window.__krify) {
         line = line ? `${line} ${text}` : text;
         lineTop = r.top;
         size += text.length + 1;
-        if (size > MAX_SCREEN_TEXT) {
+        if (!this.unrestricted && size > MAX_SCREEN_TEXT) {
           line += " …(more on screen not shown)";
           break;
         }
@@ -150,6 +406,11 @@ if (!window.__krify) {
 
     animate: false,
 
+    // When `unrestricted` is on, the caps below (MAX_SHOWN/MAX_NUMBERED/MAX_TEXT/MAX_SCREEN_TEXT/
+    // MAX_FIND_CHARS/MAX_TREE_CHARS) are skipped – full page data instead of the token-saving
+    // defaults. Set by operations.js on every call, from a side-panel toggle (sidepanel.js).
+    unrestricted: false,
+
     // For screenshots: draw each listed element's number on the page (and hide Krify's own
     // border/badge/cursor so they don't cover the content). on=false removes the labels again.
     showLabels(on) {
@@ -160,6 +421,7 @@ if (!window.__krify) {
       const layer = document.createElement("div");
       layer.className = "labels";
       for (const el of document.querySelectorAll("[data-krify-id]")) {
+        if (!this.unrestricted && Number(el.dataset.krifyId) > MAX_SHOWN) continue; // only label what getElements() describes
         const r = el.getBoundingClientRect();
         if (r.bottom < 0 || r.top > innerHeight || r.width < 2) continue;
         const tag = document.createElement("div");
@@ -182,6 +444,7 @@ if (!window.__krify) {
     async click(id) {
       const el = find(id);
       await bringIntoView(el);
+      await waitActionable(el, id);
       if (this.animate) {
         const { x, y } = await moveCursorTo(el);
         glow(el);
@@ -202,6 +465,7 @@ if (!window.__krify) {
     async hover(id) {
       const el = find(id);
       await bringIntoView(el);
+      await waitActionable(el, id);
       if (this.animate) {
         await moveCursorTo(el);
         glow(el);
@@ -225,6 +489,7 @@ if (!window.__krify) {
       const isField = el.tagName === "INPUT" || el.tagName === "TEXTAREA";
       if (!isField && !el.isContentEditable) throw new Error(`[${id}] is not a text box.`);
       await bringIntoView(el);
+      await waitActionable(el, id);
       if (this.animate) {
         const { x, y } = await moveCursorTo(el);
         glow(el);
@@ -267,6 +532,7 @@ if (!window.__krify) {
     async pointAt(id) {
       const el = find(id);
       await bringIntoView(el);
+      await waitActionable(el, id);
       const r = el.getBoundingClientRect();
       let spot = { x: r.left + Math.min(r.width / 2, 60), y: r.top + r.height / 2 };
       if (this.animate) {
@@ -278,9 +544,10 @@ if (!window.__krify) {
     },
 
     // An element's spot without scrolling (a drag target must already be on screen).
-    spotOf(id) {
+    async spotOf(id) {
       const el = find(id);
       if (!isVisible(el)) throw new Error(`[${id}] is not on screen – scroll so both ends of the drag are visible.`);
+      await waitActionable(el, id);
       const r = el.getBoundingClientRect();
       return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
     },
@@ -294,6 +561,13 @@ if (!window.__krify) {
       const hit = document.elementFromPoint(x, y); // Krify's own overlay ignores the mouse, so it's skipped
       if (!hit) return "";
       return describe(hit.closest(SELECTOR) || hit);
+    },
+
+    // Live description of a numbered element right now, or "" if it's gone – lets the backend check
+    // an id still means what it meant when the model looked, before acting on it.
+    describeId(id) {
+      const el = document.querySelector(`[data-krify-id="${id}"]`);
+      return el ? describe(el) : "";
     },
 
     // Show Krify's cursor (and a click ripple) at a spot.
@@ -403,9 +677,10 @@ if (!window.__krify) {
         [...el.options].find((o) => o.text.trim().toLowerCase() === want) ||
         [...el.options].find((o) => o.text.toLowerCase().includes(want));
       if (!match) throw new Error(`Option "${option}" not found in [${id}].`);
+      const target = isVisible(el) ? el : el.parentElement; // hidden <select>: point at its visible wrapper
+      await bringIntoView(target);
+      await waitActionable(el, id, { proxy: target === el ? undefined : target });
       if (this.animate) {
-        const target = isVisible(el) ? el : el.parentElement; // hidden <select>: point at its visible wrapper
-        await bringIntoView(target);
         const { x, y } = await moveCursorTo(target);
         glow(target);
         ripple(x, y);
@@ -432,7 +707,49 @@ if (!window.__krify) {
   async function bringIntoView(el) {
     const smooth = window.__krify.animate;
     el.scrollIntoView({ block: "center", behavior: smooth ? "smooth" : "instant" });
-    if (smooth) await sleep(350);
+    await waitStable(el, smooth ? 1000 : 400);
+  }
+
+  // Waits until an element's bounding box stops changing (scrolling/animating settled) for ~100ms,
+  // or until timeout – a real settle-check instead of a fixed sleep guess. Returns the settled
+  // rect, or null if it never stopped moving in time.
+  async function waitStable(el, timeoutMs) {
+    let lastRect = null, stableSince = 0;
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      const r = el.getBoundingClientRect();
+      const moved = !lastRect || Math.abs(r.top - lastRect.top) > 0.5 || Math.abs(r.left - lastRect.left) > 0.5
+        || Math.abs(r.width - lastRect.width) > 0.5 || Math.abs(r.height - lastRect.height) > 0.5;
+      lastRect = r;
+      if (moved) stableSince = Date.now();
+      else if (Date.now() - stableSince > 100) return r;
+      await sleep(80);
+    }
+    return null;
+  }
+
+  // Playwright-style "actionability" wait: before interacting, make sure the element is actually
+  // ready – visible, stopped moving, not covered by something else, not disabled, still on the
+  // page – instead of firing the action immediately and hoping for the best. `proxy`: for a
+  // control with no meaningful on-screen point of its own (a hidden native <select>), check
+  // stability/occlusion against its visible wrapper instead of the real element.
+  async function waitActionable(el, id, { timeoutMs, proxy } = {}) {
+    timeoutMs = timeoutMs ?? (window.__krify.animate ? 3000 : 2000);
+    const target = proxy || el;
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      if (!el.isConnected) throw new Error(`[${id}] was removed from the page while waiting – get the elements again.`);
+      if (visibleEnough(target) && !el.disabled) {
+        const r = await waitStable(target, Math.max(200, timeoutMs - (Date.now() - start)));
+        if (r) {
+          const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+          const hit = document.elementFromPoint(cx, cy);
+          if (hit && (target === hit || target.contains(hit) || hit.contains(target))) return;
+        }
+      }
+      await sleep(80);
+    }
+    throw new Error(`[${id}] isn't ready yet (hidden, disabled, still moving, or covered by something) – take a screenshot to check, or try again.`);
   }
 
   // A shadow-DOM layer on top of the page, so page styles can't break it and it never blocks clicks.

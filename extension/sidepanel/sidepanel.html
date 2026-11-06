@@ -51,6 +51,12 @@
       <label class="switch" title="Show Krify's cursor, typing and a glowing border on the page while it works">
         <input id="cursorToggle" type="checkbox" checked /> ✨ Show animations
       </label>
+      <label class="switch" title="Show which tools were used and what they found, under the final answer">
+        <input id="devModeToggle" type="checkbox" /> 🔍 Dev mode
+      </label>
+      <label class="switch" title="Send the FULL page data instead of the token-saving caps (more elements, uncut text) – uses a lot more tokens, best with a high-context model">
+        <input id="unrestrictedToggle" type="checkbox" /> 🔓 Unrestricted
+      </label>
       <span class="spacer"></span>
       <button id="stopBtn" class="stop" hidden>■ Stop</button>
       <button id="startBtn" class="start">▶ Start</button>

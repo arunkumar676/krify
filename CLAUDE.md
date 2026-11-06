@@ -1,0 +1,145 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## What this is
+
+Krify is a browser AI agent: a Chrome extension (Manifest V3) drives a tab via DOM scripting / the
+`chrome.debugger` protocol, and a local Python FastAPI server runs the agent loop that decides what
+to do, one operation at a time, using free-tier LLMs (Groq, Gemini, OpenRouter). The two halves talk
+over a WebSocket on `127.0.0.1:8765`.
+
+## Commands
+
+Backend (from `backend/`):
+```bash
+cp .env.example .env        # then add GROQ_API_KEY (required) and optionally GEMINI_API_KEY / OPENROUTER_API_KEY
+uv sync                     # install deps
+uv run python -m app.main   # start the server (ws://127.0.0.1:8765/ws)
+uv run python hello_groq.py # sanity-check the Groq key alone
+uv run python try_nlu.py                       # chat-mode test of the agent's tool-calling against a fake page, no browser needed
+uv run python try_nlu.py "search for wireless mouse"  # same, one sentence
+```
+There is no lint/format/test tooling configured (no ruff/pytest/etc. in `pyproject.toml`) and no
+test suite — verify backend changes with `try_nlu.py` or by running the real extension against the
+server.
+
+Extension (no build step — plain JS, ES modules):
+1. `chrome://extensions` → enable Developer mode → **Load unpacked** → select `extension/`.
+2. After editing extension files, click the reload icon on the extension card (content script
+   changes also need the target page reloaded).
+3. The side panel must show **● Connected** (i.e. the backend is running) to do anything.
+
+## Architecture
+
+### Two processes, one WebSocket protocol
+
+The side panel (`extension/sidepanel/sidepanel.js`) opens `ws://127.0.0.1:8765/ws`. The server
+(`backend/app/main.py`) only accepts connections whose `Origin` starts with `chrome-extension://`.
+Full message shapes are documented in the module docstring of `main.py`. The important thing to
+understand: the server never touches the DOM itself — every browser action is a round trip where
+the server sends `{"type": "run", "id", "name", "args"}` and *waits* on a `Future` keyed by `id`
+until the extension replies with `{"type": "result", "id", "ok", "value"|"error"}`. `confirm`/
+`confirm_result` (Allow/Block prompts) work the same way with a separate id space.
+
+### The agent loop (`backend/app/agent/loop.py`)
+
+One `Agent` instance per side-panel connection (so follow-up tasks share chat history). `Agent.run()`
+is the core loop: build a page view → call `ask_ai()` with the running `messages` list and `TOOLS` →
+the model replies with one or more tool calls → each call is dispatched (browser action, `sheet_query`,
+`plan`, `note`, `done`, `ask_user`, …) → the result (plus a fresh page view) is appended back into
+`messages` → repeat, up to `MAX_STEPS` (`config.py`, default 25).
+
+Key mechanics worth knowing before touching this file:
+- **Batching**: the model can send several `ACTION_OPS` tool calls in one reply (or use the explicit
+  `batch` tool), up to `MAX_BATCH` (5). The loop stops a batch early if the page's *layout* changed
+  (`layout()` strips typed values before comparing) and a later queued step references an element
+  number — because numbers may have shifted.
+- **Token trimming**: only the newest page view / screen read / screenshot is kept in full in
+  `messages`; older ones are replaced with a short placeholder (`OLD_PAGE`, `OLD_SCREEN`,
+  `OLD_SCREENSHOT`). `self.notes` (from the `note` tool) are what survive long-term and get
+  re-injected via `header()` on every page view.
+- **Stuck/repeat detection**: `check_progress` (5 non-progress steps → nudge) and `check_repeat`
+  (same op+args 3× in 6 steps with no page change → nudge) inject warning text into the tool result
+  rather than failing — the model is expected to self-correct.
+- **Fact check**: before a `done`, `check_facts()` rejects the summary once if it contains a 3+ digit
+  number that never appeared in anything read this task (`self.seen`); a second rejection is allowed
+  through with a caveat appended.
+- **Safety is enforced in code, not just prompted**: `agent/safety.py#check()` inspects the action and
+  the *element's own label text* (never arbitrary page content) to decide if it's risky (money,
+  sending, deleting, account actions, private-data fields) and forces an Allow/Block round trip via
+  `Agent.ask_permission()`. Google Sheets/Docs edits get an additional overwrite guard
+  (`cells_in_the_way`) that downloads the sheet and reports exactly which cells would be clobbered
+  before typing.
+
+### Adding a new agent operation
+
+Three places need to agree: `agent/tools.py` (the JSON-schema tool definition sent to the LLM),
+`agent/loop.py` (how the server-side loop handles/describes that tool name — see `describe()` and the
+big dispatch in `run()`), and `extension/sidepanel/operations.js` (the actual browser implementation,
+registered in the `operations` object and looked up by `runOperation()`). Risky new actions should
+also be taught to `agent/safety.py#check()`.
+
+### Model routing (`backend/app/llm/client.py`, `backend/app/config.py`)
+
+`config.py` lists all known models with a `tier` (`strong` vs `backup`) and whether they support
+`vision`; a provider is silently dropped if its API key env var isn't set. `ask_ai()` prefers the
+caller's chosen model, falls back through other `strong` models, waits briefly for a model that's
+only short-term rate-limited, and only reaches for `backup` models once strong ones are out for a
+while. `_blocked_until`/`_blocked_why` (in-memory, per-process) track cooldowns learned from
+provider errors; `llm/usage.py` persists daily token/request counts and learned daily limits to the
+database so the side panel's model picker can show "64% used" next to each model.
+
+### Google Sheets (read path vs. edit path)
+
+Sheets' grid is a canvas, not readable DOM text, so reading goes: extension downloads the open tab as
+CSV via authenticated `fetch` (`sidepanel/sheets.js`) → server loads it into an in-memory DuckDB table
+`sheet` with file/network access disabled (`backend/app/sheets.py`) → the model writes a `sheet_query`
+SQL `SELECT`, or `read_cells` for exact values → only the answer rows (capped at `MAX_CHARS`) go back
+to the model, never the whole sheet. `sheets.py` also adds a synthetic `_row` column and reports each
+SQL result column's real sheet letter, so the model can turn a query result into a cell address
+without counting columns.
+
+Editing a Sheet is a different, real-input path (see below): `go_to_cell` + `type_here`, checked
+before and after.
+
+### Real keyboard/mouse via `chrome.debugger` (`extension/sidepanel/realinput.js`)
+
+JS-synthesized key/mouse events are flagged "untrusted" and ignored by Google Sheets/Docs. For those
+origins (`needsRealInput()`), and for anything needing right-click/double-click/drag, the extension
+attaches `chrome.debugger` to *only Krify's own tab* and dispatches real `Input.dispatchKeyEvent` /
+`Input.dispatchMouseEvent` CDP commands (Chrome shows the yellow "started debugging" bar while
+attached). This is detached automatically when a task ends (`setWorking(false)` → `detachAll()`), and
+a user clicking "Cancel" on the yellow bar permanently blocks real input for the rest of that task
+(`cancelled` flag in `realinput.js`).
+
+### Content script as "eyes" (`extension/content.js`)
+
+Injected on demand into the active page. Walks the DOM for a fixed `SELECTOR` list of interactive
+elements, filters to what's currently visible/on-screen, assigns each a stable `[n]` number via
+`data-krify-id`, and returns a compact text description (`describe()`), capped at `MAX_ELEMENTS`/
+`MAX_TEXT`/`MAX_SCREEN_TEXT` to keep requests small for free-tier token limits. Open popups/menus are
+listed first so they don't get pushed past the element cap on busy pages. The same script also owns
+the shadow-DOM overlay used for the visible cursor, the "Krify is working" glowing border, and the
+element-number labels drawn on screenshots.
+
+The flat list above is the only thing sent automatically every step. When it doesn't show which
+element goes with which (e.g. several identical "Add to cart" buttons in a list), the model can call
+the `inspect` tool: an indented accessibility-tree view (`getAccessibilityTree()`) built from the same
+numbered elements plus, with `filter="all"`, non-interactive structural context (headings, regions,
+nearby text). `ref=<element number>` zooms into that element's surrounding card/section
+(`containerOf()`) instead of walking the whole page. Past `MAX_TREE_CHARS` it returns an error asking
+for a smaller `depth` or a narrower `ref` rather than silently truncating.
+
+### Krify only touches its own tabs
+
+`operations.js` tracks `krifyTabs`/`agentTabId`/`openedByKrify` per side-panel session: a task starts
+in whatever tab is currently active, new tabs opened by Krify (or `target="_blank"` links followed
+from its tab) are added to the set, and `close_tab` refuses to close a tab Krify didn't open itself.
+
+### Database (`backend/app/db.py`)
+
+Single SQLite file `backend/krify.db` (gitignored, created automatically) via SQLModel: `Task`/`Step`
+tables back task history (`history.py`), `Usage`/`Limit` tables back per-model-per-day quota tracking
+(`llm/usage.py`, which also one-time-imports a legacy `usage.json` if present). Swapping to Postgres
+later is meant to be just changing `DATABASE_URL`.

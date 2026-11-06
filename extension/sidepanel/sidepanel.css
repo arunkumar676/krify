@@ -48,10 +48,20 @@ h2 { font-size: 12px; color: #666; margin: 10px 0 4px; font-weight: 600; }
 .entry.ask { background: #fff6dd; color: #6b4e00; }
 .entry.error, .entry.stopped { background: #fdeaea; color: #8a1c1c; }
 .entry.confirm { background: #fff3e0; border: 2px solid #f0a020; color: #5a3a00; display: flex; flex-direction: column; gap: 6px; }
-.entry.confirm.allowed { border-color: #1a8a3a; }
-.entry.confirm.blocked { border-color: #c93c3c; }
-.entry.confirm button.allow { background: #1a8a3a; color: #fff; border-color: #1a8a3a; font-weight: 600; }
-.entry.confirm button.block { background: #fff; color: #c93c3c; border-color: #c93c3c; font-weight: 600; }
+.entry.confirm.allowed, .entry.plan-review.allowed { border-color: #1a8a3a; }
+.entry.confirm.blocked, .entry.plan-review.blocked { border-color: #c93c3c; }
+.entry.confirm button.allow, .entry.plan-review button.allow { background: #1a8a3a; color: #fff; border-color: #1a8a3a; font-weight: 600; }
+.entry.confirm button.block, .entry.plan-review button.block { background: #fff; color: #c93c3c; border-color: #c93c3c; font-weight: 600; }
+
+/* plan review: Approve / Update / Reject a proposed, editable step list */
+.entry.plan-review { background: #eef0ff; border: 2px solid #5b5bd6; color: #30306b; display: flex; flex-direction: column; gap: 6px; }
+.plan-steps { display: flex; flex-direction: column; gap: 4px; }
+.plan-step-row { display: flex; gap: 6px; align-items: center; }
+.plan-step-row input { flex: 1; font: inherit; padding: 5px 7px; border: 1px solid #c9ccd4; border-radius: 6px; }
+.plan-step-row input:disabled { background: #f4f5f7; color: #444; }
+.plan-step-remove { background: none; border: none; color: #c93c3c; cursor: pointer; padding: 2px 6px; font-size: 13px; }
+.plan-step-add { align-self: flex-start; background: none; border: 1px dashed #5b5bd6; color: #5b5bd6; font-size: 12px; }
+.entry.plan-review button.update { background: #fff; color: #5b5bd6; border-color: #5b5bd6; font-weight: 600; }
 
 /* task box */
 .composer { display: flex; flex-direction: column; gap: 6px; }
