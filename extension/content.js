@@ -8,6 +8,12 @@ if (!window.__krify) {
   const MAX_TEXT = 2500; // keep AI requests small (free token limits)
   const MAX_SCREEN_TEXT = 3000;
   const MAX_TREE_CHARS = 4000; // inspect() tree view: errors out past this instead of cutting silently
+  // getPageModel(): the WHOLE page is collected (the server decides how much of it the AI sees),
+  // with a hard cap and a time limit so huge pages stay fast. On-screen elements are collected
+  // first, so the cap/time limit only ever cuts far-off parts of the page.
+  const MODEL_MAX = 600;
+  const COLLECT_MS = 400;
+  const MAX_CARD_SUMMARIES = 80;
 
 
   // inspect(): implicit roles for non-interactive structural context (headings, regions, text).
@@ -26,10 +32,10 @@ if (!window.__krify) {
     "a[href]", "button", "input:not([type=hidden])", "textarea", "select", "summary",
     "[role=button]", "[role=link]", "[role=checkbox]", "[role=tab]", "[role=menuitem]",
     "[role=option]", "[role=switch]", "[contenteditable=true]", "[onclick]", "[draggable=true]",
-    "[role=menuitemcheckbox]", "[role=menuitemradio]",
+    "[role=menuitemcheckbox]", "[role=menuitemradio]", "[role=radio]", "[role=slider]", "[role=spinbutton]",
   ].join(",");
   
-  const POPUP = '[role=menu], [role=listbox], [role=dialog], [role=alertdialog], [aria-modal="true"]';
+  const POPUP = '[role=menu], [role=listbox], [role=dialog], [role=alertdialog], [aria-modal="true"], dialog[open]';
 
   // Element number → element, from the latest getElements (also finds elements inside shadow roots,
   // which a page-wide querySelector can't).
@@ -160,8 +166,20 @@ if (!window.__krify) {
     return vis(el) || (el.tagName === "SELECT" && el.parentElement && vis(el.parentElement));
   }
 
+  // Text of the elements an aria-labelledby / aria-describedby attribute points at (ids are looked
+  // up in the element's own document or shadow root).
+  function textOfIds(el, attr) {
+    const ids = el.getAttribute(attr);
+    if (!ids) return "";
+    const root = el.getRootNode();
+    return ids.split(/\s+/)
+      .map((id) => (root.getElementById?.(id) || document.getElementById(id))?.innerText || "")
+      .join(" ").trim();
+  }
+
   function labelOf(el) {
     return clean(
+      textOfIds(el, "aria-labelledby") ||
       el.getAttribute("aria-label") ||
       (el.labels && el.labels[0] && el.labels[0].innerText) ||
       el.innerText ||
@@ -248,19 +266,40 @@ if (!window.__krify) {
   // get_elements, find_elements and inspect() always agree on what [12] means. `start`: embedded
   // pages continue the main page's numbering instead of restarting at 1. `max`: how many elements
   // to number before stopping (operations.js gives each embedded page its share of a shared budget).
-  function numberElements(start = 0, max = MAX_ELEMENTS) {
+  // `whole` (getPageModel): every rendered element on the whole page, not just the screen –
+  // on-screen ones and open popups first, then the rest until `max`/COLLECT_MS runs out.
+  function numberElements(start = 0, max = MAX_ELEMENTS, whole = false) {
     for (const el of listed.values()) el.removeAttribute("data-krify-id");
     listed.clear();
     const roots = allRoots();
     const seenLinks = new Set();
     const candidates = [];
+    const rendered = whole || window.__krify.unrestricted;
     // An open menu, dropdown or dialog comes first: on busy pages (Google Sheets has 100+ toolbar
     // buttons) its items would otherwise fall past the shown-elements window.
-    const popups = roots.flatMap((r) => [...r.querySelectorAll(POPUP)]).filter(window.__krify.unrestricted ? isRendered : isVisible);
+    const popups = roots.flatMap((r) => [...r.querySelectorAll(POPUP)]).filter(rendered ? isRendered : isVisible);
     const inPopups = new Set(popups.flatMap((p) => [...p.querySelectorAll(SELECTOR)]));
-    for (const el of new Set([...inPopups, ...roots.flatMap((r) => [...r.querySelectorAll(SELECTOR)])])) {
-      const visible = visibleEnough(el);
-      if (!visible || el.disabled) continue;
+    let all = [...new Set([...inPopups, ...roots.flatMap((r) => [...r.querySelectorAll(SELECTOR)])])];
+    let nearCount = all.length;
+    if (whole) {
+      const near = [];
+      const far = [];
+      for (const el of all) (inPopups.has(el) || inView(el) ? near : far).push(el);
+      all = [...near, ...far];
+      nearCount = near.length;
+    }
+    const deadline = performance.now() + COLLECT_MS;
+    let partial = false;
+    for (const [i, el] of all.entries()) {
+      if (whole && (candidates.length >= max || (i >= nearCount && performance.now() > deadline))) {
+        partial = true;
+        break;
+      }
+      const visible = whole ? renderedEnough(el) : visibleEnough(el);
+      // A disabled button in a form/dialog still tells the AI something ("Continue" is disabled =
+      // a required field is missing), so the whole-page view keeps it, marked (disabled).
+      const keepDisabled = whole && closestDeep(el, "form, [role=form], dialog, [role=dialog], [aria-modal=true]");
+      if (!visible || (el.disabled && !keepDisabled)) continue;
       // Fewer tokens: inside an already-listed link/button = same click; same link target = listed once
       // (shops link each product from its picture AND its title).
       if (el.parentElement?.closest("[data-krify-cand]")) continue;
@@ -284,14 +323,440 @@ if (!window.__krify) {
     });
     const numbered = [];
     let id = start;
-    for (const { el, text } of candidates) {
+    for (const { el, text, rect } of candidates) {
       id += 1;
       el.setAttribute("data-krify-id", String(id));
       listed.set(String(id), el);
-      numbered.push({ id, el, text });
-      if (!window.__krify.unrestricted && id - start >= max) break;
+      numbered.push({ id, el, text, rect, popup: inPopups.has(el) });
+      if (!whole && !window.__krify.unrestricted && id - start >= max) break;
     }
-    return { numbered, hasPopup: inPopups.size > 0, lastId: id };
+    return { numbered, hasPopup: inPopups.size > 0, lastId: id, partial };
+  }
+
+  // On screen right now (the hidden-<select>-under-a-styled-button case counts via its wrapper).
+  function inView(el) {
+    return isVisible(el) || (el.tagName === "SELECT" && !!el.parentElement && isVisible(el.parentElement));
+  }
+
+  function renderedEnough(el) {
+    return isRendered(el) || (el.tagName === "SELECT" && !!el.parentElement && isRendered(el.parentElement));
+  }
+
+  // Which numbering find_elements / inspect must repeat so their ids match the latest page view:
+  // set by getElements (screen, or whole page when unrestricted) and getPageModel (whole page).
+  let numbering = { max: MAX_ELEMENTS, whole: false };
+
+  // ---------- getPageModel(): the page as structured data ----------
+  // Sections (dialog, header, nav, main, form, …) → cards (repeated items like product tiles,
+  // with title/price/rating/badges) → elements (with their accessibility states). Sent to the
+  // server as JSON; backend/app/agent/pageview.py turns it into the outline the AI reads.
+
+  const KIND_LABEL = {
+    dialog: "Dialog", menu: "Menu", header: "Header", nav: "Nav", search: "Search", main: "Main",
+    aside: "Sidebar", footer: "Footer", form: "Form", region: "Section", toolbar: "Toolbar", menubar: "Menu bar",
+  };
+  const HEADING_SELECTOR = "h1, h2, h3, h4, h5, h6, [role=heading]";
+  const ITEM_TAG = /^(LI|TR|ARTICLE)$/;
+  const ITEM_ROLE = /^(listitem|row|article|option|gridcell)$/;
+  const PRICE = /(?:₹|Rs\.?\s?|INR\s?|\$|€|£|¥)\s?\d[\d,]*(?:\.\d{1,2})?/;
+  const BADGES = /\b(Sponsored|Out of stock|Currently unavailable|Sold out|Best ?seller|Limited time deal|Deal of the day|Amazon's Choice|Only \d+ left(?: in stock)?)\b/gi;
+
+  // Is this node the start of a section? → { kind, modal } or null.
+  function sectionKind(node) {
+    if (node.nodeType !== 1) return null;
+    const role = node.getAttribute("role");
+    const tag = node.tagName;
+    if (node.matches(POPUP)) {
+      let modal = node.getAttribute("aria-modal") === "true" || role === "alertdialog";
+      try {
+        modal = modal || node.matches(":modal");
+      } catch {
+        // older Chrome: no :modal
+      }
+      return { kind: role === "menu" || role === "listbox" ? "menu" : "dialog", modal };
+    }
+    const nested = () => node.parentElement?.closest("article, section, main, aside, [role=main], [role=article]");
+    if (role === "banner" || (tag === "HEADER" && !role && !nested())) return { kind: "header" };
+    if (role === "contentinfo" || (tag === "FOOTER" && !role && !nested())) return { kind: "footer" };
+    if (role === "navigation" || tag === "NAV") return { kind: "nav" };
+    if (role === "search" || tag === "SEARCH") return { kind: "search" };
+    if (role === "main" || tag === "MAIN") return { kind: "main" };
+    if (role === "complementary" || tag === "ASIDE") return { kind: "aside" };
+    if (role === "form" || tag === "FORM") return { kind: "form" };
+    if (role === "toolbar") return { kind: "toolbar" };
+    if (role === "menubar") return { kind: "menubar" };
+    if ((role === "region" || tag === "SECTION") && (node.getAttribute("aria-label") || node.getAttribute("aria-labelledby"))) {
+      return { kind: "region" };
+    }
+    return null;
+  }
+
+  // A section's own name: its label, or its first heading (not for main, whose headings become
+  // groups of their own: "Main › "Results"").
+  function sectionName(node, kind) {
+    const label = textOfIds(node, "aria-labelledby") || node.getAttribute("aria-label");
+    if (label) return clean(label, 50);
+    if (kind === "main") return "";
+    const head = node.querySelector(HEADING_SELECTOR);
+    return head ? clean(head.innerText, 50) : "";
+  }
+
+  // Sibling signature, as in listCounts(): same tag + classes = "looks alike". Semantic list
+  // items (li, tr, article, role=listitem/row) also count by tag/role alone.
+  function itemKeys(el) {
+    const keys = [el.tagName + "." + [...el.classList].filter((c) => !/active|selected|hover|focus|odd|even/i.test(c)).sort().join(".")];
+    const role = el.getAttribute("role");
+    if (ITEM_TAG.test(el.tagName)) keys.push("tag:" + el.tagName);
+    if (role && ITEM_ROLE.test(role)) keys.push("role:" + role);
+    return keys;
+  }
+
+  // Price strings in a card: the main one (largest text, not struck through) and the others
+  // labelled (M.R.P / was / EMI / save) rather than dropped. → "₹699 (M.R.P ₹999)" or "".
+  function pricesOf(card) {
+    const byValue = new Map();
+    for (const el of card.querySelectorAll("*")) {
+      const tc = el.textContent || "";
+      if (tc.length > 40 || !PRICE.test(tc)) continue;
+      if ([...el.children].some((kid) => PRICE.test(kid.textContent || ""))) continue; // a smaller one has it
+      const value = tc.match(PRICE)[0].replace(/\s+/g, "");
+      const style = getComputedStyle(el);
+      const struck = !!el.closest("del, s, strike") || /line-through/.test(style.textDecorationLine) ||
+        /line-through/.test(el.parentElement ? getComputedStyle(el.parentElement).textDecorationLine : "");
+      // Words just before/after the price, from the nearest short ancestor ("M.R.P: ₹999", "₹33/month").
+      let context = el;
+      for (let i = 0; i < 3 && context.parentElement && (context.parentElement.textContent || "").length < 90; i++) {
+        context = context.parentElement;
+      }
+      const ctx = (context.textContent || "").replace(/\s+/g, " ");
+      const at = ctx.indexOf(tc.trim());
+      const before = at > 0 ? ctx.slice(Math.max(0, at - 24), at) : "";
+      const after = at >= 0 ? ctx.slice(at + tc.trim().length, at + tc.trim().length + 14) : "";
+      let label = "";
+      if (/M\.?\s?R\.?\s?P/i.test(before)) label = "M.R.P";
+      else if (/\b(was|list|typical)\b/i.test(before) || struck) label = "was";
+      else if (/EMI/i.test(before + after) || /^\s*(\/\s?mo|per month|\/month|a month)/i.test(after)) label = "EMI";
+      else if (/\b(save|saving)\b/i.test(before) || /^\s*(off|discount)\b/i.test(after)) label = "save";
+      const size = el.getBoundingClientRect().width > 2 ? parseFloat(style.fontSize) || 0 : 0;
+      const old = byValue.get(value);
+      if (!old) byValue.set(value, { value, label, size });
+      else {
+        old.size = Math.max(old.size, size);
+        if (label && !old.label) old.label = label; // any copy struck through / labelled wins
+      }
+    }
+    const all = [...byValue.values()];
+    if (!all.length) return "";
+    const plain = all.filter((p) => !p.label);
+    const main = (plain.length ? plain : all).reduce((a, b) => (b.size > a.size ? b : a));
+    const others = all.filter((p) => p !== main).slice(0, 3).map((p) => `${p.label || "also"} ${p.value}`);
+    return others.length ? `${main.value} (${others.join(", ")})` : main.value;
+  }
+
+  function ratingOf(card, text) {
+    const labelled = card.querySelector('[aria-label*="out of 5" i], [title*="out of 5" i]');
+    const source = labelled ? labelled.getAttribute("aria-label") || labelled.getAttribute("title") : text;
+    const m = source.match(/(\d(?:\.\d)?)\s*(?:out of 5|★|\/\s?5\b)/i) || source.match(/★\s*(\d(?:\.\d)?)/);
+    return m ? `★${m[1]}` : "";
+  }
+
+  // Short summary of a repeated item (product tile, search result, table row).
+  function cardSummary(card, els) {
+    const text = (card.innerText || "").replace(/\s+/g, " ");
+    const head = card.querySelector(HEADING_SELECTOR);
+    let title = head ? clean(head.innerText, 80) : "";
+    if (!title && card.tagName === "TR") {
+      title = clean([...card.cells].map((cell) => clean(cell.innerText, 40)).filter(Boolean).join(" | "), 80);
+    }
+    if (!title) {
+      const links = els.map((e) => labelOf(e.el)).filter(Boolean).sort((a, b) => b.length - a.length);
+      title = clean(links[0] || text, 80);
+    }
+    const badges = [...new Set((text.match(BADGES) || []).map((b) => b.replace(/\s+/g, " ")))].slice(0, 3);
+    return { title, price: pricesOf(card), rating: ratingOf(card, text), badges };
+  }
+
+  // Accessibility states the plain description doesn't already show.
+  function statesOf(el) {
+    const a = (name) => el.getAttribute(name);
+    const role = a("role");
+    const states = [];
+    if (/^(checkbox|switch|radio|menuitemcheckbox|menuitemradio)$/.test(role || "") && a("aria-checked") !== null) {
+      states.push({ true: "checked", mixed: "partly checked" }[a("aria-checked")] || "unchecked");
+    }
+    if (a("aria-expanded") === "true") states.push("expanded");
+    else if (a("aria-expanded") === "false") states.push("collapsed");
+    const popup = a("aria-haspopup");
+    if (popup && popup !== "false") {
+      states.push({ listbox: "opens list", dialog: "opens dialog", grid: "opens picker", tree: "opens picker" }[popup] || "opens menu");
+    }
+    if (a("aria-selected") === "true") states.push("selected");
+    if (a("aria-pressed") === "true") states.push("pressed");
+    if (a("aria-current") && a("aria-current") !== "false") states.push("current");
+    if (el.disabled || a("aria-disabled") === "true") states.push("disabled");
+    if (el.required || a("aria-required") === "true") states.push("required");
+    let invalid = a("aria-invalid") === "true";
+    try {
+      invalid = invalid || el.matches(":user-invalid"); // only after the user touched it, not every empty required field
+    } catch {
+      // older Chrome
+    }
+    if (invalid) states.push("invalid");
+    if ((el.readOnly && /^(INPUT|TEXTAREA)$/.test(el.tagName)) || a("aria-readonly") === "true") states.push("readonly");
+    if (role === "slider" || role === "spinbutton") {
+      const now = a("aria-valuetext") || a("aria-valuenow");
+      const min = a("aria-valuemin");
+      const max = a("aria-valuemax");
+      if (now !== null) states.push(`value ${clean(now, 20)}${min !== null && max !== null ? ` of ${min}–${max}` : ""}`);
+    }
+    const sort = closestDeep(el, "th, [role=columnheader]")?.getAttribute("aria-sort");
+    if (sort === "ascending" || sort === "descending") states.push(`sorted ${sort}`);
+    return states;
+  }
+
+  // Extra help text for a field: its aria-describedby text, or a placeholder the label doesn't show.
+  function hintOf(el) {
+    const described = clean(textOfIds(el, "aria-describedby"), 60);
+    if (described) return described;
+    const placeholder = clean(el.getAttribute("placeholder") || "", 40);
+    return placeholder && !labelOf(el).includes(placeholder) ? placeholder : "";
+  }
+
+  // Column header of a table cell the element sits in.
+  function columnOf(el) {
+    const cell = closestDeep(el, "td");
+    const table = cell && closestDeep(cell, "table");
+    if (!table) return "";
+    const head = table.tHead?.rows[0] || [...table.rows].find((r) => r.cells[0]?.tagName === "TH");
+    const th = head?.cells[cell.cellIndex];
+    return th && th !== cell ? clean(th.innerText, 30) : "";
+  }
+
+  // "1-48 of over 10,000 results" – the site's own count, if it shows one.
+  function resultCount() {
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    const re = /(?:[\d,]+\s*[-–]\s*[\d,]+\s+of\s+)?(?:over\s+|about\s+)?[\d,]+\+?\s+(?:results?|items?|products?|listings?)\b/i;
+    for (let n = 0; n < 5000 && walker.nextNode(); n++) {
+      const node = walker.currentNode;
+      if (!/result|item|product|listing/i.test(node.nodeValue)) continue;
+      const parent = node.parentElement;
+      if (!parent || /^(SCRIPT|STYLE|NOSCRIPT|OPTION)$/.test(parent.tagName)) continue;
+      const text = (parent.closest("div, p, span, h1, h2, h3") || parent).textContent.replace(/\s+/g, " ");
+      const m = text.length < 200 && text.match(re);
+      if (m && isRendered(parent)) return clean(m[0], 50);
+    }
+    return "";
+  }
+
+  // A rough page type, as a hint to the AI (never used for decisions in code).
+  function pageType(cardCount, numbered, results) {
+    const url = location.href;
+    if (/docs\.google\.com\/spreadsheets\//.test(url)) return "spreadsheet";
+    if (/docs\.google\.com\/document\//.test(url)) return "document";
+    if (deepAll("input[type=password]").some(isRendered)) return "login";
+    if (/checkout|\/cart\b|basket|payment/i.test(location.pathname)) return "checkout/cart";
+    const searchy = /[?&](q|k|query|search|s|keyword|keywords|text)=/i.test(location.search) ||
+      /search/i.test(location.pathname) || !!results;
+    if (cardCount >= 3 && searchy) return "search results";
+    if (cardCount >= 5) return "list";
+    if (cardCount < 3 && numbered.some((n) => /add to (cart|bag|basket)|buy now/i.test(n.text))) return "product";
+    const fields = numbered.filter((n) => /^(input|textarea|select)/.test(n.text) && n.el.closest("form")).length;
+    if (fields >= 3) return "form";
+    if (document.querySelectorAll("article p, main p").length >= 5) return "article";
+    return "page";
+  }
+
+  function buildPageModel(start, max) {
+    numbering = { max, whole: true };
+    const { numbered, hasPopup, lastId, partial } = numberElements(start, max, true);
+
+    // Sections enclosing a node, outermost first (memoised: siblings share their ancestors' work).
+    const kinds = new Map();
+    const kindOf = (node) => {
+      if (!kinds.has(node)) kinds.set(node, sectionKind(node));
+      return kinds.get(node);
+    };
+    const chains = new Map();
+    const chainOf = (node) => {
+      if (!node) return [];
+      if (chains.has(node)) return chains.get(node);
+      const outer = chainOf(parentOf(node));
+      const chain = kindOf(node) ? [...outer, node] : outer;
+      chains.set(node, chain);
+      return chain;
+    };
+    const labelOfSection = (node) => {
+      const name = sectionName(node, kindOf(node).kind);
+      return name ? `${KIND_LABEL[kindOf(node).kind]} "${name}"` : KIND_LABEL[kindOf(node).kind];
+    };
+    // One section per distinct path, named by the innermost two sections ("Main › Form "Checkout""),
+    // a popup on its own, plus a heading group inside main (or a page with no landmarks at all).
+    const sections = [];
+    const sectionIds = new Map();
+    const sectionFor = (chain, heading) => {
+      const chainKinds = chain.map((node) => kindOf(node));
+      const popupAt = chainKinds.findLastIndex((k) => k.kind === "dialog" || k.kind === "menu");
+      const parts = (popupAt >= 0 ? chain.slice(popupAt) : chain.slice(-2)).map(labelOfSection);
+      if (heading && !parts.some((p) => p.endsWith(`"${heading.text}"`))) parts.push(`"${heading.text}"`);
+      const name = parts.join(" › ") || "Page";
+      if (!sectionIds.has(name)) {
+        sectionIds.set(name, sections.length);
+        sections.push({
+          name,
+          kind: chainKinds.length ? chainKinds[chainKinds.length - 1].kind : "page",
+          kinds: chainKinds.map((k) => k.kind),
+          modal: !!(popupAt >= 0 && chainKinds[popupAt].modal),
+        });
+      }
+      return sectionIds.get(name);
+    };
+
+    // Cards: the nearest repeated-sibling ancestor (inside the element's own section) that holds
+    // 2+ numbered elements or a price – so nav links and colour swatches don't each become a card.
+    const tallies = new Map();
+    const repeated = (node) => {
+      const parent = node.parentElement;
+      const min = node.tagName === "TR" ? 2 : 3; // two table rows are already a list
+      if (!parent || parent.children.length < min || parent.tagName === "SELECT") return false;
+      if (!tallies.has(parent)) {
+        const tally = new Map();
+        for (const kid of parent.children) {
+          if (!(kid.textContent || "").trim()) continue;
+          for (const key of itemKeys(kid)) tally.set(key, (tally.get(key) || 0) + 1);
+        }
+        tallies.set(parent, tally);
+      }
+      const tally = tallies.get(parent);
+      return itemKeys(node).some((k) => (tally.get(k) || 0) >= min);
+    };
+    const hasPrice = new Map();
+    const priced = (node) => {
+      if (!hasPrice.has(node)) {
+        const text = node.textContent || "";
+        hasPrice.set(node, text.length < 3000 && PRICE.test(text));
+      }
+      return hasPrice.get(node);
+    };
+    const info = numbered.map((n) => {
+      const chain = chainOf(n.el);
+      const section = chain[chain.length - 1] || null;
+      const candidates = [];
+      for (let node = n.el, i = 0; node && node !== section && i < 12; node = parentOf(node), i++) {
+        if (node === document.body || node === document.documentElement) break;
+        if (repeated(node)) candidates.push(node);
+      }
+      return { ...n, chain, section, candidates };
+    });
+    const holds = new Map();
+    for (const n of info) for (const c of n.candidates) holds.set(c, (holds.get(c) || 0) + 1);
+    for (const n of info) {
+      // Table rows always count (a "View" link per order row needs its row to say which order).
+      n.card = n.candidates.find((c) => (holds.get(c) >= 2 || priced(c) || c.tagName === "TR") &&
+        (c.textContent || "").length < 3000) || null;
+    }
+    const cardNodes = new Set(info.map((n) => n.card).filter(Boolean));
+
+    // Headings split big sections (main, or a page with no landmarks at all) into named groups –
+    // but not headings inside cards (each product's own title would make a group per product).
+    // (Also headings in any repeated block, even one past the collection cap that holds no
+    // collected element – otherwise a far-off product's title would name the group.)
+    const insideCard = (node) => {
+      for (let p = node, i = 0; p && i < 15; p = parentOf(p), i++) {
+        if (cardNodes.has(p) || (i < 6 && p.nodeType === 1 && repeated(p))) return true;
+      }
+      return false;
+    };
+    const headings = deepAll("h1, h2, h3, [role=heading]")
+      .filter((h) => {
+        const level = Number(h.getAttribute("aria-level") || h.tagName.slice(1)) || 2;
+        return level <= 3 && isRendered(h) && !insideCard(h);
+      })
+      .map((h) => {
+        const chain = chainOf(h);
+        return { y: h.getBoundingClientRect().top, section: chain[chain.length - 1] || null, text: clean(h.innerText, 50) };
+      })
+      .filter((h) => h.text)
+      .sort((a, b) => a.y - b.y);
+
+    const cards = [];
+    const cardIds = new Map();
+    const elements = [];
+    const full = window.__krify.unrestricted;
+    for (const n of info) {
+      const innerKind = n.section ? kindOf(n.section).kind : "page";
+      let heading = null;
+      if (innerKind === "main" || innerKind === "page") {
+        for (const h of headings) {
+          if (h.y > n.rect.top + 2) break;
+          if (h.section === n.section) heading = h;
+        }
+      }
+      const s = sectionFor(n.chain, heading);
+      let c = -1;
+      if (n.card) {
+        if (!cardIds.has(n.card)) {
+          cardIds.set(n.card, cards.length);
+          cards.push({ node: n.card, els: [] });
+        }
+        c = cardIds.get(n.card);
+        cards[c].els.push(n);
+      }
+      const r = n.rect;
+      const pos = inView(n.el) ? 0 : r.bottom < 0 ? -1 : r.top > innerHeight ? 1 : 2;
+      elements.push({
+        id: n.id, text: n.text, states: statesOf(n.el), hint: /^(INPUT|TEXTAREA)$/.test(n.el.tagName) ? hintOf(n.el) : "",
+        col: columnOf(n.el), pos, s, c,
+      });
+    }
+    // Card summaries cost a few DOM reads each: on-screen cards always, all of them in full mode.
+    let summaries = 0;
+    const cardList = cards.map((card, i) => {
+      const visible = elements.some((e) => e.c === i && e.pos === 0);
+      if ((!visible && !full) || summaries >= MAX_CARD_SUMMARIES) return { title: "", price: "", rating: "", badges: [], summarised: false };
+      summaries += 1;
+      return { ...cardSummary(card.node, card.els), summarised: true };
+    });
+
+    // Scrollable boxes and a scrolling embedded page get numbers too (as in getElements).
+    let id = lastId;
+    const extra = (el, text) => {
+      id += 1;
+      el.setAttribute("data-krify-id", String(id));
+      listed.set(String(id), el);
+      elements.push({ id, text, states: [], hint: "", col: "", pos: 0, s: sectionFor(chainOf(el), null), c: -1 });
+    };
+    for (const box of scrollBoxes()) {
+      extra(box, `scrollable box "${labelOf(box) ? clean(labelOf(box), 30) : ""}" (scroll with element=${id + 1} to see more)`);
+    }
+    const doc = document.documentElement;
+    const below = doc.scrollHeight - (scrollY + innerHeight);
+    if (window !== top && doc.scrollHeight > innerHeight + 4) {
+      const at = below > 50 ? (scrollY > 4 ? "more above and below" : "more below") : "at the bottom";
+      extra(doc, `this embedded page (${at} – scroll with element=${id + 1})`);
+    }
+
+    const focusedEl = activeDeep();
+    const focused = focusedEl && focusedEl !== document.body ? Number(focusedEl.getAttribute("data-krify-id")) || null : null;
+    const mainCards = cards.filter((_, i) => elements.some((e) => e.c === i && /main|page/.test(sections[e.s].kind))).length;
+    const h1 = deepAll("h1, [role=heading][aria-level='1']").find(isRendered);
+    const results = window === top ? resultCount() : "";
+    return {
+      page: {
+        type: window === top ? pageType(mainCards || cards.length, numbered, results) : "",
+        h1: h1 ? clean(h1.innerText, 80) : "",
+        results,
+        scrollY: Math.round(scrollY),
+        scrollMax: Math.max(0, doc.scrollHeight - innerHeight),
+      },
+      status: statusSignals(),
+      focused,
+      popup: hasPopup,
+      partial,
+      sections,
+      cards: cardList,
+      elements,
+      count: id - start,
+    };
   }
 
   // ---------- inspect(): accessibility-tree view ----------
@@ -380,6 +845,7 @@ if (!window.__krify) {
     // Numbers start after `start`: embedded pages continue the main page's numbering.
     // Returns { text, count } – the side panel joins the main page and embedded pages.
     getElements(start = 0, max = MAX_ELEMENTS) {
+      numbering = { max, whole: false };
       const { numbered, hasPopup, lastId } = numberElements(start, max);
       const lines = [];
       const status = statusSignals();
@@ -411,6 +877,12 @@ if (!window.__krify) {
         lines.push(`[${id}] this embedded page (${at} – scroll with element=${id})`);
       }
       return { text: lines.join("\n"), count: id - start };
+    },
+
+    // The whole page as structured data (sections → cards → elements, with accessibility states):
+    // see buildPageModel(). The server (pageview.py) decides how much of it the AI sees.
+    getPageModel(start = 0, max = MODEL_MAX) {
+      return buildPageModel(start, max);
     },
 
     // ---------- embedded pages (iframes) ----------
@@ -449,7 +921,7 @@ if (!window.__krify) {
     findElements(query) {
       const q = clean(query || "", 200);
       if (!q) return "(empty query)";
-      const { numbered } = numberElements();
+      const { numbered } = numberElements(0, numbering.max, numbering.whole);
       const matches = numbered.filter(({ text }) => matchesQuery(text, q));
       if (!matches.length) return `(no elements match "${q}")`;
       const lines = [];
@@ -499,7 +971,7 @@ if (!window.__krify) {
     // flat element list above doesn't make clear what goes with what (e.g. several "Add to cart"
     // buttons with no indication which belongs to which product).
     getAccessibilityTree({ ref, filter = "interactive", depth = 8 } = {}) {
-      numberElements(); // refresh ids so they match what a fresh getElements() would assign
+      numberElements(0, numbering.max, numbering.whole); // refresh ids so they match the latest page view
       const root = ref ? containerOf(find(ref)) : document.body;
       const { lines, truncated } = buildTree(root, filter, Math.max(1, Number(depth) || 8));
       if (truncated) {

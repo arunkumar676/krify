@@ -51,4 +51,7 @@ def model_name(model_id):
 MODELS = {m: info for m, info in _ALL_MODELS.items() if os.getenv(PROVIDERS[provider_of(m)]["key"])}
 
 MAX_STEPS = int(os.getenv("MAX_STEPS", "25"))  # safety limit per task
+# Structured page view (sections → items → elements with states, built by agent/pageview.py from
+# the extension's get_page_model). 0 = the old flat element list (get_elements).
+STRUCTURED_VIEW = os.getenv("STRUCTURED_VIEW", "1") == "1"
 PORT = int(os.getenv("PORT", "8765"))

@@ -171,6 +171,12 @@ async function setWorkingIn(tabId, on) {
 
 const MAX_ELEMENTS = 100; // in total
 const MAIN_SHARE = 80; // the main page's part when there are embedded pages, so theirs still fit
+// get_page_model collects the whole page (the server decides how much the AI sees), so its caps
+// are only a safety limit. The main page's share is kept below the total so embedded pages (a
+// login or payment box) always get room.
+const MODEL_MAX = 600;
+const MODEL_MAIN_SHARE = 450;
+const MODEL_FRAME_SHARE = 150;
 const FRAME_TEXT = 1200; // characters of text read per embedded page
 const elementFrame = new Map(); // element number → frame id (0 = main page)
 
@@ -345,8 +351,11 @@ export const operations = {
     const main = await callInPage("getElements", [0, frames.length ? MAIN_SHARE : MAX_ELEMENTS], null, 0);
     const parts = main.text ? [main.text] : [];
     let last = main.count;
+    // Unrestricted: the main page isn't capped, so its count alone may pass MAX_ELEMENTS – that
+    // must not skip the embedded pages (content.js ignores `max` in that mode anyway).
+    const unrestricted = await showUnrestricted();
     for (const { frameId, label } of frames) {
-      if (last >= MAX_ELEMENTS) break;
+      if (!unrestricted && last >= MAX_ELEMENTS) break;
       let inner;
       try {
         inner = await callInPage("getElements", [last, MAX_ELEMENTS - last], null, frameId);
@@ -359,6 +368,34 @@ export const operations = {
       last += inner.count;
     }
     return parts.join("\n") || "(no interactive elements visible)";
+  },
+  // Structured page data (see content.js buildPageModel): the main page and each embedded page,
+  // numbered on from where the last one stopped. `full` = the side panel's Unrestricted switch:
+  // the server shows everything instead of a screen-sized view.
+  async get_page_model() {
+    const tab = await webTab();
+    const frames = await embeddedPages(tab.id);
+    if (frames.length) await callInAllFrames("forget");
+    elementFrame.clear();
+    const full = await showUnrestricted();
+    const main = await callInPage("getPageModel", [0, frames.length ? MODEL_MAIN_SHARE : MODEL_MAX], null, 0);
+    const pages = [{ ...main, frame: "" }];
+    let last = main.count;
+    for (const { frameId, label } of frames) {
+      const room = Math.min(MODEL_MAX - last, MODEL_FRAME_SHARE);
+      if (room <= 0) break;
+      let inner;
+      try {
+        inner = await callInPage("getPageModel", [last, room], null, frameId);
+      } catch {
+        continue; // went away meanwhile
+      }
+      if (!inner.count) continue;
+      for (let n = last + 1; n <= last + inner.count; n++) elementFrame.set(String(n), frameId);
+      pages.push({ ...inner, frame: label });
+      last += inner.count;
+    }
+    return { full, pages };
   },
   // Main page only for now (not frame-aware): a fresh listing there, so the ids it returns are
   // immediately usable – forget any embedded-page ids from an earlier get_elements so nothing

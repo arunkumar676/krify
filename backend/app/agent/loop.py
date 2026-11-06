@@ -8,11 +8,11 @@ import re
 from urllib.parse import urlparse
 
 from app import history, sheets
-from app.agent import safety
-from app.agent.prompt import SYSTEM_PROMPT, where_line
+from app.agent import pageview, safety
+from app.agent.prompt import system_prompt, where_line
 from app.agent.tools import TOOLS
 from app.agent.understand import understand
-from app.config import MAX_STEPS
+from app.config import MAX_STEPS, STRUCTURED_VIEW
 from app.llm.client import ask_ai, has_vision_model, skip_model
 
 log = logging.getLogger("krify")
@@ -42,7 +42,8 @@ BLOCKED = ("BLOCKED by the user – this action was NOT done. "
 DONE_TOO_EARLY ="Not sent: check the page after your steps first, then call done."
 PLAN_NOT_APPROVED = ("Skipped: waiting for the user to approve your plan. If they asked for changes, "
                      "revise it and call plan again.")
-_VALUES = re.compile(r' \((?:value: ".*?"|empty|checked|unchecked)\)| = ".*?"')
+# "[12] input text "Email"" – an element's number, type and label, without its value/ticks/states.
+_ELEMENT_KEY = re.compile(r'\[\d+\] [^"\n]*"[^"\n]*"')
 
 
 def image_size(data_url):
@@ -79,8 +80,9 @@ def _args_of(call):
 
 
 def layout(page):
-    """The page without typed values or ticks, to see if element numbers could have moved."""
-    return _VALUES.sub("", page or "")
+    """Which number points at which element (number, type, label) – typed values, ticks, states,
+    the focus and status lines left out – to see if element numbers could have moved."""
+    return "\n".join(_ELEMENT_KEY.findall(page or ""))
 
 
 def site_of(url):
@@ -115,7 +117,6 @@ def merge_elements(elements, found):
 
 
 _ELEMENT_LINE = re.compile(r'^\[(\d+)\] (\S+) "([^"]+)"', re.MULTILINE)
-MAX_AMBIGUITY_GROUPS = 3  # don't let this line itself get huge on a very repetitive page
 
 
 def ambiguity_hint(elements):
@@ -126,14 +127,7 @@ def ambiguity_hint(elements):
     for eid, role, label in _ELEMENT_LINE.findall(elements or ""):
         groups.setdefault((role, label), []).append(eid)
     dupes = [(label, ids) for (role, label), ids in groups.items() if len(ids) > 1]
-    if not dupes:
-        return ""
-    lines = [
-        f"⚠️ Same label on {','.join(f'[{i}]' for i in ids)} (\"{label}\") – call inspect ref=<one of "
-        "them> to see which is which before clicking."
-        for label, ids in dupes[:MAX_AMBIGUITY_GROUPS]
-    ]
-    return "\n".join(lines)
+    return pageview.dupes_warning(dupes) if dupes else ""
 
 
 def is_sheet(url):
@@ -432,7 +426,7 @@ class Agent:
         self.model = None  # model the task is currently using
 
         self.ui = ui_and_log  # async (type, text) -> None
-        self.messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        self.messages = [{"role": "system", "content": system_prompt()}]
         self.page_views = []  # (message, text_before_page_view) – trimmed later to save tokens
         self.last_page = None
         self.screen_reads = {}  # site -> its newest read_text result (older ones are trimmed)
@@ -569,22 +563,31 @@ class Agent:
                 break
 
     async def page_view(self):
-        """Current URL, title and numbered elements."""
+        """Current URL, title and the page: structured (sections → items → elements, see
+        pageview.py) or the old flat element list, depending on STRUCTURED_VIEW."""
         try:
             info = await self.browser("get_page_info", {})
-            elements = await self.browser("get_elements", {})
+            if STRUCTURED_VIEW:
+                view = pageview.render(await self.browser("get_page_model", {}))
+                # The safety and fact checks get the flat list of EVERY collected element, never
+                # just the shortened view; item lines (titles, prices) count as read for the fact check.
+                elements, shown, self.page_status, hint = view.flat, view.text, view.status, view.hint
+                self.seen.append(shown)
+            else:
+                elements = shown = await self.browser("get_elements", {})
+                self.page_status = match.group(1) if (match := _STATUS_LINE.search(elements)) else ""
+                hint = ambiguity_hint(elements)
             self.elements = elements
             self.seen.append(elements)
             self.current_url = info.get("url", "")
             self.current_title = str(info.get("title") or "")
-            self.page_status = match.group(1) if (match := _STATUS_LINE.search(elements)) else ""
             tabs = f"[Tabs] {info['tabs']}\n" if info.get("tabs") else ""
-            if hint := ambiguity_hint(elements):
+            if hint:
                 self.boost_next = True
-                elements = f"{elements}\n{hint}"
+                shown = f"{shown}\n{hint}"
             if is_sheet(self.current_url):
-                elements = f"{SHEET_HINT}\n{elements}"
-            return f"{tabs}[Current page] {info.get('title')} – {info.get('url')}\n{elements}"
+                shown = f"{SHEET_HINT}\n{shown}"
+            return f"{tabs}[Current page] {info.get('title')} – {info.get('url')}\n{shown}"
         except Exception as err:
             return f"[Current page] (can't read it: {err})"
 
@@ -664,7 +667,7 @@ class Agent:
     async def run(self, task, model, location=None):
         self.location = location
         where = where_line(location)
-        self.messages[0]["content"] = f"{SYSTEM_PROMPT}\n\n{where}" if where else SYSTEM_PROMPT
+        self.messages[0]["content"] = f"{system_prompt()}\n\n{where}" if where else system_prompt()
         # The user's message may answer the agent's ask_user: then carry on with the same task.
         continuing = self.last_status == "ask"
         if continuing:  # same task: keep the goal, plan, notes and what was read so far

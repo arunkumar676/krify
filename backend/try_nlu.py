@@ -10,8 +10,10 @@ import sys
 from dotenv import load_dotenv
 from groq import BadRequestError, Groq
 
-from app.agent.prompt import SYSTEM_PROMPT
+from app.agent import pageview
+from app.agent.prompt import system_prompt
 from app.agent.tools import TOOLS
+from app.config import STRUCTURED_VIEW
 
 MODEL = "openai/gpt-oss-120b"
 MAX_STEPS = 8  # per sentence
@@ -35,6 +37,17 @@ FAKE_PAGE = {
     "read_text": "Results for 'mouse'. Logitech M235 Wireless Mouse ₹699, 4.3 stars. "
     "HP X200 Wireless Mouse ₹499, 4.1 stars. Zebronics Zeb-Transformer Gaming Mouse ₹349, 3.9 stars.",
 }
+
+# With the structured page view on, the fake page is a saved page model rendered the same way the
+# agent renders a real one (see fixtures/ and app/agent/pageview.py).
+if STRUCTURED_VIEW:
+    with open("fixtures/amazon_search.json", encoding="utf-8") as _f:
+        _view = pageview.render(json.load(_f))
+    FAKE_PAGE["get_page_info"] = "URL: https://www.amazon.in/s?k=wireless+mouse | Title: Amazon.in: wireless mouse"
+    FAKE_PAGE["get_elements"] = f"{_view.text}\n{_view.hint}".strip()
+    FAKE_PAGE["read_text"] = ("Results for 'wireless mouse'. Logitech M185 Wireless Mouse ₹699 M.R.P ₹999, 4.3 stars. "
+                              "Sponsored HP X200 Wireless Mouse ₹549, 4.1 stars. Portronics Toad 23 ₹399, 3.9 stars, "
+                              "currently unavailable.")
 
 
 def describe(name, args):
@@ -98,7 +111,7 @@ def handle(client, messages, sentence):
 def main():
     load_dotenv()
     client = Groq()
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    messages = [{"role": "system", "content": system_prompt()}]
 
     if len(sys.argv) > 1:
         sentence = " ".join(sys.argv[1:])

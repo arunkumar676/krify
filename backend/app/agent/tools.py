@@ -19,10 +19,10 @@ TOOLS = [
     _tool("read_text", "Read text on screen (prices, facts). scope=page reads the whole page "
           "and gives exact row counts of its lists/tables (use for 'how many').",
           {"scope": {"type": "string", "enum": ["screen", "page"]}}),
-    _tool("inspect", "See the structure around the page or one element – headings, regions, nearby text – when "
-          "the plain element list doesn't make clear what goes with what (e.g. which button belongs to which "
-          "item in a list). ref=zoom into one element's area; filter=\"all\" adds non-clickable context "
-          "(default: clickable things only, like the normal list).",
+    _tool("inspect", "See the structure around one element or the page – headings, regions, nearby text – only "
+          "when the page view doesn't make clear what goes with what (e.g. which button belongs to which item). "
+          "ref=zoom into one element's area; filter=\"all\" adds non-clickable context "
+          "(default: clickable things only).",
           {"ref": ELEMENT, "filter": {"type": "string", "enum": ["interactive", "all"]},
            "depth": {"type": "integer"}}),
     _tool("find_elements", "Search for an element by its visible text/label when it's not in the shown "

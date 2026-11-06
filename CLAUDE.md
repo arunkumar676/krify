@@ -123,7 +123,21 @@ listed first so they don't get pushed past the element cap on busy pages. The sa
 the shadow-DOM overlay used for the visible cursor, the "Krify is working" glowing border, and the
 element-number labels drawn on screenshots.
 
-The flat list above is the only thing sent automatically every step. When it doesn't show which
+**Structured page view (default, `STRUCTURED_VIEW=1`).** Instead of the flat list, each step the
+extension's `get_page_model` returns the *whole* page as JSON (`buildPageModel()` in `content.js`):
+sections (dialog, header, nav, main › heading, form, footer, embedded pages), cards (repeated items
+such as product tiles or table rows, with title/price/rating/badges) and elements (with accessibility
+states such as disabled/required/invalid/expanded, `aria-describedby` hints, table column). On-screen
+elements are collected first, then the rest, up to a cap and a time limit. `backend/app/agent/pageview.py`
+decides what the AI sees: restricted mode shows what's on screen plus any open dialog and the focused form,
+with long nav/sidebar lists cut and the footer collapsed. Full mode (the side panel's Unrestricted switch)
+shows everything and marks off-screen parts. `View.flat` keeps every collected element in the old
+`[n] role "label"` format, because `safety.py`, the fact check and `merge_elements` depend on it, so they
+always see the whole page. `find_elements`/`inspect` repeat the same numbering (`numbering` in `content.js`)
+so their ids match the view. To try the renderer without a browser:
+`uv run python -m app.agent.pageview fixtures/amazon_search.json [--full] [--flat]`.
+
+The page view (flat or structured) is the only page data sent automatically every step. When it doesn't show which
 element goes with which (e.g. several identical "Add to cart" buttons in a list), the model can call
 the `inspect` tool: an indented accessibility-tree view (`getAccessibilityTree()`) built from the same
 numbered elements plus, with `filter="all"`, non-interactive structural context (headings, regions,

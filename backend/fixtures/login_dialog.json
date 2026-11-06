@@ -1,0 +1,46 @@
+{
+  "full": false,
+  "pages": [
+    {
+      "frame": "",
+      "page": {"type": "login", "h1": "Welcome back", "results": "", "scrollY": 0, "scrollMax": 0},
+      "status": "",
+      "focused": null,
+      "popup": true,
+      "partial": false,
+      "sections": [
+        {"name": "Dialog \"Sign in\"", "kind": "dialog", "kinds": ["dialog"], "modal": true},
+        {"name": "Header", "kind": "header", "kinds": ["header"], "modal": false},
+        {"name": "Main › \"Welcome back\"", "kind": "main", "kinds": ["main"], "modal": false}
+      ],
+      "cards": [],
+      "elements": [
+        {"id": 1, "text": "button \"Close\"", "states": [], "hint": "", "col": "", "pos": 0, "s": 0, "c": -1},
+        {"id": 2, "text": "link \"Forgot password?\"", "states": [], "hint": "", "col": "", "pos": 0, "s": 0, "c": -1},
+        {"id": 3, "text": "link \"Home\"", "states": ["current"], "hint": "", "col": "", "pos": 0, "s": 1, "c": -1},
+        {"id": 4, "text": "link \"Pricing\"", "states": [], "hint": "", "col": "", "pos": 0, "s": 1, "c": -1},
+        {"id": 5, "text": "link \"Read the docs\"", "states": [], "hint": "", "col": "", "pos": 0, "s": 2, "c": -1}
+      ],
+      "count": 5
+    },
+    {
+      "frame": "Sign in – Example ID",
+      "page": {"type": "", "h1": "", "results": "", "scrollY": 0, "scrollMax": 0},
+      "status": "Enter a valid email address",
+      "focused": 7,
+      "popup": false,
+      "partial": false,
+      "sections": [
+        {"name": "Form \"Sign in\"", "kind": "form", "kinds": ["form"], "modal": false}
+      ],
+      "cards": [],
+      "elements": [
+        {"id": 6, "text": "input email \"Email\" (value: \"santhosh@\")", "states": ["required", "invalid"], "hint": "", "col": "", "pos": 0, "s": 0, "c": -1},
+        {"id": 7, "text": "input password \"Password\" (empty)", "states": ["required"], "hint": "8+ characters", "col": "", "pos": 0, "s": 0, "c": -1},
+        {"id": 8, "text": "input checkbox \"Remember me\" (unchecked)", "states": [], "hint": "", "col": "", "pos": 0, "s": 0, "c": -1},
+        {"id": 9, "text": "button \"Continue\"", "states": ["disabled"], "hint": "", "col": "", "pos": 0, "s": 0, "c": -1}
+      ],
+      "count": 4
+    }
+  ]
+}

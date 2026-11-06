@@ -1,0 +1,69 @@
+{
+  "full": false,
+  "pages": [
+    {
+      "frame": "",
+      "page": {"type": "search results", "h1": "", "results": "1-48 of over 10,000 results", "scrollY": 0, "scrollMax": 9200},
+      "status": "",
+      "focused": null,
+      "popup": false,
+      "partial": false,
+      "sections": [
+        {"name": "Header", "kind": "header", "kinds": ["header"], "modal": false},
+        {"name": "Header › Nav \"Shortcuts\"", "kind": "nav", "kinds": ["header", "nav"], "modal": false},
+        {"name": "Sidebar \"Filters\"", "kind": "aside", "kinds": ["aside"], "modal": false},
+        {"name": "Main › \"Results\"", "kind": "main", "kinds": ["main"], "modal": false},
+        {"name": "Main › \"Related searches\"", "kind": "main", "kinds": ["main"], "modal": false},
+        {"name": "Footer", "kind": "footer", "kinds": ["footer"], "modal": false}
+      ],
+      "cards": [
+        {"title": "Logitech M185 Wireless Mouse, 2.4GHz with USB Nano Receiver", "price": "₹699 (M.R.P ₹999)", "rating": "★4.3", "badges": [], "summarised": true},
+        {"title": "HP X200 Wireless Mouse", "price": "₹549", "rating": "★4.1", "badges": ["Sponsored"], "summarised": true},
+        {"title": "Portronics Toad 23 Wireless Optical Mouse", "price": "₹399", "rating": "★3.9", "badges": ["Currently unavailable"], "summarised": true},
+        {"title": "", "price": "", "rating": "", "badges": [], "summarised": false}
+      ],
+      "elements": [
+        {"id": 1, "text": "link \"Amazon.in\"", "states": [], "hint": "", "col": "", "pos": 0, "s": 0, "c": -1},
+        {"id": 2, "text": "select \"Search in\" = \"All Categories\" (options: All Categories, Electronics, Books)", "states": [], "hint": "", "col": "", "pos": 0, "s": 0, "c": -1},
+        {"id": 3, "text": "input text \"Search Amazon.in\" (value: \"wireless mouse\")", "states": ["collapsed", "opens list"], "hint": "", "col": "", "pos": 0, "s": 0, "c": -1},
+        {"id": 4, "text": "input submit \"Go\" (empty)", "states": [], "hint": "", "col": "", "pos": 0, "s": 0, "c": -1},
+        {"id": 5, "text": "link \"Account & Lists\"", "states": ["collapsed", "opens menu"], "hint": "", "col": "", "pos": 0, "s": 0, "c": -1},
+        {"id": 6, "text": "link \"Cart 0 items\"", "states": [], "hint": "", "col": "", "pos": 0, "s": 0, "c": -1},
+        {"id": 7, "text": "link \"Fresh\"", "states": [], "hint": "", "col": "", "pos": 0, "s": 1, "c": -1},
+        {"id": 8, "text": "link \"MX Player\"", "states": [], "hint": "", "col": "", "pos": 0, "s": 1, "c": -1},
+        {"id": 9, "text": "link \"Sell\"", "states": [], "hint": "", "col": "", "pos": 0, "s": 1, "c": -1},
+        {"id": 10, "text": "link \"Best Sellers\"", "states": [], "hint": "", "col": "", "pos": 0, "s": 1, "c": -1},
+        {"id": 11, "text": "link \"Today's Deals\"", "states": [], "hint": "", "col": "", "pos": 0, "s": 1, "c": -1},
+        {"id": 12, "text": "link \"Mobiles\"", "states": [], "hint": "", "col": "", "pos": 0, "s": 1, "c": -1},
+        {"id": 13, "text": "link \"Customer Service\"", "states": [], "hint": "", "col": "", "pos": 0, "s": 1, "c": -1},
+        {"id": 14, "text": "link \"Electronics\"", "states": [], "hint": "", "col": "", "pos": 0, "s": 1, "c": -1},
+        {"id": 15, "text": "link \"Prime\"", "states": [], "hint": "", "col": "", "pos": 0, "s": 1, "c": -1},
+        {"id": 16, "text": "link \"Home & Kitchen\"", "states": [], "hint": "", "col": "", "pos": 0, "s": 1, "c": -1},
+        {"id": 17, "text": "input checkbox \"Logitech\" (unchecked)", "states": [], "hint": "", "col": "", "pos": 0, "s": 2, "c": -1},
+        {"id": 18, "text": "input checkbox \"HP\" (unchecked)", "states": [], "hint": "", "col": "", "pos": 0, "s": 2, "c": -1},
+        {"id": 19, "text": "input checkbox \"Portronics\" (unchecked)", "states": [], "hint": "", "col": "", "pos": 0, "s": 2, "c": -1},
+        {"id": 20, "text": "link \"Under ₹500\"", "states": [], "hint": "", "col": "", "pos": 0, "s": 2, "c": -1},
+        {"id": 21, "text": "link \"₹500 - ₹1,000\"", "states": [], "hint": "", "col": "", "pos": 0, "s": 2, "c": -1},
+        {"id": 22, "text": "link \"₹1,000 - ₹2,000\"", "states": [], "hint": "", "col": "", "pos": 0, "s": 2, "c": -1},
+        {"id": 23, "text": "link \"4 Stars & Up\"", "states": [], "hint": "", "col": "", "pos": 0, "s": 2, "c": -1},
+        {"id": 24, "text": "link \"Get It Today\"", "states": [], "hint": "", "col": "", "pos": 1, "s": 2, "c": -1},
+        {"id": 25, "text": "select \"Sort by:\" = \"Featured\" (options: Featured, Price: Low to High, Price: High to Low, Avg. Customer Review, Newest Arrivals)", "states": [], "hint": "", "col": "", "pos": 0, "s": 3, "c": -1},
+        {"id": 26, "text": "link \"Logitech M185 Wireless Mouse, 2.4GHz with USB Nano Receiver\"", "states": [], "hint": "", "col": "", "pos": 0, "s": 3, "c": 0},
+        {"id": 27, "text": "button \"Add to cart\"", "states": [], "hint": "", "col": "", "pos": 0, "s": 3, "c": 0},
+        {"id": 28, "text": "link \"HP X200 Wireless Mouse\"", "states": [], "hint": "", "col": "", "pos": 0, "s": 3, "c": 1},
+        {"id": 29, "text": "button \"Add to cart\"", "states": [], "hint": "", "col": "", "pos": 0, "s": 3, "c": 1},
+        {"id": 30, "text": "link \"Portronics Toad 23 Wireless Optical Mouse\"", "states": [], "hint": "", "col": "", "pos": 0, "s": 3, "c": 2},
+        {"id": 31, "text": "button \"Add to cart\"", "states": ["disabled"], "hint": "", "col": "", "pos": 0, "s": 3, "c": 2},
+        {"id": 32, "text": "link \"Zebronics Zeb-Transformer-M\"", "states": [], "hint": "", "col": "", "pos": 1, "s": 3, "c": 3},
+        {"id": 33, "text": "button \"Add to cart\"", "states": [], "hint": "", "col": "", "pos": 1, "s": 3, "c": 3},
+        {"id": 34, "text": "link \"Next\"", "states": [], "hint": "", "col": "", "pos": 1, "s": 3, "c": -1},
+        {"id": 35, "text": "link \"logitech mouse wireless\"", "states": [], "hint": "", "col": "", "pos": 1, "s": 4, "c": -1},
+        {"id": 36, "text": "link \"gaming mouse\"", "states": [], "hint": "", "col": "", "pos": 1, "s": 4, "c": -1},
+        {"id": 37, "text": "link \"Back to top\"", "states": [], "hint": "", "col": "", "pos": 1, "s": 5, "c": -1},
+        {"id": 38, "text": "link \"About Us\"", "states": [], "hint": "", "col": "", "pos": 1, "s": 5, "c": -1},
+        {"id": 39, "text": "link \"Careers\"", "states": [], "hint": "", "col": "", "pos": 1, "s": 5, "c": -1}
+      ],
+      "count": 39
+    }
+  ]
+}
