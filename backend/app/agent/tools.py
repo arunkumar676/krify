@@ -19,6 +19,22 @@ TOOLS = [
     _tool("read_text", "Read text on screen (prices, facts). scope=page reads the whole page "
           "and gives exact row counts of its lists/tables (use for 'how many').",
           {"scope": {"type": "string", "enum": ["screen", "page"]}}),
+    _tool("inspect", "See the structure around the page or one element – headings, regions, nearby text – when "
+          "the plain element list doesn't make clear what goes with what (e.g. which button belongs to which "
+          "item in a list). ref=zoom into one element's area; filter=\"all\" adds non-clickable context "
+          "(default: clickable things only, like the normal list).",
+          {"ref": ELEMENT, "filter": {"type": "string", "enum": ["interactive", "all"]},
+           "depth": {"type": "integer"}}),
+    _tool("find_elements", "Search for an element by its visible text/label when it's not in the shown "
+          "list (pages with hundreds of elements). Matches common synonyms too (e.g. \"sign out\" finds "
+          "\"Logout\") – if nothing matches, try another word for the same thing before giving up. "
+          "Returns matches as [id] description, same format as the normal list – click/type/etc. work "
+          "on the ids it returns.",
+          {"query": TEXT}, ["query"]),
+    _tool("find_text", "Search the WHOLE page for a phrase or fact (not just clickable elements, and "
+          "not limited by read_text's length) – jumps straight to it and reads what's around it. Use "
+          "this for information on long pages where read_text(scope=\"page\") might cut it out.",
+          {"query": TEXT}, ["query"]),
     _tool("sheet_query", "Google Sheets: one SQL SELECT (DuckDB) on table sheet; quote column names, e.g. "
           "SELECT \"First Name\", \"Math Score\" FROM sheet WHERE \"Math Score\" = (SELECT MAX(\"Math Score\") FROM sheet)",
           {"sql": TEXT}, ["sql"]),

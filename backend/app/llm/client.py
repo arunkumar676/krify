@@ -69,15 +69,16 @@ def _blocked_for(model):
     return _blocked_until.get(model, 0) - time.time()
 
 
-async def _try_model(model, messages, tools, on_note):
+async def _try_model(model, messages, tools, on_note, boost=False):
     """One model, with in-place retries. Returns (message, tokens) or None (model now blocked)."""
     provider = provider_of(model)
     chat = _for_provider(messages, provider)
     tool_args = {"tools": tools, "tool_choice": "auto"} if tools else {}  # no tools: a plain text reply
+    extra = {**MODELS[model]["extra"], **MODELS[model]["boost"]} if boost and MODELS[model].get("boost") else MODELS[model]["extra"]
     for attempt in range(3):
         try:
             response = await _clients[provider].chat.completions.create(
-                model=model_name(model), messages=chat, **tool_args, **MODELS[model]["extra"]
+                model=model_name(model), messages=chat, **tool_args, **extra
             )
             u = response.usage
             tokens = (u.total_tokens if u else 0) or 0
@@ -144,12 +145,14 @@ def has_vision_model():
     return any(info["vision"] for info in MODELS.values())
 
 
-async def ask_ai(messages, tools, preferred, on_note=None, need_vision=False):
+async def ask_ai(messages, tools, preferred, on_note=None, need_vision=False, boost=False):
     """Return (message, model_used, tokens_used).
 
     Order: the model you picked, then strong models. If all strong models are busy for less than
     a minute, wait for one. Backup models are used only when the strong ones are out for longer.
     need_vision: the chat contains a screenshot, so only models that can see images are used.
+    boost: this step needs more thought than usual (a model-specific "extra" override, e.g. higher
+    reasoning_effort) - see MODELS[model]["boost"] in config.py.
     """
     usable = [m for m in MODELS if MODELS[m]["vision"] or not need_vision]
     strong = [m for m in usable if MODELS[m]["tier"] == "strong"]
@@ -166,7 +169,7 @@ async def ask_ai(messages, tools, preferred, on_note=None, need_vision=False):
         waiting_for_preferred = False
         for model in first:
             if _blocked_for(model) <= 0:
-                result = await _try_model(model, messages, tools, on_note)
+                result = await _try_model(model, messages, tools, on_note, boost)
                 if result:
                     return result[0], model, result[1]
                 if model == preferred and _short_wait(preferred, usable):
@@ -184,7 +187,7 @@ async def ask_ai(messages, tools, preferred, on_note=None, need_vision=False):
 
         for model in backup:
             if model not in first and _blocked_for(model) <= 0:
-                result = await _try_model(model, messages, tools, on_note)
+                result = await _try_model(model, messages, tools, on_note, boost)
                 if result:
                     return result[0], model, result[1]
         break

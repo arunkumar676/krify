@@ -30,6 +30,7 @@ export function resetTabs() {
   krifyTabs.length = 0;
   openedByKrify.clear();
   agentTabId = null;
+  elementFrame.clear();
 }
 
 chrome.tabs.onRemoved.addListener((tabId) => {
@@ -134,6 +135,14 @@ async function showCursor() {
   return showCursor;
 }
 
+// "Unrestricted" mode: skip content.js's token-saving caps (element/text limits) and send the
+// full page data instead – for a high-context model where you'd rather pay more tokens than miss
+// something the caps would otherwise cut.
+async function showUnrestricted() {
+  const { unrestricted = false } = await chrome.storage.local.get("unrestricted");
+  return unrestricted;
+}
+
 // True while the agent runs a task (set by the side panel). Drives the glowing page border.
 let working = false;
 
@@ -166,7 +175,7 @@ const FRAME_TEXT = 1200; // characters of text read per embedded page
 const elementFrame = new Map(); // element number → frame id (0 = main page)
 
 // In-page functions whose first argument is an element number.
-const ELEMENT_FNS = new Set(["click", "hover", "type", "pointAt", "spotOf", "focusCheck", "selectOption", "scrollAt"]);
+const ELEMENT_FNS = new Set(["click", "hover", "type", "pointAt", "spotOf", "focusCheck", "selectOption", "scrollAt", "describeId"]);
 
 /** The tab's embedded pages worth looking at, in page order: [{ frameId, label }]. */
 async function embeddedPages(tabId) {
@@ -219,18 +228,20 @@ async function callInPage(fnName, args = [], tabId = null, frameId = null) {
   try {
     await chrome.scripting.executeScript({ target, files: ["content.js"] });
     const animate = await showCursor();
+    const unrestricted = await showUnrestricted();
     [result] = await chrome.scripting.executeScript({
       target,
-      func: async (name, a, animate, glow) => {
+      func: async (name, a, animate, glow, unrestricted) => {
         try {
           window.__krify.animate = animate;
+          window.__krify.unrestricted = unrestricted;
           if (name !== "setWorking") window.__krify.setWorking(glow); // re-show after page loads
           return { ok: true, value: await window.__krify[name](...a) };
         } catch (err) {
           return { ok: false, error: err.message };
         }
       },
-      args: [fnName, args, animate, working && animate],
+      args: [fnName, args, animate, working && animate, unrestricted],
     });
   } catch (err) {
     // The embedded page went away (closed or reloaded).
@@ -312,8 +323,8 @@ async function waitForSave() {
 }
 
 // Run an in-page action, then give the page time to react or load.
-async function act(fnName, args) {
-  const value = await callInPage(fnName, args);
+async function act(fnName, args, frameId = null) {
+  const value = await callInPage(fnName, args, null, frameId);
   await waitForLoad((await currentTab()).id);
   return value;
 }
@@ -349,6 +360,17 @@ export const operations = {
     }
     return parts.join("\n") || "(no interactive elements visible)";
   },
+  // Main page only for now (not frame-aware): a fresh listing there, so the ids it returns are
+  // immediately usable – forget any embedded-page ids from an earlier get_elements so nothing
+  // from this page's new numbering is mistaken for one of them.
+  find_elements: ({ query } = {}) => {
+    elementFrame.clear();
+    return callInPage("findElements", [query], null, 0);
+  },
+  find_text: ({ query } = {}) => {
+    elementFrame.clear();
+    return callInPage("findText", [query], null, 0);
+  },
   async screenshot() {
     // Element numbers drawn on → picture of the visible area → labels removed → shrink.
     const tab = await currentTab();
@@ -375,6 +397,12 @@ export const operations = {
       if (text && !text.startsWith("(no text")) parts.push(`--- inside embedded page "${label}" ---\n${text}`);
     }
     return parts.join("\n");
+  },
+  // Main page only for now (not frame-aware) – same reasoning as find_elements/find_text above.
+  inspect({ ref, filter = "interactive", depth } = {}) {
+    const frameId = ref != null ? elementFrame.get(String(ref)) ?? 0 : 0;
+    if (ref == null) elementFrame.clear();
+    return callInPage("getAccessibilityTree", [{ ref, filter, depth }], null, frameId);
   },
   // Google Sheets: the open sheet tab as CSV (the server answers questions about it).
   async sheet_csv() {
@@ -465,6 +493,8 @@ export const operations = {
     const spot = await shotToPage(tab, x, y);
     return callInPage("elementAt", [spot.x, spot.y]);
   },
+  // What [id] currently points at (for the staleness check before acting on an element number).
+  describe_element: ({ element } = {}) => callInPage("describeId", [element]),
   async click_at({ x, y, button = "left", count = 1 }) {
     const n = Math.min(Math.max(Math.round(Number(count)) || 1, 1), 3);
     const btn = button === "right" ? "right" : "left";

@@ -4,10 +4,13 @@ The side panel connects to ws://127.0.0.1:8765/ws.
 Side panel → server: {"type": "task", "text", "model", "location": {"country", "place"}} | {"type": "stop"} | {"type": "reset"}
                      | {"type": "result", "id", "ok", "value" | "error"}
                      | {"type": "confirm_result", "id", "allow"}
+                     | {"type": "plan_review_result", "id", "action": "approve"|"update"|"reject", "steps"}
                      | {"type": "history"} | {"type": "history_delete", "text"} | {"type": "history_clear"}
+                     | {"type": "dev_mode", "on"}  (debug trace appended to the final answer)
 Server → side panel: {"type": "models", "models": [{"id", "label", "status"}]}  (on connect + after each task)
                      | {"type": "run", "id", "name", "args"}  (do a browser operation)
                      | {"type": "confirm", "id", "text"}  (ask the user Allow / Block)
+                     | {"type": "plan_review", "id", "steps"}  (ask the user to Approve / Update / Reject a plan)
                      | {"type": "history", "items": [{"text", "status", "summary", "tokens", "created_at"}]}
                      | {"type": "step" | "done" | "ask" | "stopped" | "error", "text"}
 """
@@ -83,7 +86,25 @@ async def websocket_endpoint(ws: WebSocket):
         finally:
             confirms.pop(confirm_id, None)
 
-    agent = Agent(browser, ui, confirm)
+    plan_reviews = {}  # plan review id -> Future[dict] (the raw plan_review_result message)
+
+    async def plan_review(steps):
+        """Show the proposed plan (editable) and wait for Approve / Update / Reject.
+        No answer in 10 minutes counts as Reject – never silently proceed on an unapproved plan."""
+        review_id = next(ids)
+        future = asyncio.get_running_loop().create_future()
+        plan_reviews[review_id] = future
+        await ws.send_json({"type": "plan_review", "id": review_id, "steps": steps})
+        try:
+            msg = await asyncio.wait_for(future, timeout=600)
+            edited = [str(s).strip() for s in (msg.get("steps") or []) if str(s).strip()]
+            return msg.get("action", "reject"), edited or steps
+        except asyncio.TimeoutError:
+            return "reject", steps
+        finally:
+            plan_reviews.pop(review_id, None)
+
+    agent = Agent(browser, ui, confirm, plan_review)
     task = None
 
     async def send_models():
@@ -107,17 +128,14 @@ async def websocket_endpoint(ws: WebSocket):
             await agent.run(text, model, location)
         except asyncio.CancelledError:  # Stop button
             agent.close_open_calls()
-            agent.end_task("stopped", "Stopped by you.")
-            await agent.ui("stopped", "Stopped.")
+            await agent.finish("stopped", "Stopped by you.")
         except RuntimeError as err:  # friendly errors we raise ourselves
             agent.close_open_calls()
-            agent.end_task("error", str(err))
-            await agent.ui("error", str(err))
+            await agent.finish("error", str(err))
         except Exception as err:
             agent.close_open_calls()
             log.exception("Task failed")
-            agent.end_task("error", f"Something went wrong: {err}")
-            await agent.ui("error", f"Something went wrong: {err}")
+            await agent.finish("error", f"Something went wrong: {err}")
         finally:
             agent.task_id = None
             try:
@@ -150,11 +168,17 @@ async def websocket_endpoint(ws: WebSocket):
                 future = confirms.get(msg.get("id"))
                 if future and not future.done():
                     future.set_result(bool(msg.get("allow")))
+            elif kind == "plan_review_result":
+                future = plan_reviews.get(msg.get("id"))
+                if future and not future.done():
+                    future.set_result(msg)
             elif kind == "stop":
                 if task and not task.done():
                     task.cancel()  # ends the task right away, even while waiting
             elif kind == "reset":
                 agent.reset()
+            elif kind == "dev_mode":
+                agent.dev_mode = bool(msg.get("on"))
             elif kind == "history":
                 await ws.send_json({"type": "history", "items": history.recent()})
             elif kind == "history_delete":
