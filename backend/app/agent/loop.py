@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 
 from app import history, sheets
 from app.agent import safety
-from app.agent.changes import repeated_only, what_changed
+from app.agent.changes import click_result, repeated_only, what_changed
 from app.agent.prompt import SYSTEM_PROMPT, where_line
 from app.agent.tools import TOOLS
 from app.agent.understand import understand
@@ -648,6 +648,10 @@ class Agent:
                     # Say plainly what the action changed, so the model knows if it worked.
                     if diff := what_changed(prev_page, page):
                         result = f"{result}\n{diff}"
+                    # Say plainly whether a click worked (it opened something / hid something).
+                    if name in ("click", "click_at") and (said := click_result(prev_page, page, self.acted_on, self.current_title)):
+                        result = f"{result}\n{said}"
+                        log.info("  told the AI: %s", said)
                     result = f"{result}{self.check_progress(name, changed)}{self.check_repeat(name, args, changed)}"
                     more = any(c.function.name in ACTION_OPS for c in calls[i + 1:])
                     later = [_args_of(c) for c in calls[i + 1:] if c.function.name in ACTION_OPS]

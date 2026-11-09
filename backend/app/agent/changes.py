@@ -69,6 +69,44 @@ def repeated_only(before, after):
     return u1 == u2 and not gone and bool(added) and all(label in els1 for label in added)
 
 
+def _plain(labels, limit):
+    """'link "Pages"' -> 'Pages', joined: 'AI Meetings, Pages, Tables (+2 more)'."""
+    names = []
+    for label in labels:
+        quoted = re.search(r'"([^"]*)"', label)
+        name = _short(quoted.group(1) if quoted else label)
+        if name and name not in names:
+            names.append(name)
+    more = f" (+{len(names) - limit} more)" if len(names) > limit else ""
+    return ", ".join(names[:limit]) + more
+
+
+def click_result(before, after, clicked, title="", limit=5):
+    """A plain sentence saying whether a click worked, so the AI doesn't click the same thing again:
+        ✅ Your click on "Knowledge" worked: a new page opened ("Pages"). New on screen: AI Meetings, …
+        ⚠️ Your click on "Knowledge" hid what was on screen (AI Meetings, …) – it toggles a panel.
+    '' when there's nothing clear to say (no change, or only copies of what was there)."""
+    old, new = _parse(before), _parse(after)
+    if not old or not new or repeated_only(before, after):
+        return ""
+    (_, u1, els1, _), (_, u2, els2, _) = old, new
+    added, gone = list((els2 - els1).elements()), list((els1 - els2).elements())
+    quoted = re.search(r'"([^"]*)"', clicked or "")
+    name = f'"{_short(quoted.group(1))}"' if quoted else "that spot"
+    if u1 != u2:
+        shown = f" New on screen: {_plain(added, limit)}." if added else ""
+        return (f"✅ Your click on {name} worked: a new page opened (\"{_short(title)}\").{shown} "
+                f"Don't click {name} again. If this is what the task asked for, call done; otherwise continue.")
+    if added and len(added) >= len(gone):
+        return (f"✅ Your click on {name} worked: it opened {_plain(added, limit)}. Don't click {name} "
+                "again (that may close it). Pick one of these, or call done if this is what the task asked for.")
+    if gone:
+        return (f"⚠️ Your click on {name} HID things that were on screen ({_plain(gone, limit)}). {name} "
+                "probably opens/closes a panel, so your previous click had already done the job. Don't keep "
+                f"clicking {name}: if you need those back, click it once more, then use them or call done.")
+    return ""
+
+
 def what_changed(before, after, limit=5):
     """One line saying what changed between two page views ('' if either can't be compared)."""
     old, new = _parse(before), _parse(after)
