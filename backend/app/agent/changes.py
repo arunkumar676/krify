@@ -82,29 +82,65 @@ def _plain(labels, limit):
     return ", ".join(names[:limit]) + more
 
 
+# First words that undo each other: after "Collapse sidebar", a new "Open sidebar" is its undo button.
+_OPPOSITES = {
+    "collapse": {"expand", "open", "show"}, "expand": {"collapse", "close", "hide"},
+    "close": {"open", "show", "expand"}, "open": {"close", "hide", "collapse"},
+    "hide": {"show", "open", "expand"}, "show": {"hide", "close", "collapse"},
+    "minimize": {"maximize", "restore", "expand"}, "maximize": {"minimize", "restore"},
+}
+_CLOSING = {"collapse", "close", "hide", "minimize", "dismiss"}  # clicks meant to make things go away
+
+
+def _name_of(label):
+    """'button "Open sidebar"' -> 'Open sidebar'."""
+    quoted = re.search(r'"([^"]*)"', label or "")
+    return quoted.group(1).strip() if quoted else ""
+
+
+def _undoes(clicked, other):
+    """True if `other` undoes `clicked`: same words except an opposite first word
+    ('Collapse sidebar' / 'Open sidebar', 'Close' / 'Open')."""
+    a, b = clicked.lower().split(), other.lower().split()
+    return bool(a and b) and b[0] in _OPPOSITES.get(a[0], ()) and a[1:] == b[1:]
+
+
 def click_result(before, after, clicked, title="", limit=5):
     """A plain sentence saying whether a click worked, so the AI doesn't click the same thing again:
         ✅ Your click on "Knowledge" worked: a new page opened ("Pages"). New on screen: AI Meetings, …
         ⚠️ Your click on "Knowledge" hid what was on screen (AI Meetings, …) – it toggles a panel.
+    A new button that would undo the click ("Open sidebar" after "Collapse sidebar") is never offered
+    as a next step: it's named with a warning instead (the AI clicked it and undid its own work).
     '' when there's nothing clear to say (no change, or only copies of what was there)."""
     old, new = _parse(before), _parse(after)
     if not old or not new or repeated_only(before, after):
         return ""
     (_, u1, els1, _), (_, u2, els2, _) = old, new
     added, gone = list((els2 - els1).elements()), list((els1 - els2).elements())
-    quoted = re.search(r'"([^"]*)"', clicked or "")
-    name = f'"{_short(quoted.group(1))}"' if quoted else "that spot"
+    clicked_name = _name_of(clicked)
+    name = f'"{_short(clicked_name)}"' if clicked_name else "that spot"
+    undo = [label for label in added if clicked_name and _undoes(clicked_name, _name_of(label))]
+    added = [label for label in added if label not in undo]
+    undo_note = (f' "{_short(_name_of(undo[0]))}" would undo your click – don\'t click it unless you need '
+                 "that back." if undo else "")
     if u1 != u2:
         shown = f" New on screen: {_plain(added, limit)}." if added else ""
         return (f"✅ Your click on {name} worked: a new page opened (\"{_short(title)}\").{shown} "
-                f"Don't click {name} again. If this is what the task asked for, call done; otherwise continue.")
+                f"Don't click {name} again.{undo_note} If this is what the task asked for, call done; otherwise continue.")
     if added and len(added) >= len(gone):
         return (f"✅ Your click on {name} worked: it opened {_plain(added, limit)}. Don't click {name} "
-                "again (that may close it). Pick one of these, or call done if this is what the task asked for.")
+                f"again (that may close it).{undo_note} Pick one of these, or call done if this is what the task asked for.")
+    if gone and (clicked_name.lower().split() or [""])[0] in _CLOSING:
+        # Collapse / Close / Hide: things going away is what it's for (the button itself isn't news).
+        hid = [label for label in gone if _name_of(label) != clicked_name] or gone
+        return (f"✅ Your click on {name} worked: it hid {_plain(hid, limit)}.{undo_note} Don't click "
+                f"{name} again; continue with the task, or call done if this is what it asked for.")
     if gone:
         return (f"⚠️ Your click on {name} HID things that were on screen ({_plain(gone, limit)}). {name} "
                 "probably opens/closes a panel, so your previous click had already done the job. Don't keep "
                 f"clicking {name}: if you need those back, click it once more, then use them or call done.")
+    if undo:  # only the button swapped ("Collapse sidebar" became "Open sidebar")
+        return f"✅ Your click on {name} worked.{undo_note}"
     return ""
 
 

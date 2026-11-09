@@ -649,7 +649,9 @@ class Agent:
                     if diff := what_changed(prev_page, page):
                         result = f"{result}\n{diff}"
                     # Say plainly whether a click worked (it opened something / hid something).
-                    if name in ("click", "click_at") and (said := click_result(prev_page, page, self.acted_on, self.current_title)):
+                    # Not after a failed click ("Element [20] not found"): the page changing then isn't its doing.
+                    clicked = name in ("click", "click_at") and not result.startswith("Error")
+                    if clicked and (said := click_result(prev_page, page, self.acted_on, self.current_title)):
                         result = f"{result}\n{said}"
                         log.info("  told the AI: %s", said)
                     result = f"{result}{self.check_progress(name, changed)}{self.check_repeat(name, args, changed)}"
