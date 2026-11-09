@@ -16,8 +16,8 @@ URL = {"type": "string", "description": "Full URL"}
 TEXT = {"type": "string"}
 
 TOOLS = [
-    _tool("read_text", "Read on-screen text (prices, facts). scope=page: the whole page, with exact "
-          "list/table row counts (for 'how many').",
+    _tool("read_text", "Read on-screen text (prices, facts). scope=page: more than one screen (from the current "
+          "screen down on a long page), with exact list/table row counts (for 'how many').",
           {"scope": {"type": "string", "enum": ["screen", "page"]}}),
     _tool("inspect", "Structure (headings, regions, nearby text) around an element or the page – only when the "
           "page view doesn't show what goes with what (which button belongs to which item). "
@@ -29,7 +29,7 @@ TOOLS = [
           "you can click/type on.",
           {"query": TEXT}, ["query"]),
     _tool("find_text", "Search the WHOLE page for a phrase/fact (any text, no length limit), jump to it "
-          "and read around it. For long pages where read_text might cut it off.",
+          "and read around it; you get the page view there too. Same query again = the next match.",
           {"query": TEXT}, ["query"]),
     _tool("sheet_query", "Google Sheets: one SQL SELECT (DuckDB) on table sheet; quote column names, e.g. "
           "SELECT \"First Name\", \"Math Score\" FROM sheet WHERE \"Math Score\" = (SELECT MAX(\"Math Score\") FROM sheet)",
@@ -43,9 +43,9 @@ TOOLS = [
     _tool("switch_tab", "Switch tab.", {"tab": TAB}, ["tab"]),
     _tool("close_tab", "Close a tab you opened.", {"tab": TAB}, ["tab"]),
     _tool("click", "Click an element (or a Google Sheets cell: cell=\"B22\"). button=right opens its menu; "
-          "count=2 double-click, 3 triple-click.",
+          "count=2 double-click, 3 triple-click. real=true: the real mouse, for sites that ignore a normal click.",
           {"element": ELEMENT, "cell": TEXT, "button": {"type": "string", "enum": ["left", "right"]},
-           "count": {"type": "integer"}}),
+           "count": {"type": "integer"}, "real": {"type": "boolean"}}),
     _tool("click_at", "Click a spot (x, y) on your latest screenshot, for things without an element number "
           "(Sheets grid, charts, maps). Same button/count as click.",
           {"x": {"type": "number"}, "y": {"type": "number"}, "button": {"type": "string", "enum": ["left", "right"]},
@@ -57,8 +57,9 @@ TOOLS = [
           {"element": ELEMENT, "real": {"type": "boolean"}}, ["element"]),
     _tool("type", "Type into a box (replaces its text). submit=true presses Enter after.",
           {"element": ELEMENT, "text": TEXT, "submit": {"type": "boolean"}}, ["element", "text"]),
-    _tool("press_key", "Press a key or shortcut (real keyboard), e.g. Enter, Tab, Escape, Delete, ArrowDown, "
-          "Ctrl+Z, Ctrl+End. repeat = how many times.",
+    _tool("press_key", "Press a key or shortcut, e.g. Enter, Escape, Delete, ArrowDown, Ctrl+Z, Ctrl+End. "
+          "repeat = how many times. Single Enter/Escape/Tab/arrows are simulated (Tab doesn't move focus – click "
+          "the next field instead); the result says what Enter did.",
           {"key": TEXT, "repeat": {"type": "integer"}}, ["key"]),
     _tool("type_here", "Type where the cursor is, with the real keyboard (e.g. into a Google Sheets cell). "
           "\\t presses Tab, \\n presses Enter.", {"text": TEXT}, ["text"]),

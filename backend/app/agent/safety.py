@@ -71,15 +71,28 @@ def check(name, args, elements, last_typed_line="", url=""):
         if "input password" in line or _find(PRIVATE_FIELDS, line):
             return "Private data"
         if args.get("submit"):  # type + Enter in one step: same checks as pressing Enter
-            return _enter_risk(elements, line)
+            return _enter_risk(elements, line, args.get("_enter"))
 
     elif name == "press_key" and key.lower() == "enter":
-        return _enter_risk(elements, last_typed_line)
+        return _enter_risk(elements, last_typed_line, args.get("_enter"))
 
     return None
 
 
-def _enter_risk(elements, typed_line):
+def _enter_risk(elements, typed_line, target=None):
+    """Enter sends the field's form. `target` (from the page, if it could tell): the field, its form's
+    default button and whether that form has a password box – judged like clicking that button."""
+    if isinstance(target, dict) and target.get("inForm"):
+        button = visible_text(target.get("submitter", ""))
+        for category, words in RISKY_WORDS.items():
+            if button and _find(words, button):
+                return category  # Enter in a checkout field = clicking "Place order"
+        if target.get("password"):
+            return "Accounts"  # Enter on a login form signs in
+        if _find(MESSAGE_FIELDS, typed_line or target.get("field", "")):
+            return "Sending"
+        return None
+    # No form info: be careful – any password box on the page may mean a login form.
     if "input password" in (elements or ""):
         return "Accounts"  # Enter on a login form signs in
     if _find(MESSAGE_FIELDS, typed_line):

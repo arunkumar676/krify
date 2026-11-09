@@ -51,12 +51,60 @@ if (!window.__krify) {
   // (operations.js sets window.__krify.unrestricted before every call into the page).
   const keep = (s, max) => clean(s, window.__krify?.unrestricted ? Infinity : max);
 
-  // CSS-visible (has size, not hidden/display:none/near-zero-opacity) regardless of scroll position.
+  // What a person could see, regardless of scroll position: has size, isn't hidden, faded out or
+  // clipped away – by its own CSS or an ancestor's – and isn't in an inert / aria-hidden part of
+  // the page (the background behind a modal, carousel clones).
   function isRendered(el) {
     const rect = el.getBoundingClientRect();
-    if (rect.width < 2 || rect.height < 2) return false;
+    if (rect.width < 2 || rect.height < 2) {
+      // A zero-size link/button (display:contents, only absolutely-placed children) shows through its children.
+      return /^(A|BUTTON)$/.test(el.tagName) && [...el.children].some((c) => isRendered(c));
+    }
     const style = getComputedStyle(el);
-    return style.visibility !== "hidden" && style.display !== "none" && Number(style.opacity) > 0.05;
+    if (style.visibility === "hidden" || style.display === "none" || Number(style.opacity) <= 0.05) return false;
+    // Ancestors too: opacity 0 / visibility / content-visibility on a parent hides this element.
+    const opts = { opacityProperty: true, visibilityProperty: true, contentVisibilityAuto: true, checkOpacity: true, checkVisibilityCSS: true };
+    if (el.checkVisibility && !el.checkVisibility(opts)) return false;
+    if (el.closest('[inert], [aria-hidden="true"]')) return false;
+    return !clippedAway(el, rect);
+  }
+
+  // Ancestor styles are read once per task tick, not once per element (pages have thousands).
+  const styleCache = new Map();
+  function cachedStyle(node) {
+    if (!styleCache.size) setTimeout(() => styleCache.clear());
+    let s = styleCache.get(node);
+    if (!s) {
+      const cs = getComputedStyle(node);
+      s = { position: cs.position, overflowX: cs.overflowX, overflowY: cs.overflowY, transform: cs.transform };
+      styleCache.set(node, s);
+    }
+    return s;
+  }
+
+  // Cut off by an overflow:hidden/clip ancestor (closed accordion, carousel track, "read more")?
+  // Follows CSS's rules: a fixed element escapes every ancestor; an absolutely placed one only
+  // the ancestors below its containing block (the nearest positioned/transformed one).
+  function clippedAway(el, rect) {
+    let pos = cachedStyle(el).position;
+    if (pos === "fixed") return false;
+    let needPositioned = pos === "absolute";
+    for (let p = el.parentElement; p && p !== document.body && p !== document.documentElement; p = p.parentElement) {
+      const s = cachedStyle(p);
+      const positioned = s.position !== "static" || s.transform !== "none";
+      if (needPositioned && !positioned) continue; // not its containing block: doesn't clip it
+      needPositioned = false;
+      const clipsX = /hidden|clip/.test(s.overflowX), clipsY = /hidden|clip/.test(s.overflowY);
+      if (clipsX || clipsY) {
+        const b = p.getBoundingClientRect();
+        const w = clipsX ? Math.min(rect.right, b.right) - Math.max(rect.left, b.left) : rect.width;
+        const h = clipsY ? Math.min(rect.bottom, b.bottom) - Math.max(rect.top, b.top) : rect.height;
+        if (w < 2 || h < 2) return true;
+      }
+      if (s.position === "fixed") return false;
+      if (s.position === "absolute") needPositioned = true;
+    }
+    return false;
   }
 
   // ---------- shadow DOM: parts of a page sealed inside a component ----------
@@ -169,13 +217,63 @@ if (!window.__krify) {
     return isRendered(el);
   }
 
-  // Some sites (e.g. Amazon's "Sort by") hide the real <select> under a custom-styled button –
-  // treat it as visible enough if its visible wrapper is on screen. In unrestricted mode "visible"
-  // means CSS-visible anywhere in the document, not just the current viewport, so off-screen
-  // elements (above/below the fold) are found too.
+  // A real control made (almost) transparent and laid over a styled wrapper: Amazon's "Add to cart"
+  // <input type=submit> (opacity .01 on top of the yellow button), custom checkboxes/radios, file
+  // buttons. The control is what actually gets clicked, so it counts as visible when the wrapper it
+  // sits on is. Typing fields are left out on purpose: a transparent text box is usually a trap for
+  // bots ("leave this blank"), never something to fill.
+  const SEE_THROUGH = "button, input[type=submit], input[type=button], input[type=image], input[type=reset], " +
+    "input[type=checkbox], input[type=radio], input[type=file]";
+
+  // → the visible wrapper the control shows through, or null.
+  function seeThroughWrapper(el, vis) {
+    if (!el.matches(SEE_THROUGH)) return null;
+    const r = el.getBoundingClientRect();
+    if (r.width < 2 || r.height < 2) return null;
+    const style = getComputedStyle(el);
+    if (style.visibility === "hidden" || style.display === "none" || Number(style.opacity) > 0.05) return null;
+    let p = el.parentElement;
+    for (let i = 0; i < 2 && p && p !== document.body && p !== document.documentElement; i++, p = p.parentElement) {
+      const pr = p.getBoundingClientRect();
+      const overlaps = r.left < pr.right && r.right > pr.left && r.top < pr.bottom && r.bottom > pr.top;
+      if (overlaps && vis(p)) return p;
+    }
+    return null;
+  }
+
+  // Something drawn over a see-through control that's part of it: its own <label> or its wrapper
+  // (a custom checkbox's drawn box) – clicking there reaches the control, as in a real browser.
+  function partOfControl(el, hit) {
+    if ([...(el.labels || [])].some((label) => label.contains(hit))) return true;
+    return !!seeThroughWrapper(el, isRendered)?.contains(hit);
+  }
+
+  // A control that hides itself but shows through a visible wrapper: a <select> under a custom-styled
+  // button (Amazon's "Sort by"), or a see-through control (above).
+  function shownByWrapper(el, vis) {
+    return !!standInFor(el, vis);
+  }
+
+  // The visible thing a person clicks for a control that hides itself: a hidden <select>'s styled
+  // wrapper, a see-through control itself (it's on top), or the <label> of a hidden checkbox/radio
+  // (display:none input + drawn box: clicking the label toggles it). null = nothing visible.
+  function standInFor(el, vis = isRendered) {
+    if (el.tagName === "SELECT") return el.parentElement && vis(el.parentElement) ? el.parentElement : null;
+    if (seeThroughWrapper(el, vis)) return el;
+    if (el.tagName === "INPUT" && /^(checkbox|radio)$/.test(el.type)) {
+      return [...(el.labels || [])].find((label) => vis(label)) || null;
+    }
+    return null;
+  }
+
+  // What to point at and click for an element: itself if it's visible, else its stand-in.
+  const clickTarget = (el) => (isRendered(el) ? el : standInFor(el) || el);
+
+  // In unrestricted mode "visible" means CSS-visible anywhere in the document, not just the current
+  // viewport, so off-screen elements (above/below the fold) are found too.
   function visibleEnough(el) {
     const vis = window.__krify.unrestricted ? isRendered : isVisible;
-    return vis(el) || (el.tagName === "SELECT" && el.parentElement && vis(el.parentElement));
+    return vis(el) || shownByWrapper(el, vis);
   }
 
   // Text of the elements an aria-labelledby / aria-describedby attribute points at (ids are looked
@@ -189,17 +287,51 @@ if (!window.__krify) {
       .join(" ").trim();
   }
 
+  // A button-like <input>'s visible text: its value, its alt (image buttons), or the browser's own
+  // default caption – read before `name`, which is a field id (Rails' name="commit" value="Sign in").
+  function buttonInputText(el) {
+    if (el.tagName !== "INPUT" || !/^(submit|button|reset|image)$/.test(el.type)) return "";
+    if (el.type === "image") return el.getAttribute("alt") || el.getAttribute("value") || "";
+    return el.value || { submit: "Submit", reset: "Reset" }[el.type] || "";
+  }
+
+  // An icon-only button (no text, no aria-label): its SVG <title>, tooltip attribute, or a well-known
+  // icon name in its classes / sprite reference ("fa-search", "#icon-close") – "search (icon)".
+  const ICON_WORDS = new Set(("search close x menu hamburger cart basket bag delete trash bin edit pencil plus add " +
+    "minus settings gear cog user account profile heart wishlist favorite star share filter sort download upload " +
+    "refresh reload send home bell notification notifications play pause next prev previous back forward more " +
+    "ellipsis kebab dots calendar copy print help info expand collapse chevron arrow").split(" "));
+  function iconLabel(el) {
+    const named = el.querySelector("svg title")?.textContent || el.getAttribute("data-tooltip") ||
+      el.getAttribute("data-title") || el.getAttribute("aria-description");
+    if (named) return named;
+    // Whole words only ("fa-search", "#icon-close", "SearchIcon" → search; never "display" → play).
+    const hints = [el, ...el.querySelectorAll("svg, i, span, use")]
+      .map((n) => `${n.getAttribute("class") || ""} ${n.getAttribute("href") || n.getAttribute("xlink:href") || ""} ${n.getAttribute("data-icon") || ""}`)
+      .join(" ")
+      .split(/[^a-zA-Z]+|(?=[A-Z][a-z])/)
+      .map((w) => w.toLowerCase());
+    const word = hints.find((w) => ICON_WORDS.has(w));
+    if (word) return `${word} (icon)`;
+    // A submit button with no name at all, in a search form: it's the search button.
+    const form = el.form;
+    const searchForm = form && (form.matches('[role=search], [action*="search" i]') || !!form.querySelector("input[type=search]"));
+    if (searchForm && el.type === "submit") return "search (icon)";
+    return "";
+  }
+
   function labelOf(el) {
     return keep(
       textOfIds(el, "aria-labelledby") ||
       el.getAttribute("aria-label") ||
       (el.labels && el.labels[0] && el.labels[0].innerText) ||
       el.innerText ||
+      buttonInputText(el) ||
       el.getAttribute("placeholder") ||
       el.getAttribute("title") ||
       el.querySelector("img[alt]")?.alt ||
+      (/^(BUTTON|A)$/.test(el.tagName) || el.getAttribute("role") === "button" ? iconLabel(el) : "") ||
       el.getAttribute("name") ||
-      (el.type === "submit" ? el.value : "") ||
       // A button inside a component often gets its label from the component itself.
       el.getRootNode()?.host?.getAttribute("aria-label") ||
       el.getRootNode()?.host?.innerText,
@@ -304,31 +436,50 @@ if (!window.__krify) {
   // errors without ARIA are found through fieldInfo() and marked "Form error".
   const STATUS_SELECTOR = '[role="alert"], [role="status"], [aria-live="polite"], [aria-live="assertive"]';
 
+  const offScreen = (el) => {
+    const r = el.getBoundingClientRect();
+    return r.bottom < 0 ? " (above the screen)" : r.top > innerHeight ? " (below the screen)" : "";
+  };
+
+  // Errors are read on the WHOLE page, not just the screen: clicking Save scrolls it to the middle,
+  // which often pushes the form's error banner off the top – and then "it worked" would be assumed.
   function statusSignals() {
     const seen = new Set();
+    const flagged = new Set(); // fields already reported, so the browser's own message isn't repeated
     const lines = [];
+    const add = (text, el) => {
+      text = clean(text, 1000);
+      if (!text || seen.has(text)) return;
+      seen.add(text);
+      lines.push(keep(text, 150) + offScreen(el));
+    };
     // Inline field errors first ("Form error – Contact: Contact is required"): they say exactly what to fix.
     for (const el of listed.values()) {
-      if (!el.isConnected || !visibleEnough(el)) continue;
+      if (!el.isConnected || !renderedEnough(el)) continue;
       const { label, error } = fieldInfo(el);
-      if (!error || seen.has(error)) continue;
-      seen.add(error);
-      lines.push(keep(`Form error – ${label || labelOf(el)}: ${error}`, 150));
+      if (!error) continue;
+      flagged.add(el);
+      add(`Form error – ${label || labelOf(el)}: ${error}`, el);
     }
     for (const r of allRoots()) {
       for (const el of r.querySelectorAll(STATUS_SELECTOR)) {
-        if (!visibleEnough(el)) continue;
-        const text = keep(el.innerText, 150);
-        if (!text || seen.has(text)) continue;
-        seen.add(text);
-        lines.push(text);
+        // Alerts count anywhere on the page; quieter status/live regions (cart counts, "3 results")
+        // only when they're on screen.
+        const loud = el.matches('[role="alert"], [aria-live="assertive"]');
+        if (!(loud ? renderedEnough(el) : visibleEnough(el))) continue;
+        add(el.innerText, el);
       }
-      for (const el of r.querySelectorAll(":invalid")) {
-        if (!visibleEnough(el) || !el.validationMessage) continue;
-        const text = keep(`${labelOf(el) || el.name || el.type}: ${el.validationMessage}`, 150);
-        if (seen.has(text)) continue;
-        seen.add(text);
-        lines.push(text);
+      // Fields the browser itself rejects (required, type=email, pattern…) – only once the user or a
+      // submit touched them (:user-invalid), not every empty required field from the start.
+      let rejected = [];
+      try {
+        rejected = r.querySelectorAll(":user-invalid");
+      } catch {
+        // older Chrome: no :user-invalid
+      }
+      for (const el of rejected) {
+        if (flagged.has(el) || !el.validationMessage || !renderedEnough(el)) continue;
+        add(`Form error – ${fieldInfo(el).label || labelOf(el) || el.name || el.type}: ${el.validationMessage}`, el);
       }
     }
     return lines.slice(0, 5).join(" | ");
@@ -346,9 +497,14 @@ if (!window.__krify) {
     if (tag === "input" || tag === "textarea") {
       const type = tag === "textarea" ? "textarea" : `input ${el.type || "text"}`;
       if (el.type === "checkbox" || el.type === "radio") return `${type} "${label}" (${el.checked ? "checked" : "unchecked"})`;
+      if (buttonInputText(el) || /^(submit|button|reset|image)$/.test(el.type)) return `${type} "${label}"`; // a button: its text is the label
       return `${type} "${label}"` + (el.value ? ` (value: "${keep(el.value, 40)}")` : " (empty)");
     }
     const role = el.getAttribute("role") || (tag === "a" ? "link" : pointerish.has(el) ? "clickable" : tag);
+    // A <button> that submits (or resets) its form says so: the AI must know which button sends it.
+    if (tag === "button" && !el.getAttribute("role") && el.form && (el.type === "submit" || el.type === "reset")) {
+      return `button ${el.type} "${label}"`;
+    }
     return `${role} "${label}"`;
   }
 
@@ -399,6 +555,14 @@ if (!window.__krify) {
       const near = [];
       const far = [];
       for (const el of all) (inPopups.has(el) || inView(el) ? near : far).push(el);
+      // Off-screen ones nearest the screen first: when the cap or time limit cuts, it cuts what's far
+      // away – not whatever comes last in the HTML (often what's just below the screen).
+      const gap = new Map(far.map((el) => {
+        const r = el.getBoundingClientRect();
+        return [el, Math.max(0, -r.bottom, r.top - innerHeight) + Math.max(0, -r.right, r.left - innerWidth)];
+      }));
+      // Paging and submit buttons first of all: on a long page they're what moves the task on.
+      far.sort((a, b) => keyControl(b) - keyControl(a) || gap.get(a) - gap.get(b));
       all = [...near, ...far];
       nearCount = near.length;
     }
@@ -445,18 +609,43 @@ if (!window.__krify) {
     return { numbered, hasPopup: inPopups.size > 0, lastId: id, partial };
   }
 
-  // On screen right now (the hidden-<select>-under-a-styled-button case counts via its wrapper).
+  // On screen right now (a hidden <select> or see-through control counts via its wrapper).
   function inView(el) {
-    return isVisible(el) || (el.tagName === "SELECT" && !!el.parentElement && isVisible(el.parentElement));
+    return isVisible(el) || shownByWrapper(el, isVisible);
   }
 
   function renderedEnough(el) {
-    return isRendered(el) || (el.tagName === "SELECT" && !!el.parentElement && isRendered(el.parentElement));
+    return isRendered(el) || shownByWrapper(el, isRendered);
   }
 
-  // Which numbering find_elements / inspect must repeat so their ids match the latest page view:
-  // set by getElements (screen, or whole page when unrestricted) and getPageModel (whole page).
-  let numbering = { max: MAX_ELEMENTS, whole: false };
+  // Paging / "Load more" / a form's submit button – kept in the page view however far away they are.
+  const KEY_TEXT = /^\s*(next( page)?|previous( page)?|prev|load more|show more|see more|view more|more results|›|»|‹|«|next ›|‹ previous)\s*$/i;
+  function keyControl(el) {
+    if (el.getAttribute("rel") === "next" || el.getAttribute("rel") === "prev") return true;
+    if (el.form && /^(BUTTON|INPUT)$/.test(el.tagName) && (el.type === "submit" || el.type === "image")) return true;
+    const text = el.textContent;
+    return text.length < 30 && KEY_TEXT.test(text);
+  }
+
+  // Number the elements the latest page view left out (past its cap, or off screen in the flat list)
+  // WITHOUT touching existing numbers: ids the AI already has keep pointing at the same elements.
+  // New ids start after 1000, so they can't collide with an embedded page's numbers.
+  function extendNumbering(root = document) {
+    let id = Math.max(1000, ...[...listed.keys()].map(Number));
+    const known = new Set(listed.values());
+    const roots = root === document ? allRoots() : [root];
+    const fresh = [...new Set([...roots.flatMap((r) => [...r.querySelectorAll(SELECTOR)]), ...pointerTargets(roots)])];
+    for (const el of fresh) {
+      if (known.has(el) || !renderedEnough(el) || el.disabled) continue;
+      if (el.parentElement?.closest("[data-krify-id]")) continue; // inside a numbered link/button: same click
+      if (/"\s*"/.test(describe(el)) && !/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)) continue; // unlabeled
+      id += 1;
+      el.setAttribute("data-krify-id", String(id));
+      listed.set(String(id), el);
+      known.add(el);
+    }
+  }
+
 
   // ---------- getPageModel(): the page as structured data ----------
   // Sections (dialog, header, nav, main, form, …) → cards (repeated items like product tiles,
@@ -589,6 +778,105 @@ if (!window.__krify) {
     return { title, price: pricesOf(card), rating: ratingOf(card, text), badges };
   }
 
+  // Clicking a submit button runs the browser's own checks (required, type=email, pattern…). When they
+  // fail, the browser shows a bubble that isn't part of the page and sends nothing – say which fields.
+  function validationProblems(el) {
+    const form = el.form;
+    const submits = form && /^(BUTTON|INPUT)$/.test(el.tagName) && (el.type === "submit" || el.type === "image");
+    if (!submits || form.noValidate || el.formNoValidate) return "";
+    return [...form.elements]
+      .filter((f) => f.willValidate && !f.validity.valid)
+      .slice(0, 4)
+      .map((f) => `Form error – ${fieldInfo(f).label || labelOf(f) || f.name}: ${f.validationMessage.replace(/\.$/, "")}`)
+      .join("; ");
+  }
+
+  // A link or form that would open a new tab (target="_blank", a page-wide <base target>, a submit
+  // button's formtarget): point it at this tab for the click, then put it back. Named targets that are
+  // frames on this page are left alone. Returns the undo (a no-op when nothing changed).
+  function keepInThisTab(el) {
+    const undo = [];
+    const retarget = (node, attr) => {
+      const own = (node.getAttribute(attr) || "").trim();
+      const target = own || (attr === "target" ? document.querySelector("base[target]")?.getAttribute("target") || "" : "");
+      if (!target || /^_(self|parent|top)$/i.test(target)) return;
+      if (target !== "_blank" && document.querySelector(`iframe[name="${CSS.escape(target)}"], frame[name="${CSS.escape(target)}"]`)) return;
+      undo.push(() => (own ? node.setAttribute(attr, own) : node.removeAttribute(attr)));
+      node.setAttribute(attr, "_self");
+    };
+    const link = el.closest?.("a[href], area[href]");
+    if (link) retarget(link, "target");
+    const submitter = el.closest?.("button, input[type=submit], input[type=image]");
+    if (submitter?.form) {
+      if (submitter.hasAttribute("formtarget")) retarget(submitter, "formtarget");
+      else retarget(submitter.form, "target");
+    }
+    return () => undo.forEach((fn) => fn());
+  }
+
+  // Runs a click/submit with new-tab links kept in this tab, when the side panel's switch is on.
+  function inThisTab(el, fn) {
+    const undo = window.__krify.sameTab ? keepInThisTab(el) : () => {};
+    try {
+      return fn();
+    } finally {
+      undo();
+    }
+  }
+
+  // The form's default button – the one a real Enter "clicks": its first submit button.
+  function defaultButtonOf(form) {
+    return [...form.elements].find((f) => /^(BUTTON|INPUT)$/.test(f.tagName) && (f.type === "submit" || f.type === "image")) || null;
+  }
+
+  const TEXT_INPUT = /^(text|search|email|url|tel|password|number|date|datetime-local|month|week|time)$/;
+
+  // What a real browser does after an Enter the page didn't handle itself (fake key events never
+  // trigger it, so it's done here – and only what the browser would do, never more).
+  function enterDefault(target) {
+    const tag = target.tagName;
+    // A focused button or link: Enter clicks it.
+    if (tag === "A" && target.href || tag === "BUTTON" || (tag === "INPUT" && /^(submit|button|reset|image)$/.test(target.type))) {
+      if (isDisabled(target)) return "Pressed Enter – nothing happened: the focused button is disabled";
+      inThisTab(target, () => target.click());
+      return `Pressed Enter on ${describe(target)}`;
+    }
+    // A multi-line box: Enter is a new line.
+    if (tag === "TEXTAREA" || target.isContentEditable) {
+      document.execCommand("insertText", false, "\n");
+      return "Pressed Enter (a new line in the text box – to send, click the send/submit button)";
+    }
+    const form = tag === "INPUT" && TEXT_INPUT.test(target.type) ? target.form : null;
+    if (!form) return "Pressed Enter (no form here – if nothing happens, click the search/send button instead)";
+    const button = defaultButtonOf(form);
+    if (button) {
+      if (isDisabled(button)) {
+        return `Pressed Enter – the form was NOT sent: its submit button "${labelOf(button)}" is disabled (a required field is probably empty)`;
+      }
+      const blocked = validationProblems(button);
+      inThisTab(button, () => button.click()); // what the browser does: runs its checks and submit handlers, with this submitter
+      return blocked ? `Pressed Enter – but the browser did NOT send the form: ${blocked}` : `Pressed Enter (sends the form via ${describe(button)})`;
+    }
+    // No submit button: the browser only sends a form with a single text field this way.
+    const fields = [...form.elements].filter((f) => f.tagName === "INPUT" && TEXT_INPUT.test(f.type));
+    if (fields.length === 1) {
+      inThisTab(target, () => form.requestSubmit());
+      return "Pressed Enter (sends the form)";
+    }
+    return "Pressed Enter – nothing was sent: this form has no submit button; click the button that sends it";
+  }
+
+  // Disabled for real: the property, a disabled <fieldset> around it (:disabled), or aria-disabled
+  // (custom buttons that look clickable but ignore clicks).
+  function isDisabled(el) {
+    try {
+      if (el.matches(":disabled")) return true;
+    } catch {
+      // not a form element
+    }
+    return el.disabled === true || el.getAttribute("aria-disabled") === "true";
+  }
+
   // Accessibility states the plain description doesn't already show. `field`: fieldInfo(el), so an
   // unlinked "Contact *" label and a plain red "Contact is required" count as required / invalid too.
   function statesOf(el, field = fieldInfo(el)) {
@@ -607,7 +895,7 @@ if (!window.__krify) {
     if (a("aria-selected") === "true") states.push("selected");
     if (a("aria-pressed") === "true") states.push("pressed");
     if (a("aria-current") && a("aria-current") !== "false") states.push("current");
-    if (el.disabled || a("aria-disabled") === "true") states.push("disabled");
+    if (isDisabled(el)) states.push("disabled");
     if (el.required || a("aria-required") === "true" || field.required) states.push("required");
     let invalid = a("aria-invalid") === "true" || !!field.error;
     try {
@@ -690,7 +978,6 @@ if (!window.__krify) {
   }
 
   function buildPageModel(start, max) {
-    numbering = { max, whole: true };
     const { numbered, hasPopup, lastId, partial } = numberElements(start, max, true);
 
     // Sections enclosing a node, outermost first (memoised: siblings share their ancestors' work).
@@ -969,7 +1256,6 @@ if (!window.__krify) {
     // Numbers start after `start`: embedded pages continue the main page's numbering.
     // Returns { text, count } – the side panel joins the main page and embedded pages.
     getElements(start = 0, max = MAX_ELEMENTS) {
-      numbering = { max, whole: false };
       const { numbered, hasPopup, lastId } = numberElements(start, max);
       const lines = [];
       const status = statusSignals();
@@ -1045,7 +1331,11 @@ if (!window.__krify) {
     findElements(query) {
       const q = clean(query || "", 200);
       if (!q) return "(empty query)";
-      const { numbered } = numberElements(0, numbering.max, numbering.whole);
+      // The latest page view's numbers stay as they are; elements it left out get new numbers.
+      extendNumbering();
+      const numbered = [...listed.entries()]
+        .filter(([, el]) => el.isConnected)
+        .map(([id, el]) => ({ id, text: describe(el) }));
       const matches = numbered.filter(({ text }) => matchesQuery(text, q));
       if (!matches.length) return `(no elements match "${q}")`;
       const lines = [];
@@ -1072,30 +1362,34 @@ if (!window.__krify) {
       const q = clean(query || "", 200).toLowerCase();
       if (!q) return "(empty query)";
       const norm = (s) => (s || "").replace(/\s+/g, " ").trim().toLowerCase();
-      // Smallest element whose own text contains the full query – descending into a child that
-      // also contains it in full, so a match split across siblings resolves to their common
+      // Every smallest element whose own text contains the full query – descending into a child
+      // that also contains it in full, so a match split across siblings resolves to their common
       // ancestor instead of the whole page.
-      function findContainer(el) {
-        if (/^(SCRIPT|STYLE|NOSCRIPT|TEMPLATE)$/.test(el.tagName)) return null;
-        if (el.checkVisibility && !el.checkVisibility({ opacityProperty: true, visibilityProperty: true })) return null;
-        if (!norm(el.innerText).includes(q)) return null;
-        for (const child of [...el.children, ...(el.shadowRoot?.children || [])]) {
-          const found = findContainer(child);
-          if (found) return found;
-        }
-        return el;
+      const matches = [];
+      function collect(el) {
+        if (/^(SCRIPT|STYLE|NOSCRIPT|TEMPLATE)$/.test(el.tagName)) return false;
+        if (el.checkVisibility && !el.checkVisibility({ opacityProperty: true, visibilityProperty: true })) return false;
+        if (!norm(el.innerText).includes(q)) return false;
+        let inChild = false;
+        for (const child of [...el.children, ...(el.shadowRoot?.children || [])]) inChild = collect(child) || inChild;
+        if (!inChild) matches.push(el);
+        return true;
       }
-      const match = findContainer(document.body);
-      if (!match) return `(no text found matching "${query}")`;
-      await bringIntoView(match);
-      return this.readText("screen");
+      collect(document.body);
+      if (!matches.length) return `(no text found matching "${query}")`;
+      // Asking again for the same text goes to the next match (a long page can have many).
+      const n = this.lastFind?.q === q && this.lastFind.count === matches.length ? (this.lastFind.n + 1) % matches.length : 0;
+      this.lastFind = { q, n, count: matches.length };
+      await bringIntoView(matches[n]);
+      const which = matches.length > 1 ? `[Match ${n + 1} of ${matches.length} – find_text again for the next one]\n` : "";
+      return which + this.readText("screen");
     },
 
     // Structure around the page or one element – headings, regions, nearby text – for when the
     // flat element list above doesn't make clear what goes with what (e.g. several "Add to cart"
     // buttons with no indication which belongs to which product).
     getAccessibilityTree({ ref, filter = "interactive", depth = 8 } = {}) {
-      numberElements(0, numbering.max, numbering.whole); // refresh ids so they match the latest page view
+      extendNumbering(); // keep the latest page view's numbers; number what it left out
       const root = ref ? containerOf(find(ref)) : document.body;
       const { lines, truncated } = buildTree(root, filter, Math.max(1, Number(depth) || 8));
       if (truncated) {
@@ -1112,6 +1406,11 @@ if (!window.__krify) {
     readText(scope = "screen", max = null) {
       const wholePage = scope === "page";
       const limit = max || (this.unrestricted ? Infinity : (wholePage ? MAX_TEXT : MAX_SCREEN_TEXT));
+      // "page" on a long page: from a little above the current screen down, not from the top every
+      // time (that's mostly the header and menu, and the same text however far you've scrolled).
+      const doc = document.scrollingElement || document.documentElement;
+      const fromHere = wholePage && limit !== Infinity && scrollY > innerHeight / 2;
+      const from = fromHere ? -innerHeight / 4 : -Infinity;
       const lines = [];
       let line = "";
       let lineTop = null;
@@ -1125,6 +1424,7 @@ if (!window.__krify) {
         const r = range.getBoundingClientRect();
         if (r.width < 1 || r.height < 1) continue; // not laid out
         if (!wholePage && (r.bottom < 0 || r.top > innerHeight)) continue; // off screen
+        if (r.bottom < from) continue; // above where this read starts
         if (parent.checkVisibility && !parent.checkVisibility({ opacityProperty: true, visibilityProperty: true })) continue;
         // Text at about the same height belongs to the same visual line.
         if (lineTop !== null && Math.abs(r.top - lineTop) > 6) {
@@ -1135,15 +1435,22 @@ if (!window.__krify) {
         lineTop = r.top;
         size += text.length + 1;
         if (size > limit) {
-          line += wholePage ? " …(text cut, page is long)" : " …(more on screen not shown)";
+          line += wholePage ? " …(text cut, page is long – scroll down and read again for the rest)" : " …(more on screen not shown)";
           break;
         }
       }
       if (line) lines.push(line);
+      if (fromHere && lines.length) {
+        const screens = Math.max(1, Math.ceil(doc.scrollHeight / innerHeight));
+        const at = Math.min(screens, Math.floor(scrollY / innerHeight) + 1);
+        lines.unshift(`[Page text from the current screen down (screen ${at} of about ${screens}). Text higher up isn't ` +
+          "included – use find_text for it, or scroll up and read again.]");
+      }
       if (wholePage && lines.length) {
         const counts = listCounts();
-        if (counts.length) lines.push(`[Exact counts of repeated rows loaded on this page: ${counts.join("; ")}. ` +
-          "Use these, don't count by eye. Rows on other pages / behind 'Load more' are not included.]");
+        if (counts.length) lines.push(`[Exact counts of repeated rows loaded on this page so far: ${counts.join("; ")}. ` +
+          "Use these, don't count by eye. Rows on other pages, behind 'Load more', or not loaded yet (lists that " +
+          "fill in as you scroll) are not included.]");
       }
       return lines.join("\n") || (wholePage ? "(no text on this page)" : "(no text visible on screen – try scrolling)");
     },
@@ -1195,21 +1502,21 @@ if (!window.__krify) {
 
     async click(id) {
       const el = find(id);
-      await bringIntoView(el);
-      await waitActionable(el, id);
+      const shown = clickTarget(el); // a hidden checkbox is clicked through its label, like a person does
+      await bringIntoView(shown);
+      const spot = await waitActionable(el, id);
       if (this.animate) {
-        const { x, y } = await moveCursorTo(el);
-        glow(el);
-        ripple(x, y);
+        await moveCursorTo(shown);
+        glow(shown);
+        ripple(spot.x, spot.y);
         await sleep(150);
       }
       // Make the click look like a real mouse: many apps (React Aria, Radix, Asana…) ignore clicks
       // at (0, 0) or with no pointerType / pressed button. isTrusted can't be faked, though.
-      const r = el.getBoundingClientRect();
-      const x = r.left + r.width / 2, y = r.top + r.height / 2;
+      const { x, y } = spot;
       // A real click lands on whatever is on top at that spot (often a child, e.g. the text span).
-      const top = document.elementFromPoint(x, y);
-      const target = top && el.contains(top) ? top : el;
+      const top = hitAt(x, y);
+      const target = top && containsDeep(shown, top) ? top : shown;
       const base = { bubbles: true, cancelable: true, composed: true, view: window, clientX: x, clientY: y, screenX: x + window.screenX, screenY: y + window.screenY, button: 0 };
       const ptr = { pointerId: 1, pointerType: "mouse", isPrimary: true, width: 1, height: 1 };
       const fire = (Type, type, extra = {}) => target.dispatchEvent(new Type(type, { ...base, ...extra }));
@@ -1225,7 +1532,12 @@ if (!window.__krify) {
       fire(PointerEvent, "pointerup", { ...ptr, buttons: 0, pressure: 0 });
       fire(MouseEvent, "mouseup", { buttons: 0, detail: 1 });
       // A dispatched "click" still follows links and ticks checkboxes, like el.click() did.
-      fire(PointerEvent, "click", { ...ptr, buttons: 0, detail: 1 });
+      const blocked = validationProblems(el); // checked first: the browser's own checks run on this click
+      inThisTab(el, () => fire(PointerEvent, "click", { ...ptr, buttons: 0, detail: 1 }));
+      if (blocked) {
+        return `Clicked [${id}] ${describe(el)} – but the browser did NOT send the form: ${blocked}. ` +
+          "Fill those fields, then submit again.";
+      }
       return `Clicked [${id}] ${describe(el)}`;
     },
 
@@ -1288,8 +1600,8 @@ if (!window.__krify) {
       }
       el.dispatchEvent(new Event("change", { bubbles: true }));
       if (submit) {
-        await this.pressKey("Enter"); // search in one step instead of two
-        return `Typed "${text}" into [${id}] and pressed Enter`;
+        const pressed = await this.pressKey("Enter"); // search in one step instead of two
+        return `Typed "${text}" into [${id}]; ${pressed}`;
       }
       return `Typed "${text}" into [${id}]`;
     },
@@ -1299,13 +1611,14 @@ if (!window.__krify) {
     // Scroll an element into view, show the cursor there, and return the spot to click.
     async pointAt(id) {
       const el = find(id);
-      await bringIntoView(el);
-      await waitActionable(el, id);
+      await bringIntoView(clickTarget(el));
+      const reach = await waitActionable(el, id);
       const r = el.getBoundingClientRect();
-      let spot = { x: r.left + Math.min(r.width / 2, 60), y: r.top + r.height / 2 };
+      // The Sheets Name box: near its left end (its middle can be under the dropdown arrow).
+      const spot = el.matches(NAME_BOX) ? { x: r.left + Math.min(r.width / 2, 60), y: r.top + r.height / 2 } : reach;
       if (this.animate) {
-        spot = await moveCursorTo(el);
-        glow(el);
+        await moveCursorToPoint(spot.x, spot.y); // the spot the real click will use, not just the centre
+        glow(clickTarget(el));
         ripple(spot.x, spot.y);
       }
       return { ...spot, nameBox: el.matches(NAME_BOX) };
@@ -1314,10 +1627,8 @@ if (!window.__krify) {
     // An element's spot without scrolling (a drag target must already be on screen).
     async spotOf(id) {
       const el = find(id);
-      if (!isVisible(el)) throw new Error(`[${id}] is not on screen – scroll so both ends of the drag are visible.`);
-      await waitActionable(el, id);
-      const r = el.getBoundingClientRect();
-      return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+      if (!visibleEnough(el) || !isVisible(clickTarget(el))) throw new Error(`[${id}] is not on screen – scroll so both ends of the drag are visible.`);
+      return waitActionable(el, id);
     },
 
     viewport() {
@@ -1339,8 +1650,44 @@ if (!window.__krify) {
 
     // Live description of a numbered element right now, or "" if it's gone – lets the backend check
     // an id still means what it meant when the model looked, before acting on it.
+    // Wait until the page stops changing: no elements added/removed or text changed for `quietMs`
+    // (at most `maxMs`) – content loaded by XHR after a click or scroll, a list filling in. Attribute
+    // changes don't count: carousels and animations change styles all the time.
+    settle(quietMs = 250, maxMs = 2500) {
+      return new Promise((resolve) => {
+        let quiet = null;
+        const done = () => {
+          observer.disconnect();
+          clearTimeout(quiet);
+          clearTimeout(cap);
+          resolve("ok");
+        };
+        const observer = new MutationObserver(() => {
+          clearTimeout(quiet);
+          quiet = setTimeout(done, quietMs);
+        });
+        observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
+        quiet = setTimeout(done, quietMs);
+        const cap = setTimeout(done, maxMs);
+      });
+    },
+
+    // For the Enter safety check: what Enter would send – the focused (or given) field, its form's
+    // default button, and whether THAT form asks for a password (not just any form on the page).
+    enterTarget(id) {
+      const el = id != null ? find(id) : activeDeep();
+      const form = el && el !== document.body ? el.form || null : null;
+      const button = form && defaultButtonOf(form);
+      return {
+        field: el && el !== document.body ? describe(el) : "",
+        submitter: button ? describe(button) : "",
+        password: !!form?.querySelector("input[type=password]"),
+        inForm: !!form,
+      };
+    },
+
     describeId(id) {
-      const el = document.querySelector(`[data-krify-id="${id}"]`);
+      const el = listed.get(String(id)) || document.querySelector(`[data-krify-id="${id}"]`); // listed: also inside components
       return el ? describe(el) : "";
     },
 
@@ -1429,12 +1776,16 @@ if (!window.__krify) {
         showKey(key);
         await sleep(400);
       }
-      const opts = { key, code: key, bubbles: true, cancelable: true };
-      target.dispatchEvent(new KeyboardEvent("keydown", opts));
+      // keyCode/which too: older handlers check e.keyCode === 13, not e.key.
+      const codes = { Enter: 13, Escape: 27, Tab: 9, Backspace: 8, Delete: 46, ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, " ": 32 };
+      const keyCode = codes[key] ?? (key.length === 1 ? key.toUpperCase().charCodeAt(0) : 0);
+      const opts = { key, code: key, keyCode, which: keyCode, bubbles: true, cancelable: true, composed: true };
+      const taken = !target.dispatchEvent(new KeyboardEvent("keydown", opts)); // the page's own handler cancelled it
+      if (key === "Enter" || key.length === 1) target.dispatchEvent(new KeyboardEvent("keypress", { ...opts, charCode: keyCode }));
       target.dispatchEvent(new KeyboardEvent("keyup", opts));
-      // Sites ignore fake key events, so Enter in a form submits the form directly.
-      if (key === "Enter" && target.form) target.form.requestSubmit();
-      return `Pressed ${key}`;
+      if (key !== "Enter") return `Pressed ${key}`;
+      if (taken) return "Pressed Enter (the page handled it)";
+      return enterDefault(target);
     },
 
     async scroll(direction) {
@@ -1511,14 +1862,14 @@ if (!window.__krify) {
 
   // Waits until an element's bounding box stops changing (scrolling/animating settled) for ~100ms,
   // or until timeout – a real settle-check instead of a fixed sleep guess. Returns the settled
-  // rect, or null if it never stopped moving in time.
+  // rect, or null if it never stopped moving in time. 2px tolerance: sub-pixel jitter isn't moving.
   async function waitStable(el, timeoutMs) {
     let lastRect = null, stableSince = 0;
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
       const r = el.getBoundingClientRect();
-      const moved = !lastRect || Math.abs(r.top - lastRect.top) > 0.5 || Math.abs(r.left - lastRect.left) > 0.5
-        || Math.abs(r.width - lastRect.width) > 0.5 || Math.abs(r.height - lastRect.height) > 0.5;
+      const moved = !lastRect || Math.abs(r.top - lastRect.top) > 2 || Math.abs(r.left - lastRect.left) > 2
+        || Math.abs(r.width - lastRect.width) > 2 || Math.abs(r.height - lastRect.height) > 2;
       lastRect = r;
       if (moved) stableSince = Date.now();
       else if (Date.now() - stableSince > 100) return r;
@@ -1527,28 +1878,90 @@ if (!window.__krify) {
     return null;
   }
 
+  // What's really at a spot – looking inside components, where the page only reports the host.
+  function hitAt(x, y) {
+    let hit = document.elementFromPoint(x, y); // Krify's own overlay ignores the mouse, so it's skipped
+    for (let shadow = hit && shadowOf(hit); shadow; shadow = shadowOf(hit)) {
+      const inner = shadow.elementFromPoint(x, y);
+      if (!inner || inner === hit) break;
+      hit = inner;
+    }
+    return hit;
+  }
+
+  // a contains b, across shadow-root edges (Node.contains stops at them).
+  function containsDeep(a, b) {
+    for (let n = b; n; n = n.parentNode || n.host) if (n === a) return true;
+    return false;
+  }
+
+  // Would a click at this spot reach the element? What's on top must be it, inside it, its own
+  // label / see-through wrapper, or a close wrapper of it – never just the page body.
+  function reaches(target, el, hit) {
+    if (!hit) return false;
+    if (hit === target || containsDeep(target, hit) || partOfControl(el, hit)) return true;
+    return hit !== document.body && hit !== document.documentElement && containsDeep(hit, target);
+  }
+
+  // Name what's in the way, so the AI can deal with it ("covered by [3] button "Accept cookies"").
+  function coverName(hit) {
+    const listedOne = hit.closest?.("[data-krify-id]");
+    if (listedOne) return `[${listedOne.getAttribute("data-krify-id")}] ${describe(listedOne)}`;
+    const box = hit.closest?.('[role=dialog], dialog, [aria-modal=true], [class*="cookie" i], [class*="consent" i], [class*="banner" i], [class*="overlay" i], [class*="backdrop" i], [class*="modal" i]') || hit;
+    const text = clean(box.innerText || "", 50);
+    return `${box.tagName.toLowerCase()}${text ? ` "${text}"` : " (an overlay)"}`;
+  }
+
   // Playwright-style "actionability" wait: before interacting, make sure the element is actually
   // ready – visible, stopped moving, not covered by something else, not disabled, still on the
-  // page – instead of firing the action immediately and hoping for the best. `proxy`: for a
-  // control with no meaningful on-screen point of its own (a hidden native <select>), check
-  // stability/occlusion against its visible wrapper instead of the real element.
+  // page – instead of firing the action immediately and hoping for the best. Checks the element's
+  // stand-in when it hides itself (a hidden <select>'s wrapper, a hidden checkbox's label);
+  // `proxy` overrides that. Returns the spot to click: the centre, or another inner point when
+  // something (a badge, a sticky bar) covers just the centre.
   async function waitActionable(el, id, { timeoutMs, proxy } = {}) {
     timeoutMs = timeoutMs ?? (window.__krify.animate ? 3000 : 2000);
-    const target = proxy || el;
+    const target = proxy || clickTarget(el);
     const start = Date.now();
+    let disabledSince = null;
+    let why = "hidden";
     while (Date.now() - start < timeoutMs) {
       if (!el.isConnected) throw new Error(`[${id}] was removed from the page while waiting – get the elements again.`);
-      if (visibleEnough(target) && !el.disabled) {
-        const r = await waitStable(target, Math.max(200, timeoutMs - (Date.now() - start)));
-        if (r) {
-          const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
-          const hit = document.elementFromPoint(cx, cy);
-          if (hit && (target === hit || target.contains(hit) || hit.contains(target))) return;
+      // Disabled: give it a moment (it may enable itself after the last input), then say so plainly.
+      if (isDisabled(el)) {
+        disabledSince ??= Date.now();
+        if (Date.now() - disabledSince > 800) {
+          throw new Error(`[${id}] is disabled – NOT clicked. Usually a required field is empty or invalid: ` +
+            "check the form's (required)/(invalid) fields and [Status], fill them, then try again.");
         }
+      } else if (visibleEnough(target) || visibleEnough(el)) {
+        const settled = await waitStable(target, Math.min(600, Math.max(200, timeoutMs - (Date.now() - start))));
+        const r = settled || target.getBoundingClientRect();
+        const spots = [[0.5, 0.5], [0.25, 0.5], [0.75, 0.5], [0.5, 0.3], [0.5, 0.7]]
+          .map(([fx, fy]) => ({ x: r.left + r.width * fx, y: r.top + r.height * fy }))
+          .filter((s) => s.x >= 0 && s.y >= 0 && s.x < innerWidth && s.y < innerHeight);
+        let reached = null, cover = null;
+        for (const spot of spots) {
+          const hit = hitAt(spot.x, spot.y);
+          if (reaches(target, el, hit)) {
+            reached = spot;
+            break;
+          }
+          cover ??= hit;
+        }
+        // Still animating (a pulsing "Buy" button never stands still): click anyway after a while.
+        if (reached && (settled || Date.now() - start > timeoutMs / 2)) return reached;
+        why = reached ? "still moving" : cover ? `covered by ${coverName(cover)}` : "off screen";
+      } else {
+        why = "hidden";
       }
       await sleep(80);
     }
-    throw new Error(`[${id}] isn't ready yet (hidden, disabled, still moving, or covered by something) – take a screenshot to check, or try again.`);
+    const next = {
+      hidden: "it may be inside a closed menu, tab or section – open that first",
+      "off screen": "scroll to it first",
+      "still moving": "wait a moment and try again",
+    }[why] || "close or dismiss that first (e.g. its Close/Accept button), or scroll so it isn't in the way";
+    throw new Error(`[${id}] can't be clicked yet: ${why} – ${next}.`);
   }
 
   // A shadow-DOM layer on top of the page, so page styles can't break it and it never blocks clicks.

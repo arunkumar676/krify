@@ -466,6 +466,16 @@ unrestrictedToggle.addEventListener("change", () => {
   chrome.storage.local.set({ unrestricted: unrestrictedToggle.checked });
 });
 
+// ---------- "Same tab" switch (new-tab links open in Krify's tab; read by operations.js per call) ----------
+
+const sameTabToggle = $("sameTabToggle");
+chrome.storage.local.get("sameTab").then(({ sameTab = true }) => {
+  sameTabToggle.checked = sameTab;
+});
+sameTabToggle.addEventListener("change", () => {
+  chrome.storage.local.set({ sameTab: sameTabToggle.checked });
+});
+
 // ---------- manual test buttons ----------
 
 const output = $("output");

@@ -40,14 +40,48 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   if (agentTabId === tabId) agentTabId = krifyTabs[krifyTabs.length - 1] ?? null;
 });
 
-// A link that opens in a new tab (target="_blank"): follow it there.
+// A tab opened from Krify's tab during a task (a new-tab link, the site's own window.open): follow it
+// there. With "Open links in the same tab" on, then open its address in Krify's own tab instead and
+// close the new one – except real pop-up windows (Google sign-in, payment pages talk back to the page
+// that opened them) and tabs that never get a normal web address (filled in by the page's script).
+let redirecting = null; // set while a new tab is being brought back – waitForLoad waits for it
+let redirectNote = ""; // told to the AI with the action's result
 chrome.tabs.onCreated.addListener((tab) => {
-  if (working && agentTabId !== null && tab.openerTabId === agentTabId && !krifyTabs.includes(tab.id)) {
-    krifyTabs.push(tab.id);
-    openedByKrify.add(tab.id);
-    agentTabId = tab.id;
-  }
+  if (!working || agentTabId === null || tab.openerTabId !== agentTabId || krifyTabs.includes(tab.id)) return;
+  const opener = agentTabId;
+  krifyTabs.push(tab.id);
+  openedByKrify.add(tab.id);
+  agentTabId = tab.id;
+  redirecting = (async () => {
+    if (!(await sameTabOn())) return;
+    const win = await chrome.windows.get(tab.windowId).catch(() => null);
+    if (!win || win.type !== "normal") return; // a pop-up window: leave it
+    const url = await webUrlOf(tab.id);
+    if (!url) return;
+    await chrome.tabs.update(opener, { url, active: true });
+    agentTabId = opener;
+    await chrome.tabs.remove(tab.id).catch(() => {}); // onRemoved takes it off krifyTabs
+    redirectNote = ` – it opened a new tab, so Krify opened that page here instead (${url})`;
+  })().catch(() => {}).finally(() => (redirecting = null));
 });
+
+// A new tab's web address once it has one (it starts blank); "" if it never gets one in ~3 seconds.
+async function webUrlOf(tabId) {
+  for (let i = 0; i < 15; i++) {
+    const tab = await chrome.tabs.get(tabId).catch(() => null);
+    if (!tab) return "";
+    const url = tab.pendingUrl || tab.url || "";
+    if (/^https?:/i.test(url)) return url;
+    await sleep(200);
+  }
+  return "";
+}
+
+// The side panel's "Open links in the same tab" switch (on unless turned off).
+async function sameTabOn() {
+  const { sameTab = true } = await chrome.storage.local.get("sameTab");
+  return sameTab;
+}
 
 /** Krify needs you (Allow/Block, a question, the answer): the panel can't follow Krify to the
  *  tabs it opens (Chrome only opens a panel after a click), so bring this panel's tab to the front. */
@@ -119,12 +153,17 @@ async function webTab() {
   return tab;
 }
 
-// Wait until the tab finishes loading (max 15 seconds).
+// Wait until the tab finishes loading (max 15 seconds). A new tab the action opened is brought back
+// into Krify's tab first (see onCreated), so it waits for the tab Krify is in after that.
 async function waitForLoad(tabId) {
   await sleep(300);
+  if (redirecting) {
+    await redirecting;
+    tabId = agentTabId ?? tabId;
+  }
   for (let i = 0; i < 50; i++) {
-    const tab = await chrome.tabs.get(tabId);
-    if (tab.status === "complete") return;
+    const tab = await chrome.tabs.get(tabId).catch(() => null);
+    if (!tab || tab.status === "complete") return;
     await sleep(300);
   }
 }
@@ -181,7 +220,7 @@ const FRAME_TEXT = 1200; // characters of text read per embedded page
 const elementFrame = new Map(); // element number → frame id (0 = main page)
 
 // In-page functions whose first argument is an element number.
-const ELEMENT_FNS = new Set(["click", "hover", "type", "pointAt", "spotOf", "focusCheck", "selectOption", "scrollAt", "describeId"]);
+const ELEMENT_FNS = new Set(["click", "hover", "type", "pointAt", "spotOf", "focusCheck", "selectOption", "scrollAt", "describeId", "enterTarget"]);
 
 /** The tab's embedded pages worth looking at, in page order: [{ frameId, label }]. */
 async function embeddedPages(tabId) {
@@ -232,23 +271,32 @@ async function callInPage(fnName, args = [], tabId = null, frameId = null) {
   const target = { tabId: tab.id, frameIds: [frameId] };
   let result;
   try {
-    await chrome.scripting.executeScript({ target, files: ["content.js"] });
     const animate = await showCursor();
     const unrestricted = await showUnrestricted();
-    [result] = await chrome.scripting.executeScript({
+    const sameTab = await sameTabOn();
+    // One call when Krify's script is already in the page (the usual case); only if it isn't – a
+    // new page, or the page navigated in between – inject it and call again.
+    const call = () => chrome.scripting.executeScript({
       target,
-      func: async (name, a, animate, glow, unrestricted) => {
+      func: async (name, a, animate, glow, unrestricted, sameTab) => {
+        if (!window.__krify) return { missing: true };
         try {
           window.__krify.animate = animate;
           window.__krify.unrestricted = unrestricted;
+          window.__krify.sameTab = sameTab;
           if (name !== "setWorking") window.__krify.setWorking(glow); // re-show after page loads
           return { ok: true, value: await window.__krify[name](...a) };
         } catch (err) {
           return { ok: false, error: err.message };
         }
       },
-      args: [fnName, args, animate, working && animate, unrestricted],
+      args: [fnName, args, animate, working && animate, unrestricted, sameTab],
     });
+    [result] = await call();
+    if (result?.result?.missing) {
+      await chrome.scripting.executeScript({ target, files: ["content.js"] });
+      [result] = await call();
+    }
   } catch (err) {
     // The embedded page went away (closed or reloaded).
     if (frameId !== 0) {
@@ -330,9 +378,14 @@ async function waitForSave() {
 
 // Run an in-page action, then give the page time to react or load.
 async function act(fnName, args, frameId = null) {
+  redirectNote = "";
   const value = await callInPage(fnName, args, null, frameId);
   await waitForLoad((await currentTab()).id);
-  return value;
+  // Content that loads after the action (a form's "Saved" message, results filled in by XHR).
+  await callInPage("settle").catch(() => {});
+  const note = redirectNote;
+  redirectNote = "";
+  return note && typeof value === "string" ? value + note : value;
 }
 
 export const operations = {
@@ -497,7 +550,7 @@ export const operations = {
   },
 
   // Interact
-  async click({ element, cell, button = "left", count = 1 }) {
+  async click({ element, cell, button = "left", count = 1, real = false }) {
     const n = Math.min(Math.max(Math.round(Number(count)) || 1, 1), 3);
     const btn = button === "right" ? "right" : "left";
     if (cell) {
@@ -510,7 +563,7 @@ export const operations = {
       await sleep(400);
       return `${clickWord(btn, n)} cell ${String(cell).toUpperCase()}${btn === "right" ? SHEETS_MENU_NOTE : ""}`;
     }
-    if (btn === "left" && n === 1) return act("click", [element]); // a normal click: no debugger needed
+    if (btn === "left" && n === 1 && !real) return act("click", [element]); // a normal click: no debugger needed
     const tab = await currentTab();
     if (isSheetUrl(tab.url)) {
       // On Sheets the numbered elements are toolbar parts or Sheets' hidden cell editor, not cells:
@@ -522,7 +575,7 @@ export const operations = {
     await sleep(300);
     await waitForLoad(tab.id);
     const note = btn === "right" && !needsRealInput(tab.url) ? RIGHT_CLICK_NOTE : "";
-    return `${clickWord(btn, n)} [${element}]${note}`;
+    return `${clickWord(btn, n)} [${element}]${real && btn === "left" && n === 1 ? " with the real mouse" : ""}${note}`;
   },
   // What's under a spot of the last screenshot (for the safety check before click_at).
   async element_at({ x, y }) {
@@ -532,6 +585,8 @@ export const operations = {
   },
   // What [id] currently points at (for the staleness check before acting on an element number).
   describe_element: ({ element } = {}) => callInPage("describeId", [element]),
+  // What pressing Enter would send (for the safety check): field, its form's default button, password?
+  enter_target: ({ element } = {}) => callInPage("enterTarget", [element ?? null]),
   async click_at({ x, y, button = "left", count = 1 }) {
     const n = Math.min(Math.max(Math.round(Number(count)) || 1, 1), 3);
     const btn = button === "right" ? "right" : "left";
@@ -650,8 +705,12 @@ export const operations = {
     return `Typed "${text}" where the cursor is${save ? " (Enter pressed to save it – the cursor moved down one row)" : ""}`;
   },
   // With an element: scroll the box/embedded page it's in. Without: the main page.
-  scroll: ({ direction, element }) =>
-    element != null ? callInPage("scrollAt", [element, direction]) : callInPage("scroll", [direction]),
+  // Then wait for what the scroll loads (infinite lists, lazy images and rows) before the next look.
+  async scroll({ direction, element }) {
+    const result = element != null ? await callInPage("scrollAt", [element, direction]) : await callInPage("scroll", [direction]);
+    await callInPage("settle", [300, 2000]).catch(() => {});
+    return result;
+  },
   select_option: ({ element, option }) => act("selectOption", [element, option]),
 
   // Control

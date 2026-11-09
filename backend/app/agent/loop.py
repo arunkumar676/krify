@@ -74,6 +74,65 @@ def image_size(data_url):
 ELEMENT_FIELDS = ("element", "from_element", "to_element")
 
 
+# "I have entered / clicked / …" in an answer or question: what kind of action must back it up.
+_CLAIMS = [
+    ("type", re.compile(r"\b(entered|typed|filled( in| out)?|input|keyed in|put in|written|wrote)\b", re.I)),
+    ("click", re.compile(r"\b(clicked|pressed|tapped|selected|chose|chosen|submitted|added|sent|posted|placed|saved|"
+                         r"signed (in|up|out)|logged (in|out)|opened|applied|confirmed|uploaded|deleted|removed)\b", re.I)),
+]
+# "I entered", "I have entered", "I've just entered", "I have now successfully entered" – the claim's subject.
+_FIRST_PERSON = re.compile(r"\bi('ve| have| had)?(\s+(now|already|successfully|just|also))*\s+$", re.I)
+_TYPE_OPS = {"type", "type_here", "go_to_cell"}
+_CLICK_OPS = {"click", "click_at", "press_key", "select_option", "type", "drag", "open_url", "new_tab", "go_back"}
+CLAIM_REJECTED = (
+    "REJECTED – not sent to the user: {}. Don't say you did something you didn't. Do it now with the right "
+    "tool (e.g. type the value into the field, then click its button) and check the page – or, if you can't, "
+    "say honestly what's still needed."
+)
+
+
+# A question that hands a browser step to the user ("Please sign in…", "click X", "go to the page")
+# or asks permission for something the Allow/Block prompt already covers.
+HANDOFF = re.compile(r"\b(please|kindly|could you|can you|you (need|have) to|you'll need to)\b[^.?!]{0,40}?\b"
+                     r"(sign ?in|log ?in|click|tap|go to|open|navigate|select|scroll)\b"
+                     r"|\b(do you approve|may i|shall i|should i|can i|is it ok(ay)?( if i| to)?|do i have your permission)\b"
+                     r"[^.?!]{0,40}?\b(sign ?in|log ?in|post|submit|continue|proceed|go ahead)\b", re.I)
+# Things only the user can give: a question about these is fine.
+USER_ONLY = re.compile(r"password|passcode|\botp\b|one[- ]time|verification code|captcha|security code|\bpin\b|"
+                       r"which (one|version|option|account)|choose|prefer", re.I)
+HANDOFF_REJECTED = (
+    "REJECTED – not sent to the user: you're asking them to do a browser step (or to approve one) that you can "
+    "do yourself. Do it now: risky steps like signing in get an Allow/Block prompt automatically.{} Ask the "
+    "user only for what you can't know (a password, an OTP, a choice)."
+)
+
+
+def unbacked_claims(text, actions):
+    """First-person claims ("I have entered the number 938…") with no matching action this task."""
+    problems = []
+    for sentence in re.split(r"(?<=[.!?])\s+", text or ""):
+        for kind, verbs in _CLAIMS:
+            for match in verbs.finditer(sentence):
+                if not _FIRST_PERSON.search(sentence[:match.start()][-40:]):
+                    continue  # not "I (have) …" – e.g. "Amazon has sent an OTP"
+                ops = _TYPE_OPS if kind == "type" else _CLICK_OPS
+                # Typing only counts as a click/submit when it pressed Enter too (type with submit=true).
+                done = [(op, args) for op, args, _ in actions
+                        if op in ops and (kind == "type" or op != "type" or args.get("submit"))]
+                verb = match.group(0)
+                if not done:
+                    what = "typing" if kind == "type" else "click or key"
+                    problems.append(f'you wrote "I {verb}", but no {what} action ran in this task')
+                elif kind == "type":
+                    # A value named in the claim (a long number, a quoted text) must be what was typed.
+                    values = [v for pair in re.findall(r"(\d{4,})|\"([^\"]{2,})\"", sentence) for v in pair if v]
+                    typed = " ".join(f"{args.get('text', '')} {args.get('cell', '')}" for _, args in done)
+                    missing = [v for v in values if v not in typed]
+                    if missing:
+                        problems.append(f'you wrote "I {verb}" {", ".join(missing)}, but that was never typed')
+    return list(dict.fromkeys(problems))
+
+
 def element_label(elements, element_id):
     """The label of element [n] in the flat element list ("" if it isn't there)."""
     try:
@@ -138,11 +197,13 @@ _STATUS_LINE = re.compile(r"^\[Status\] (.*)$", re.MULTILINE)
 
 def merge_elements(elements, found):
     """Fold find_elements matches into the stored element blob (by id), so safety.check's
-    element_line() can see elements discovered outside the shown window this turn."""
-    have = set(_ELEMENT_ID.findall(elements or ""))
-    new_lines = [ln for ln in (found or "").splitlines()
-                 if (m := re.match(r"^\[(\d+)\] ", ln)) and m.group(1) not in have]
-    return f"{elements}\n" + "\n".join(new_lines) if new_lines else elements
+    element_line() can see elements discovered outside the shown window this turn. A match for an
+    id already there replaces its line: the page's own description of it now is what counts."""
+    new = {m.group(1): ln for ln in (found or "").splitlines() if (m := re.match(r"^\[(\d+)\] ", ln))}
+    if not new:
+        return elements
+    kept = [ln for ln in (elements or "").splitlines() if not ((m := re.match(r"^\[(\d+)\] ", ln)) and m.group(1) in new)]
+    return "\n".join(kept + list(new.values()))
 
 
 _ELEMENT_LINE = re.compile(r'^\[(\d+)\] (\S+) "([^"]+)"', re.MULTILINE)
@@ -166,10 +227,13 @@ def is_sheet(url):
 PROGRESS_OPS = {"read_text", "find_text", "sheet_query", "read_cells", "go_to_cell", "type_here", "note", "type", "select_option", "open_url", "new_tab"}
 OLD_SCREENSHOT = "[older screenshot removed to save space]"
 IDLE_LIMIT = 5
-MAX_SCROLLS_PER_PAGE = 4
+# Scrolling: only scrolls that showed nothing new count against the page (a long list keeps showing
+# new rows), with a hard cap so an endless feed can't eat every step.
+MAX_IDLE_SCROLLS = 3
+MAX_SCROLLS_PER_PAGE = 12
 SCROLL_REFUSED = (
-    "NOT scrolled: you already scrolled this page 4 times. Decide with what you've found: save it with note, "
-    "or note that it's not on this site, then continue with your plan (or finish with done)."
+    "NOT scrolled: {} Decide with what you've found: save it with note, or note that it's not on this "
+    "site, then continue with your plan (or finish with done). find_text can still jump to a phrase."
 )
 WRAP_UP_AT = 5  # steps left
 WRAP_UP = (
@@ -507,6 +571,10 @@ class Agent:
         self.notes = []
         self.seen = []  # everything read from pages this task – used by the fact check
         self.fact_check_failed = False
+        self.claim_check_failed = False
+        self.handoff_check_failed = False
+        self.actions = []  # (op, args, result) that really ran – checked against "I have …" claims
+        self.turn_start = 0  # len(self.actions) when the user's latest message came in
         self.page_status = ""  # the page's own [Status] line as of the last page view
         self.ui_check_failed = False
 
@@ -549,6 +617,32 @@ class Agent:
             "values, report only what you actually saw or correctly computed from it (no guesses or made-up "
             "names), then call done again."
         )
+
+    def check_claims(self, text):
+        """Before an answer or question goes out: every "I have entered / clicked / submitted …" in it
+        must match an action that really ran in this task (a named value – a number, a quoted text –
+        must be what was typed). Rejects once; the second time it goes out. → message or None."""
+        if self.claim_check_failed:
+            return None
+        problems = unbacked_claims(text, self.actions)
+        if not problems:
+            return None
+        self.claim_check_failed = True
+        return CLAIM_REJECTED.format("; ".join(problems))
+
+    def check_handoff(self, question):
+        """Before a question goes out: is Krify telling the user to do a browser step ("please sign in",
+        "click …", "go to …") it could do itself – without having done anything since their last message?
+        Asking for a password / OTP / captcha is fine: only the user knows those. Rejects once."""
+        if self.handoff_check_failed or len(self.actions) > self.turn_start:
+            return None
+        if not HANDOFF.search(question) or USER_ONLY.search(question):
+            return None
+        self.handoff_check_failed = True
+        sign_in = next((line for line in (self.elements or "").splitlines()
+                        if re.match(r"^\[\d+\] ", line) and re.search(r"sign ?in|log ?in", line, re.I)), "")
+        hint = f" The sign-in link is on this page: {sign_in} – click it." if sign_in else ""
+        return HANDOFF_REJECTED.format(hint)
 
     def check_ui_state(self):
         """UI check before 'done': reject once if the page is showing a status/error message
@@ -601,9 +695,26 @@ class Agent:
             return REPEAT_NOTE
         return ""
 
+    def scroll_key(self, args):
+        """Scrolls are counted per page (and separately for a scrollable box on it)."""
+        return self.current_url + (" box" if args.get("element") is not None else "")
+
+    def scrolled(self, args, page):
+        """After a scroll: did it show anything not seen on this page before? (At the bottom, or going
+        back and forth, it didn't – those count toward the idle-scroll limit.)"""
+        done = self.scrolls.get(self.scroll_key(args))
+        if done is None:
+            return
+        view = hash(page)  # the whole view: its scroll position and on/off-screen markers change as it moves
+        seen = done.setdefault("views", set())
+        done["idle"] = done["idle"] + 1 if view in seen else 0
+        seen.add(view)
+
     def page_key(self, page):
         """A page's identity for loop detection: URL + which elements it has (typed values, ticks and
         states left out – so filling a form doesn't count as a different page)."""
+        if STRUCTURED_VIEW:  # the whole page's labels: the same wherever it's scrolled to
+            return hash((self.current_url, frozenset(re.findall(r'^\[\d+\] ([^"\n]*"[^"\n]*")', self.elements or "", re.M))))
         return hash((self.current_url, layout(page)))
 
     def start_trail(self, page):
@@ -644,7 +755,7 @@ class Agent:
     def check_progress(self, name, page_changed):
         """Stuck detector: count steps that don't move the task forward."""
         progress = name in PROGRESS_OPS or (
-            name in ("click", "click_at", "drag", "hover", "press_key", "go_back", "screenshot") and page_changed
+            name in ("click", "click_at", "drag", "hover", "press_key", "go_back", "screenshot", "scroll") and page_changed
         )
         self.idle_steps = 0 if progress else self.idle_steps + 1
         if self.idle_steps >= IDLE_LIMIT:
@@ -791,6 +902,7 @@ class Agent:
             self.task_text, self.notes, self.sites = task, [], set()
             self.goal, self.plan, self.done_when = "", [], ""
             self.plan_approved = False
+            self.actions = []
             self.seen = [task]  # numbers the user gave count as known
         self.idle_steps = 0
         self.tokens = 0
@@ -801,11 +913,14 @@ class Agent:
         self.note_warnings = set()  # wrong-product warnings already given (the 2nd try is saved)
         self.product_check_failed = False  # final answer sent back once for not naming the product
         self.fact_check_failed = False
+        self.claim_check_failed = False
+        self.handoff_check_failed = False
+        self.turn_start = len(self.actions)
         self.page_status = ""
         self.ui_check_failed = False
         self.notes_at_last_read = 0
         self.current_url = ""
-        self.scrolls = {}  # url -> times scrolled on that page
+        self.scrolls = {}  # url (+ " box") -> {"total", "idle" (scrolls that showed nothing new), "views" seen}
         self.edit_allowed = False  # the user allowed editing a Google Sheet/Doc in this task
         self.recent_steps = []  # for the repeat detector
         self.shot_size = None  # (width, height) of the last screenshot
@@ -914,6 +1029,10 @@ class Agent:
                         await self.ui("step", "🔍 Checking the page isn't showing an error before finishing")
                         self.messages.append({**tool_msg, "content": rejection})
                         continue
+                    if rejection := self.check_claims(summary):
+                        await self.ui("step", "🔍 Claim check: Krify said it did something it didn't – sent back")
+                        self.messages.append({**tool_msg, "content": rejection})
+                        continue
                     if rejection := self.check_facts(summary):
                         await self.ui("step", "🔍 Fact check: answer sent back to be checked")
                         self.messages.append({**tool_msg, "content": rejection})
@@ -956,6 +1075,12 @@ class Agent:
                                                     "update it; start finished steps with ✔."}
                         )
                     self.check_progress(name, False)
+                elif name == "ask_user" and (rejection := self.check_claims(str(args.get("question", "")))):
+                    await self.ui("step", "🔍 Claim check: Krify said it did something it didn't – sent back")
+                    self.messages.append({**tool_msg, "content": rejection})
+                elif name == "ask_user" and (rejection := self.check_handoff(str(args.get("question", "")))):
+                    await self.ui("step", "🔍 Krify asked you to do a step it can do itself – sent back")
+                    self.messages.append({**tool_msg, "content": rejection})
                 elif name == "ask_user":
                     self.messages.append({**tool_msg, "content": "Question shown. The user's answer comes next."})
                     await self.finish("ask", args.get("question", "Can you tell me more?"))
@@ -1002,6 +1127,11 @@ class Agent:
                     elif same_read:
                         # Reading the same unchanged text again (seen 6× in a row on Amazon): say so.
                         self.messages.append({**tool_msg, "content": SAME_READ + stuck})
+                    elif name == "find_text" and not str(result).startswith(("Error", "(no text")):
+                        # It scrolled to the match: show the page there, so the elements next to it have numbers.
+                        page = await self.page_view()
+                        prev_page = page
+                        self.add_with_page(tool_msg, f"{result}\n(Save facts you'll need later with note.)", page)
                     elif name in ("read_text", "find_text"):
                         if name == "read_text":
                             self.last_read = str(result)
@@ -1039,6 +1169,8 @@ class Agent:
                     changed = page != prev_page
                     # Going back to a page from a few actions ago isn't progress (A→B→A→B loops).
                     new_page, loop_note = self.check_loop(page, changed)
+                    if name == "scroll":
+                        self.scrolled(args, page)
                     result = (f"{result}{form_not_sent(name, args, label, self.page_status)}"
                               f"{self.check_progress(name, new_page)}"
                               f"{self.check_repeat(name, args, new_page)}{loop_note}")
@@ -1139,6 +1271,11 @@ class Agent:
                 now = f', now "{live}"' if live else ", now gone"
                 return (f'NOT done: [{element_id}] has changed since you looked (expected "{expected}"{now}) '
                         "– get the elements again."), "refused"
+        # Enter sends whatever form the field is in: look at that form's own button (e.g. "Place order").
+        if (name == "press_key" and str(args.get("key", "")).strip().lower() == "enter") or (name == "type" and args.get("submit")):
+            target = await self.browser_quiet("enter_target", {"element": args.get("element") if name == "type" else None})
+            if isinstance(target, dict):
+                args = {**args, "_enter": target}
         reason = safety.check(name, args, self.elements, self.last_typed_line, self.current_url)
         if reason == "Editing" and self.edit_allowed:
             reason = None  # editing this document was already allowed in this task
@@ -1151,16 +1288,22 @@ class Agent:
 
         if name == "scroll":
             # Scrolling a box (embedded page, chat list) has its own limit, apart from the page's.
-            key = self.current_url + (" box" if args.get("element") is not None else "")
-            count = self.scrolls.get(key, 0)
-            if count >= MAX_SCROLLS_PER_PAGE:
+            key = self.scroll_key(args)
+            done = self.scrolls.setdefault(key, {"total": 0, "idle": 0})
+            why = (f"the last {done['idle']} scrolls on this page showed nothing new." if done["idle"] >= MAX_IDLE_SCROLLS
+                   else f"you already scrolled this page {done['total']} times." if done["total"] >= MAX_SCROLLS_PER_PAGE else "")
+            if why:
                 await self.ui("step", "🛑 Scroll limit for this page – deciding with what was found")
-                return SCROLL_REFUSED, "refused"
-            self.scrolls[key] = count + 1
+                return SCROLL_REFUSED.format(why), "refused"
+            done["total"] += 1
+            done.setdefault("views", set()).add(hash(self.last_page))  # where it scrolls from counts as seen
 
         if name == "type":
             self.last_typed_line = safety.element_line(self.elements, args.get("element"))
-        return str(await self.safe_run(name, args)), "ok"
+        result = str(await self.safe_run(name, args))
+        if not result.startswith("Error"):
+            self.actions.append((name, {k: v for k, v in args.items() if not k.startswith("_")}, result))
+        return result, "ok"
 
     async def run_batch(self, tool_msg, steps):
         """The batch tool: several actions in a row, the page shown once at the end. Stops at a
@@ -1187,6 +1330,8 @@ class Agent:
                 report.append(f"{n}. {result}{not_sent} – stopped here.")
                 break
             new_page, loop_note = self.check_loop(page, page != prev)
+            if op == "scroll":
+                self.scrolled(args, page)
             self.check_progress(op, new_page)
             if loop_note:
                 report.append(f"{n}. {result}{loop_note} – stopped here.")
@@ -1257,6 +1402,13 @@ class Agent:
         except Exception as err:
             await self.ui("step", f"⚠️ {err}")
             return f"Error: {err}"
+
+    async def browser_quiet(self, name, args):
+        """A browser call whose failure doesn't matter (None instead of an error step in the panel)."""
+        try:
+            return await self.browser(name, args)
+        except Exception:
+            return None
 
     async def safe_run(self, name, args):
         try:

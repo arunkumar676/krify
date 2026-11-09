@@ -14,6 +14,7 @@ Try it on a saved page model:  uv run python -m app.agent.pageview fixtures/amaz
 """
 
 import json
+import re
 import sys
 from dataclasses import dataclass
 
@@ -24,6 +25,11 @@ COLLAPSED = {"footer"}  # sections shown only as a count in restricted mode
 PRIORITY = {"dialog": 0, "menu": 0, "form": 1, "search": 1, "main": 2, "page": 2, "region": 2, "header": 3,
             "aside": 4, "nav": 5, "toolbar": 5, "menubar": 5, "footer": 6}
 POPUP_KINDS = {"dialog", "menu"}
+# Controls worth naming even off screen or past a section's cap: paging and form submit buttons –
+# on a long page they're what moves the task on, and a count ("+40 below") hides them.
+KEY_CONTROL = re.compile(r'^(button submit|input submit|input image)\b|"\s*(next( page)?|previous( page)?|prev|load more|'
+                         r'show more|see more|view more|more results|›|»|‹|«)\s*"', re.I)
+MAX_KEY_CONTROLS = 6
 MAX_AMBIGUITY_GROUPS = 3
 POSITION = {-1: "above the screen", 1: "below the screen", 2: "off to the side"}
 
@@ -133,17 +139,21 @@ def _choose(entries, sections, focused, full):
         return {e.order for e in entries}
     focus_sections = {e.section for e in entries if e.el["id"] in focused
                       and "form" in sections[e.section]["kinds"]}
-    must, candidates, per_section = [], [], {}
+    must, candidates, per_section, key_controls = [], [], {}, []
     for e in entries:
         sec = sections[e.section]
+        key = bool(KEY_CONTROL.search(e.el["text"]))
         if POPUP_KINDS & set(sec["kinds"]) or e.el["id"] in focused or e.section in focus_sections:
             must.append(e)
         elif e.el.get("pos", 0) == 0 and not COLLAPSED & set(sec["kinds"]):
             per_section[e.section] = per_section.get(e.section, 0) + 1
             limit = SECTION_LIMITS.get(sec["kind"])
-            if limit is None or per_section[e.section] <= limit:
+            if limit is None or per_section[e.section] <= limit or key:
                 candidates.append(e)
+        elif key:
+            key_controls.append(e)  # off screen, or in the footer: named anyway (marked where it is)
     shown = must[:MAX_SHOWN]
+    shown += key_controls[:MAX_KEY_CONTROLS]
     candidates.sort(key=lambda e: (PRIORITY.get(sections[e.section]["kind"], 2), e.order))
     shown += candidates[:max(0, MAX_SHOWN - len(shown))]
     return {e.order for e in shown}
