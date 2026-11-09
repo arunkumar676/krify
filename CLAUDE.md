@@ -61,7 +61,10 @@ Key mechanics worth knowing before touching this file:
   re-injected via `header()` on every page view.
 - **Stuck/repeat detection**: `check_progress` (5 non-progress steps → nudge) and `check_repeat`
   (same op+args 3× in 6 steps with no page change → nudge) inject warning text into the tool result
-  rather than failing — the model is expected to self-correct.
+  rather than failing — the model is expected to self-correct. `check_loop` keeps a short trail of
+  page keys (URL + `layout()`): landing back on a page from a few actions ago isn't progress for
+  either detector, a repeating cycle (A→B→A→B, A→B→C→A→B→C) gets `LOOP_NOTE`, and a second cycle
+  in the same task ends it as an `ask` (`stop_looping()`) instead of burning steps.
 - **Fact check**: before a `done`, `check_facts()` rejects the summary once if it contains a 3+ digit
   number that never appeared in anything read this task (`self.seen`); a second rejection is allowed
   through with a caveat appended.

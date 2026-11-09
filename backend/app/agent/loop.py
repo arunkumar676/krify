@@ -151,6 +151,15 @@ REPEAT_NOTE = (
     "\nWarning: you've done this same step 3 times and nothing changed. Don't do it again: try a "
     "different way (another element, read_text, a fresh screenshot), or call ask_user."
 )
+LOOP_TRAIL = 8  # pages remembered (after each action) to spot going back and forth
+LOOP_NOTE = (
+    "\n⚠️ Going in circles: your last clicks keep switching between the same pages ({}). More clicking "
+    "won't help. Check the page open NOW: if it already does what the user asked (the page they named is "
+    "open, or its menu item shows (current)/(selected)), call done and say what's there – even if it's not "
+    "what you expected. Otherwise call plan with a corrected done_when, or ask_user."
+)
+LOOP_ASK = ("I kept going back and forth between {} without finishing. The page open now is \"{}\". "
+            "Is that what you wanted, or what should I do next?")
 NEW_SITE = ("\n[New site: {}] Check your plan still fits this site. If not, call plan with the fixed "
             "steps (keep ✔ on finished ones).")
 SAME_READ = ("You already read this – the text is exactly the same as last time. Don't read it again: "
@@ -187,19 +196,36 @@ def clean_text_reply(text):
     is just free text (could be nonsense from a weak model).
     """
     text = (text or "").strip()
-    # Forms seen: done({"summary": ...}), ask_user({"question": ...}), or a bare {"summary": ...}
+    # Forms seen: done({"summary": ...}), ask_user({"question": ...}), a bare {"summary": ...},
+    # {"done": {"summary": ...}}, {"name": "done", "arguments": {...}} – sometimes cut off before the
+    # last brace, or inside ```json fences.
     match = re.search(r"\b(?:done|ask_user)\s*\(\s*(\{.*\})\s*\)", text, re.DOTALL)
-    candidate = match.group(1) if match else text
+    candidate = match.group(1) if match else re.sub(r"^```(?:json)?\s*|\s*```$", "", text)
     if candidate.startswith("{"):
         try:
             args = json.loads(candidate)
-            if isinstance(args, dict):
-                if "question" in args:
-                    return "ask", str(args["question"]), True
-                if "summary" in args:
-                    return "done", str(args["summary"]), True
         except json.JSONDecodeError:
-            pass
+            args = None
+        while isinstance(args, dict) and "summary" not in args and "question" not in args:
+            inner = args.get("done") or args.get("ask_user") or args.get("arguments") or args.get("parameters")
+            if isinstance(inner, str):
+                try:
+                    inner = json.loads(inner)
+                except json.JSONDecodeError:
+                    inner = None
+            args = inner
+        if isinstance(args, dict):
+            if "question" in args:
+                return "ask", str(args["question"]), True
+            if "summary" in args:
+                return "done", str(args["summary"]), True
+        # Broken JSON (e.g. a missing closing brace): pull the field out directly.
+        for field, kind in (("question", "ask"), ("summary", "done")):
+            if found := re.search(rf'"{field}"\s*:\s*"((?:[^"\\]|\\.)*)"', candidate):
+                try:
+                    return kind, json.loads(f'"{found.group(1)}"'), True
+                except json.JSONDecodeError:
+                    return kind, found.group(1), True
     return "done", text or "Done.", False
 
 
@@ -442,6 +468,9 @@ class Agent:
         self.last_task = ""  # previous task, so the planner understands follow-ups
         self.last_status = ""  # how the previous task ended ("ask" = the next message is an answer)
         self.plan_approved = False  # has the user signed off on the current self.plan?
+        self.trail = []  # (page key, title) after each action that changed the page – loop detection
+        self.loop_warnings = 0
+        self.loop_question = ""
         self.notes = []
         self.seen = []  # everything read from pages this task – used by the fact check
         self.fact_check_failed = False
@@ -538,6 +567,46 @@ class Agent:
             self.recent_steps = []
             return REPEAT_NOTE
         return ""
+
+    def page_key(self, page):
+        """A page's identity for loop detection: URL + which elements it has (typed values, ticks and
+        states left out – so filling a form doesn't count as a different page)."""
+        return hash((self.current_url, layout(page)))
+
+    def start_trail(self, page):
+        self.trail = [(self.page_key(page), self.current_title)]
+        self.loop_warnings = 0
+        self.loop_question = ""  # set when it's still looping after a warning: stop and ask the user
+
+    def check_loop(self, page, changed):
+        """After an action. → (new_page, warning). new_page is False when the action led BACK to a
+        page seen a few actions ago – that's not progress (it hid going back and forth from the stuck
+        and repeat detectors, which only asked "did the page change?"). The warning is given when the
+        recent pages repeat in a cycle (A→B→A→B, or A→B→C→A→B→C); the 2nd time, loop_question is set."""
+        key = self.page_key(page)
+        if self.dev_mode and self.trace and changed:
+            self.trace[-1] += f' → "{self.current_title}"'
+        if key == self.trail[-1][0]:  # same page (maybe a ticked box or typed text): not a revisit
+            return changed, ""
+        revisit = any(k == key for k, _ in self.trail[-LOOP_TRAIL:])
+        self.trail = (self.trail + [(key, self.current_title)])[-2 * LOOP_TRAIL:]
+        keys = [k for k, _ in self.trail]
+        for period in (2, 3):
+            if len(keys) >= 2 * period and keys[-period:] == keys[-2 * period:-period]:
+                titles = list(dict.fromkeys(t or "untitled" for _, t in self.trail[-period:]))
+                where = " ↔ ".join(f'"{t}"' for t in titles) if len(titles) > 1 else f'"{titles[0]}" (the same few screens)'
+                self.trail = self.trail[-1:]  # a fresh start: it takes another full cycle to warn again
+                self.loop_warnings += 1
+                if self.loop_warnings >= 2:
+                    self.loop_question = LOOP_ASK.format(where, self.current_title or self.current_url)
+                return False, LOOP_NOTE.format(where)
+        return not revisit, ""
+
+    async def stop_looping(self):
+        """Still going in circles after a warning: stop and ask the user instead of burning steps."""
+        question, self.loop_question = self.loop_question, ""
+        await self.ui("step", "🔁 Going in circles – stopping to ask you")
+        await self.finish("ask", question)
 
     def check_progress(self, name, page_changed):
         """Stuck detector: count steps that don't move the task forward."""
@@ -713,6 +782,7 @@ class Agent:
         nudged = False
         empty_replies = 0
         page = await self.page_view()
+        self.start_trail(page)
         if not continuing:
             await self.make_plan(task, page, model)
         self.last_task = self.task_text
@@ -753,6 +823,9 @@ class Agent:
                     self.messages.append({"role": "user", "content": NUDGE})
                     nudged = True
                     continue
+                if not clear and text.lstrip().startswith(("{", "[", "```")):
+                    # Still unreadable JSON after the nudge: never show raw JSON to the user.
+                    text = "I finished, but my answer came out garbled. Please ask again."
                 if kind == "done" and (rejection := self.check_ui_state()):
                     await self.ui("step", "🔍 Checking the page isn't showing an error before finishing")
                     self.messages.append({"role": "user", "content": rejection})
@@ -813,10 +886,14 @@ class Agent:
                     self.messages.append({**tool_msg, "content": "Reported to the user."})
                     await self.finish("done", summary)
                     finished = True
-                elif name == "plan" and [str(s) for s in (args.get("steps") or [])][:8] == self.plan:
+                elif (name == "plan" and [str(s) for s in (args.get("steps") or [])][:8] == self.plan
+                      and not str(args.get("done_when") or "").strip()):
                     self.messages.append({**tool_msg, "content": SAME_PLAN})
                 elif name == "plan":
                     steps = [str(s) for s in (args.get("steps") or [])][:8]
+                    if done_when := str(args.get("done_when") or "").strip():
+                        # The site turned out different from what the first plan assumed.
+                        self.done_when = done_when[:200]
                     if not self.plan_approved:
                         decision, edited = await self.plan_review(steps)
                         self.plan = edited
@@ -902,6 +979,9 @@ class Agent:
                         self.boost_next = True  # it already flagged this page as unclear – help it decide
                 elif name == "batch":
                     actions_done += await self.run_batch(tool_msg, args.get("steps"))
+                    if self.loop_question:
+                        await self.stop_looping()
+                        finished = True
                 else:
                     result, status = await self.do_action(name, args)
                     if status != "ok":
@@ -914,18 +994,24 @@ class Agent:
                     failed = result.startswith("Error")
                     page = await self.page_view()
                     changed = page != prev_page
-                    result = f"{result}{self.check_progress(name, changed)}{self.check_repeat(name, args, changed)}"
+                    # Going back to a page from a few actions ago isn't progress (A→B→A→B loops).
+                    new_page, loop_note = self.check_loop(page, changed)
+                    result = (f"{result}{self.check_progress(name, new_page)}"
+                              f"{self.check_repeat(name, args, new_page)}{loop_note}")
                     more = any(c.function.name in ACTION_OPS for c in calls[i + 1:])
                     later = [_args_of(c) for c in calls[i + 1:] if c.function.name in ACTION_OPS]
                     moved = failed or (layout(page) != layout(prev_page) and any(uses_element(a) for a in later))
                     prev_page = page
-                    if more and not moved and actions_done < MAX_BATCH:
+                    if more and not moved and not loop_note and actions_done < MAX_BATCH:
                         self.messages.append({**tool_msg, "content": f"{result} (next step follows)"})
                         continue
                     if more:
                         batch_stopped = BATCH_LIMIT if actions_done >= MAX_BATCH else (STEP_FAILED if failed else PAGE_MOVED)
                     # Show the AI the page after the last action, so it can check the result.
                     self.add_with_page(tool_msg, result, page)
+                    if self.loop_question:
+                        await self.stop_looping()
+                        finished = True
 
             if finished:
                 return
@@ -963,6 +1049,10 @@ class Agent:
         """One browser action, with the safety check and the scroll limit.
         Returns (result text, status): status "ok", "blocked" (by the user) or "refused" (scroll limit)."""
         label = describe(name, args)
+        # Say WHAT was clicked, not just its number: "Click [24] · link "People"" (numbers change per page).
+        target = next((args[f] for f in ELEMENT_FIELDS if args.get(f) is not None), None)
+        if target is not None and (line := safety.element_line(self.elements, target)):
+            label += f" · {line if len(line) <= 70 else line[:70] + '…'}"
         await self.ui("step", label)
         if self.dev_mode:
             self.trace.append(label)
@@ -1048,7 +1138,11 @@ class Agent:
                 break
             ran += 1
             page = await self.page_view()
-            self.check_progress(op, page != prev)
+            new_page, loop_note = self.check_loop(page, page != prev)
+            self.check_progress(op, new_page)
+            if loop_note:
+                report.append(f"{n}. {result}{loop_note} – stopped here.")
+                break
             if result.startswith("Error"):
                 report.append(f"{n}. {describe(op, args)} FAILED: {result} – stopped here.")
                 break

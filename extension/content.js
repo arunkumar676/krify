@@ -98,11 +98,17 @@ if (!window.__krify) {
   // Repeated rows/cards (tables, lists, grids), counted by code: the AI miscounts long lists by eye.
   // A group = a parent with 5+ children that look alike (same tag + classes) and have text.
   // Groups sitting inside an item of a bigger group (e.g. the cells of one row) are left out.
+  // A table row's cells are its columns, never rows: a 2-row, 5-column table must not read as
+  // "5 rows". A table body counts from 1 row, since a short filtered table is exactly what gets asked about.
   function listCounts() {
     const sig = (el) => el.tagName + "." + [...el.classList].filter((c) => !/active|selected|hover|focus|odd|even/i.test(c)).sort().join(".");
     const groups = [];
     for (const parent of deepAll("*")) {
-      if (parent.children.length < 5 || parent.tagName === "SELECT") continue;
+      if (parent.tagName === "SELECT" || parent.tagName === "TR" || parent.getAttribute("role") === "row") continue;
+      const tableBody = parent.tagName === "TBODY" ||
+        (parent.getAttribute("role") === "rowgroup" && !parent.querySelector("[role=columnheader]"));
+      const min = tableBody ? 1 : 5;
+      if (parent.children.length < min) continue;
       const tally = new Map();
       for (const kid of parent.children) {
         if (!kid.textContent.trim() || kid.getBoundingClientRect().height < 1) continue;
@@ -110,13 +116,16 @@ if (!window.__krify) {
         tally.set(key, [...(tally.get(key) || []), kid]);
       }
       const items = [...tally.values()].sort((a, b) => b.length - a.length)[0];
-      if (items && items.length >= 5) groups.push(items);
+      if (items && items.length >= min) groups.push({ items, table: tableBody });
     }
-    const kept = groups.filter((g) => !groups.some((h) => h !== g && h.length >= g.length && h.some((item) => item.contains(g[0]))));
+    const kept = groups.filter((g) => !groups.some((h) => h !== g && h.items.length >= g.items.length &&
+      h.items.some((item) => item.contains(g.items[0]))));
     return kept
-      .sort((a, b) => b.length - a.length)
+      // Table rows first: they're what "how many" questions are about, so they mustn't fall past the cap.
+      .sort((a, b) => b.table - a.table || b.items.length - a.items.length)
       .slice(0, 4)
-      .map((g) => `${g.length} rows like "${clean(g[0].innerText || g[0].textContent, 60)}"`);
+      .map(({ items, table }) => `${items.length} ${table ? "table " : ""}row${items.length === 1 ? "" : "s"} like ` +
+        `"${clean(items[0].innerText || items[0].textContent, 60)}"`);
   }
 
   // The parent, stepping out of a shadow root to the component that holds it.

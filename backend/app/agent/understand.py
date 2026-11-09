@@ -20,11 +20,17 @@ Reply with ONLY this JSON, nothing else:
 {"goal": "...", "steps": ["...", "..."], "done_when": "..."}
 
 - goal: one clear English sentence saying what the user wants. Keep their exact names, numbers and sites.
+  The goal and steps cover ONLY what the user's task asks. The previous task is there only to fill in
+  words that point back to it ("it", "that", "the same", "there", "again", "also", "now on flipkart").
+  A request that makes sense on its own is a new task: don't carry anything over from the previous one.
+  "This page/site/app" means the current page, not the previous task.
 - steps: 2-6 short steps (sites to open, what to search, what to read and note). Plan from what you know;
   you haven't seen the sites yet, so don't name buttons. Don't invent details the user didn't give
   (price limits, currency, models, shops). If the task is about the current page, don't plan to open it.
   Current page is a Google Sheet: read_text to see the columns, then sheet_query (SQL) for the answer.
-- done_when: how to tell the task is finished (e.g. "both prices are noted from real pages").
+- done_when: how to tell the task is finished, as something visible (e.g. "both prices are noted from
+  real pages"). Going to / opening a page: just that page being open (its title or URL, or its menu item
+  marked current/selected) – don't require content you only assume that page has.
 - A product that comes in versions with different prices (storage, size, RAM) and the user didn't say
   which: don't ask now. Plan to look on the first site, note the versions and prices there, then ask
   the user which one (with those real options), and only then check the other sites. Example for
@@ -68,7 +74,7 @@ async def understand(task, page, last_task, model, location=None, on_note=None):
     if where := where_line(location):
         context += f"\n{where}"
     if last_task:
-        context += f"\nPrevious task (this may be a follow-up to it): {last_task}"
+        context += f"\nPrevious task (use only if the task points back to it): {last_task}"
     messages = [{"role": "system", "content": PLANNER_PROMPT}, {"role": "user", "content": context}]
     try:
         reply, _, tokens = await ask_ai(messages, None, model, on_note=on_note)
