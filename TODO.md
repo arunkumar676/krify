@@ -101,3 +101,38 @@
 - [ ] Read console errors and network requests
 - [ ] Record a GIF
 - [ ] Resize the window (phone layout)
+
+## 15. New data to feed the AI
+
+### About the page
+- [ ] **What changed**: a short before/after note after each action ("popup opened", "URL changed")
+- [ ] **Element state**: checked/unchecked, open/closed, disabled, selected (`[22] checkbox (checked)`)
+- [ ] **What's covering the page**: "A popup is open on top. Close it first."
+- [ ] **Loading status**: "Page still loading" or "spinner visible", so the AI waits instead of clicking too early
+- [ ] **Error messages on the page**: red text like "Invalid email" or "Field required", shown as a separate item
+- [ ] **Scroll position**: "You're at 30% of the page, more below", so it knows whether to scroll
+- [ ] **Form summary**: every field, what's filled and what's empty (`Name: filled, Email: empty (required)`)
+
+### About the browser
+- [ ] **Open tabs**: titles of the tabs Krify is using, so it can switch on its own
+- [ ] **Downloads**: "file report.csv finished downloading"
+- [ ] **Network errors**: "Page failed to load (404)" or "No internet"
+- [ ] **Console errors**: a broken script on the site that explains why a click does nothing
+
+### About you and the task
+- [ ] **Your preferences**: "prefer cheapest", "use my work email", "Amazon.in, not .com"
+- [ ] **Today's date and time**: for tasks like "book for tomorrow"
+- [ ] **Clipboard text**: what you copied, only if you allow it
+- [ ] **Your selection**: text you highlighted on the page ("summarize this")
+
+### About past experience
+- [ ] **Site tips**: lessons learned on each site ("Asana: close the welcome popup first")
+- [ ] **Past successful tasks**: "Last time, 'open Agents' worked by clicking [15] and then [20]."
+- [ ] **Past failures**: "Last time, clicking 'Agents' did nothing, so use a real click."
+
+### My top 5 picks
+1. **What changed**: the AI knows whether its action worked
+2. **What's covering the page**: stops clicks hitting a popup instead of the button
+3. **Loading status**: stops the AI acting before the page is ready
+4. **Error messages**: lets it fix form mistakes on its own
+5. **Site tips**: Krify gets better on each site over time
