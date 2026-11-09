@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 
 from app import history, sheets
 from app.agent import pageview, safety
+from app.agent.changes import click_result
 from app.agent.prompt import system_prompt, where_line
 from app.agent.tools import TOOLS
 from app.agent.understand import understand
@@ -19,6 +20,7 @@ log = logging.getLogger("krify")
 
 READ_OPS = {"get_page_info", "get_elements", "find_elements", "find_text", "read_text", "sheet_query", "read_cells", "inspect"}
 SHEET_OPS = {"sheet_query", "read_cells"}
+SHEET_ONLY_TOOLS = SHEET_OPS | {"go_to_cell"}  # left out of the tool list until a Sheet is open (saves tokens)
 OLD_PAGE = "\n[older page view removed to save space]"
 OLD_SCREEN = "[older screen text removed to save space – use your notes]"
 MAX_READ_SITES = 3  # newest page text is kept for this many sites
@@ -463,6 +465,9 @@ class Agent:
         self.confirm = confirm  # async (text) -> bool: ask the user Allow / Block
         self.plan_review = plan_review  # async (steps) -> (action, steps): Approve / Update / Reject a plan
         self.elements = ""  # latest numbered element list, used by the safety check
+        # Sheets-only tools are sent only once a Google Sheet has been open (then always, since the
+        # chat history may hold calls to them, and a call to a tool not sent is rejected by the API).
+        self.sheet_tools = False
         self.last_typed_line = ""
         self.dev_mode = False  # debug trace (tools used + what they found) appended to the answer
         self.trace = []  # this task's trace, built only while dev_mode is on
@@ -820,8 +825,10 @@ class Agent:
             if MAX_STEPS - step == WRAP_UP_AT:
                 await self.ui("step", "⏰ Few steps left – asking Krify to wrap up")
                 self.messages.append({"role": "user", "content": WRAP_UP})
+            self.sheet_tools = self.sheet_tools or is_sheet(self.current_url)
+            tools = TOOLS if self.sheet_tools else [t for t in TOOLS if t["function"]["name"] not in SHEET_ONLY_TOOLS]
             reply, used_model, tokens = await ask_ai(
-                self.messages, TOOLS, model, on_note=lambda t: self.ui("step", t),
+                self.messages, tools, model, on_note=lambda t: self.ui("step", t),
                 need_vision=bool(self.screenshot_msgs), boost=self.boost_next,
             )
             self.boost_next = False
@@ -1012,6 +1019,9 @@ class Agent:
                         finished = True
                 else:
                     label = element_label(self.elements, args.get("element"))  # before: numbers may change
+                    # Remember the page before a click, to tell the AI plainly whether it worked.
+                    before = (self.current_url, self.elements)
+                    clicked = safety.element_line(self.elements, args.get("element")) if name == "click" else ""
                     result, status = await self.do_action(name, args)
                     if status != "ok":
                         self.messages.append({**tool_msg, "content": result})
@@ -1022,6 +1032,10 @@ class Agent:
                     actions_done += 1
                     failed = result.startswith("Error")
                     page = await self.page_view()
+                    if name in ("click", "click_at") and not failed:
+                        if sentence := click_result(before, (self.current_url, self.elements), clicked, self.current_title):
+                            log.info("  told the AI: %s", sentence)
+                            result = f"{result}\n{sentence}"
                     changed = page != prev_page
                     # Going back to a page from a few actions ago isn't progress (A→B→A→B loops).
                     new_page, loop_note = self.check_loop(page, changed)

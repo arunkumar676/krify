@@ -16,30 +16,26 @@ URL = {"type": "string", "description": "Full URL"}
 TEXT = {"type": "string"}
 
 TOOLS = [
-    _tool("read_text", "Read text on screen (prices, facts). scope=page reads the whole page "
-          "and gives exact row counts of its lists/tables (use for 'how many').",
+    _tool("read_text", "Read on-screen text (prices, facts). scope=page: the whole page, with exact "
+          "list/table row counts (for 'how many').",
           {"scope": {"type": "string", "enum": ["screen", "page"]}}),
-    _tool("inspect", "See the structure around one element or the page – headings, regions, nearby text – only "
-          "when the page view doesn't make clear what goes with what (e.g. which button belongs to which item). "
-          "ref=zoom into one element's area; filter=\"all\" adds non-clickable context "
-          "(default: clickable things only).",
+    _tool("inspect", "Structure (headings, regions, nearby text) around an element or the page – only when the "
+          "page view doesn't show what goes with what (which button belongs to which item). "
+          "ref=one element's area; filter=\"all\" adds non-clickable context.",
           {"ref": ELEMENT, "filter": {"type": "string", "enum": ["interactive", "all"]},
            "depth": {"type": "integer"}}),
-    _tool("find_elements", "Search for an element by its visible text/label when it's not in the shown "
-          "list (pages with hundreds of elements). Matches common synonyms too (e.g. \"sign out\" finds "
-          "\"Logout\") – if nothing matches, try another word for the same thing before giving up. "
-          "Returns matches as [id] description, same format as the normal list – click/type/etc. work "
-          "on the ids it returns.",
+    _tool("find_elements", "Find an element by its visible text when it's not in the list. Matches synonyms "
+          "(\"sign out\" finds \"Logout\"); if nothing matches, try another word. Returns [id] lines "
+          "you can click/type on.",
           {"query": TEXT}, ["query"]),
-    _tool("find_text", "Search the WHOLE page for a phrase or fact (not just clickable elements, and "
-          "not limited by read_text's length) – jumps straight to it and reads what's around it. Use "
-          "this for information on long pages where read_text(scope=\"page\") might cut it out.",
+    _tool("find_text", "Search the WHOLE page for a phrase/fact (any text, no length limit), jump to it "
+          "and read around it. For long pages where read_text might cut it off.",
           {"query": TEXT}, ["query"]),
     _tool("sheet_query", "Google Sheets: one SQL SELECT (DuckDB) on table sheet; quote column names, e.g. "
           "SELECT \"First Name\", \"Math Score\" FROM sheet WHERE \"Math Score\" = (SELECT MAX(\"Math Score\") FROM sheet)",
           {"sql": TEXT}, ["sql"]),
-    _tool("screenshot", "See the screen as an image, with element numbers drawn on it. Costs more: use only "
-          "when text isn't enough (pictures, icons, colours, maps, charts)."),
+    _tool("screenshot", "See the screen as an image with element numbers. Costs more: only when text isn't "
+          "enough (pictures, icons, colours, maps, charts)."),
     _tool("open_url", "Open a URL in this tab.", {"url": URL}, ["url"]),
     _tool("go_back", "Go back."),
     _tool("reload", "Reload the page."),
@@ -54,7 +50,7 @@ TOOLS = [
           "(Sheets grid, charts, maps). Same button/count as click.",
           {"x": {"type": "number"}, "y": {"type": "number"}, "button": {"type": "string", "enum": ["left", "right"]},
            "count": {"type": "integer"}}, ["x", "y"]),
-    _tool("drag", "Drag and drop: from an element or a screenshot spot, to an element or a spot (sliders, cards, columns).",
+    _tool("drag", "Drag from an element or screenshot spot to an element or spot (sliders, cards, columns).",
           {"from_element": ELEMENT, "to_element": ELEMENT, "from_x": {"type": "number"}, "from_y": {"type": "number"},
            "to_x": {"type": "number"}, "to_y": {"type": "number"}}),
     _tool("hover", "Point at an element without clicking (opens hover menus). If no menu opened, try real=true.",
@@ -75,8 +71,8 @@ TOOLS = [
           {"direction": {"type": "string", "enum": ["up", "down", "top", "bottom"]}, "element": ELEMENT}, ["direction"]),
     _tool("select_option", "Choose a dropdown option.", {"element": ELEMENT, "option": TEXT}, ["element", "option"]),
     _tool("wait", "Wait for loading (1-10 s).", {"seconds": {"type": "number"}}, ["seconds"]),
-    _tool("batch", "Do up to 5 actions in a row when you're sure of them without looking, e.g. filling a form. "
-          "Each step: {op, ...that action's fields}. You see the page after the last step.",
+    _tool("batch", "Up to 5 actions in a row when sure without looking (e.g. a form). "
+          "Each step: {op, ...its fields}. You see the page after the last step.",
           {"steps": {"type": "array", "items": {"type": "object", "properties": {
               "op": {"type": "string", "enum": ["type", "type_here", "go_to_cell", "click", "select_option", "press_key", "hover",
                                                 "scroll", "wait"]},
