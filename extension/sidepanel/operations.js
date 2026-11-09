@@ -166,7 +166,7 @@ const FRAME_TEXT = 1200; // characters of text read per embedded page
 const elementFrame = new Map(); // element number → frame id (0 = main page)
 
 // In-page functions whose first argument is an element number.
-const ELEMENT_FNS = new Set(["click", "hover", "type", "pointAt", "spotOf", "focusCheck", "selectOption", "scrollAt"]);
+const ELEMENT_FNS = new Set(["click", "hover", "type", "pointAt", "spotOf", "hoverSpot", "focusCheck", "selectOption", "scrollAt"]);
 
 /** The tab's embedded pages worth looking at, in page order: [{ frameId, label }]. */
 async function embeddedPages(tabId) {
@@ -204,9 +204,22 @@ async function callInAllFrames(fnName, args = []) {
 async function spotIn(fnName, element) {
   const spot = await callInPage(fnName, [element]);
   const frameId = elementFrame.get(String(element)) ?? 0;
-  if (frameId === 0) return spot;
+  if (frameId === 0 || !spot) return spot;
   const off = await callInPage("frameOffset", [], null, frameId);
   return { ...spot, x: spot.x + off.x, y: spot.y + off.y };
+}
+
+/** A "(shows on hover)" button: put the real mouse on its row first, so the site shows it. A fake
+ *  mouse-over doesn't trigger CSS :hover, which is how most sites show these buttons. */
+async function revealOnHover(element) {
+  const spot = await spotIn("hoverSpot", element);
+  if (!spot) return;
+  try {
+    await realMove((await currentTab()).id, spot.x, spot.y);
+    await sleep(300);
+  } catch {
+    // No real mouse (e.g. the user cancelled debugging): the normal click still reaches the button.
+  }
 }
 
 // Inject content.js (if needed), then call one of its functions inside the page.
@@ -445,6 +458,7 @@ export const operations = {
       await sleep(400);
       return `${clickWord(btn, n)} cell ${String(cell).toUpperCase()}${btn === "right" ? SHEETS_MENU_NOTE : ""}`;
     }
+    await revealOnHover(element);
     if (btn === "left" && n === 1) return act("click", [element]); // a normal click: no debugger needed
     const tab = await currentTab();
     if (isSheetUrl(tab.url)) {

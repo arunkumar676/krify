@@ -18,7 +18,8 @@ from urllib.parse import urlparse
 _HEADER = re.compile(r"^\[Current page\] (.*) – (\S*)$", re.M)
 _ELEMENT = re.compile(r"^\[\d+\] (.+)$", re.M)
 # Typed values and ticks: a change there isn't a new element (same rule as loop.layout()).
-_VALUES = re.compile(r' \((?:value: ".*?"|empty|checked|unchecked)\)| = ".*?"')
+# "(shows on hover)" goes too: a hover button the mouse just revealed is the same element.
+_VALUES = re.compile(r' \((?:value: ".*?"|empty|checked|unchecked|shows on hover)\)| = ".*?"')
 MAX_LABEL = 40
 
 

@@ -39,7 +39,7 @@ OVERWRITE_BLOCKED = (
 BLOCKED = ("BLOCKED by the user – this action was NOT done. "
            "Don't try it again. Tell the user what's left, or call ask_user.")
 DONE_TOO_EARLY ="Not sent: check the page after your steps first, then call done."
-_VALUES = re.compile(r' \((?:value: ".*?"|empty|checked|unchecked)\)| = ".*?"')
+_VALUES = re.compile(r' \((?:value: ".*?"|empty|checked|unchecked|shows on hover)\)| = ".*?"')
 
 
 def image_size(data_url):
