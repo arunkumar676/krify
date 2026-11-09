@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 
 from app import history, sheets
 from app.agent import pageview, safety
+from app.agent.changes import click_result
 from app.agent.prompt import system_prompt, where_line
 from app.agent.tools import TOOLS
 from app.agent.understand import understand
@@ -983,6 +984,9 @@ class Agent:
                         await self.stop_looping()
                         finished = True
                 else:
+                    # Remember the page before a click, to tell the AI plainly whether it worked.
+                    before = (self.current_url, self.elements)
+                    clicked = safety.element_line(self.elements, args.get("element")) if name == "click" else ""
                     result, status = await self.do_action(name, args)
                     if status != "ok":
                         self.messages.append({**tool_msg, "content": result})
@@ -993,6 +997,10 @@ class Agent:
                     actions_done += 1
                     failed = result.startswith("Error")
                     page = await self.page_view()
+                    if name in ("click", "click_at") and not failed:
+                        if sentence := click_result(before, (self.current_url, self.elements), clicked, self.current_title):
+                            log.info("  told the AI: %s", sentence)
+                            result = f"{result}\n{sentence}"
                     changed = page != prev_page
                     # Going back to a page from a few actions ago isn't progress (A→B→A→B loops).
                     new_page, loop_note = self.check_loop(page, changed)
