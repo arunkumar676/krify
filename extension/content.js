@@ -1079,13 +1079,29 @@ if (!window.__krify) {
         ripple(x, y);
         await sleep(150);
       }
-      const opts = { bubbles: true, cancelable: true, view: window };
-      el.dispatchEvent(new PointerEvent("pointerdown", opts));
-      el.dispatchEvent(new MouseEvent("mousedown", opts));
-      el.dispatchEvent(new PointerEvent("pointerup", opts));
-      el.dispatchEvent(new MouseEvent("mouseup", opts));
-      el.focus?.();
-      el.click();
+      // Make the click look like a real mouse: many apps (React Aria, Radix, Asana…) ignore clicks
+      // at (0, 0) or with no pointerType / pressed button. isTrusted can't be faked, though.
+      const r = el.getBoundingClientRect();
+      const x = r.left + r.width / 2, y = r.top + r.height / 2;
+      // A real click lands on whatever is on top at that spot (often a child, e.g. the text span).
+      const top = document.elementFromPoint(x, y);
+      const target = top && el.contains(top) ? top : el;
+      const base = { bubbles: true, cancelable: true, composed: true, view: window, clientX: x, clientY: y, screenX: x + window.screenX, screenY: y + window.screenY, button: 0 };
+      const ptr = { pointerId: 1, pointerType: "mouse", isPrimary: true, width: 1, height: 1 };
+      const fire = (Type, type, extra = {}) => target.dispatchEvent(new Type(type, { ...base, ...extra }));
+      fire(PointerEvent, "pointerover", { ...ptr, buttons: 0 });
+      fire(PointerEvent, "pointerenter", { ...ptr, buttons: 0, bubbles: false });
+      fire(MouseEvent, "mouseover", { buttons: 0 });
+      fire(MouseEvent, "mouseenter", { buttons: 0, bubbles: false });
+      fire(PointerEvent, "pointermove", { ...ptr, buttons: 0 });
+      fire(MouseEvent, "mousemove", { buttons: 0 });
+      fire(PointerEvent, "pointerdown", { ...ptr, buttons: 1, pressure: 0.5 });
+      const notCancelled = fire(MouseEvent, "mousedown", { buttons: 1, detail: 1 });
+      if (notCancelled) el.focus?.({ preventScroll: true }); // real browsers focus on mousedown unless prevented
+      fire(PointerEvent, "pointerup", { ...ptr, buttons: 0, pressure: 0 });
+      fire(MouseEvent, "mouseup", { buttons: 0, detail: 1 });
+      // A dispatched "click" still follows links and ticks checkboxes, like el.click() did.
+      fire(PointerEvent, "click", { ...ptr, buttons: 0, detail: 1 });
       return `Clicked [${id}] ${describe(el)}`;
     },
 
