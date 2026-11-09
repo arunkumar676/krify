@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 
 from app import history, sheets
 from app.agent import safety
-from app.agent.changes import what_changed
+from app.agent.changes import repeated_only, what_changed
 from app.agent.prompt import SYSTEM_PROMPT, where_line
 from app.agent.tools import TOOLS
 from app.agent.understand import understand
@@ -258,6 +258,7 @@ class Agent:
         self.messages = [{"role": "system", "content": SYSTEM_PROMPT}]
         self.page_views = []  # (message, text_before_page_view) – trimmed later to save tokens
         self.last_page = None
+        self.acted_on = ""  # label of the element the last action used, e.g. 'button "Contact sales"'
         self.screen_reads = {}  # site -> its newest read_text result (older ones are trimmed)
         self.screenshot_msgs = []  # messages holding a screenshot – dropped when the page changes
         self.tokens = 0
@@ -331,6 +332,10 @@ class Agent:
         changing (e.g. clicking one spot over and over). Positions within 20px count as the same."""
         clean = {k: (round(v / 20) if k in ("x", "y", "from_x", "from_y", "to_x", "to_y") and isinstance(v, (int, float))
                      else v) for k, v in args.items() if not k.startswith("_")}
+        # Element numbers are given out fresh on every look, so the same button can be [32] then
+        # [41]: compare what it is (its label), not its number.
+        if "element" in clean and self.acted_on:
+            clean["element"] = self.acted_on
         sig = f"{name} {json.dumps(clean, sort_keys=True, default=str)}"
         if page_changed:
             self.recent_steps = []
@@ -638,7 +643,8 @@ class Agent:
                         continue
                     actions_done += 1
                     page = await self.page_view()
-                    changed = page != prev_page
+                    # Extra copies of what was already there (a form opened twice) isn't progress.
+                    changed = page != prev_page and not repeated_only(prev_page, page)
                     # Say plainly what the action changed, so the model knows if it worked.
                     if diff := what_changed(prev_page, page):
                         result = f"{result}\n{diff}"
@@ -739,6 +745,8 @@ class Agent:
 
         if name == "type":
             self.last_typed_line = safety.element_line(self.elements, args.get("element"))
+        line = safety.element_line(self.elements, args.get("element")) if args.get("element") is not None else ""
+        self.acted_on = _VALUES.sub("", line)  # typed values don't make it a different element
         return str(await self.safe_run(name, args)), "ok"
 
     async def run_batch(self, tool_msg, steps):
@@ -761,7 +769,7 @@ class Agent:
                 break
             ran += 1
             page = await self.page_view()
-            self.check_progress(op, page != prev)
+            self.check_progress(op, page != prev and not repeated_only(prev, page))
             if result.startswith("Error"):
                 report.append(f"{n}. {describe(op, args)} FAILED: {result} – stopped here.")
                 break

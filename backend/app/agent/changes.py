@@ -6,8 +6,9 @@ spot the difference in two long element lists, this compares them and says it pl
     Changed: URL /list → /agents. New (12): "New agent", "Templates", … (+9 more). Gone (8): …
     Nothing changed on the page – the action may not have worked.
 
-Elements are compared by their label, not their [number], because numbers shift when the page
-changes. Duplicate labels (several "Add to cart" buttons) are counted, not merged.
+Elements are compared by their label, not their [number], because numbers are given out fresh
+(top to bottom) on every look. Duplicate labels (several "Add to cart" buttons) are counted, not
+merged, so a second copy of the same form showing up is noticed (repeated_only).
 """
 
 import re
@@ -52,12 +53,33 @@ def _url_change(old, new):
     return f"{old[:80]} → {new[:80]}"
 
 
+def _not_elements(page):
+    """Everything in a page view except the element lines (notes, tabs, header)."""
+    return _ELEMENT.sub("", page or "").strip()
+
+
+def repeated_only(before, after):
+    """True if the only change is extra copies of elements that were already there – e.g. clicking
+    "Contact sales" again stacked another copy of the same form. That's not real progress."""
+    old, new = _parse(before), _parse(after)
+    if not old or not new:
+        return False
+    (_, u1, els1, _), (_, u2, els2, _) = old, new
+    added, gone = els2 - els1, els1 - els2
+    return u1 == u2 and not gone and bool(added) and all(label in els1 for label in added)
+
+
 def what_changed(before, after, limit=5):
     """One line saying what changed between two page views ('' if either can't be compared)."""
     old, new = _parse(before), _parse(after)
     if not old or not new:
         return ""
     (t1, u1, els1, raw1), (t2, u2, els2, raw2) = old, new
+    if repeated_only(before, after):
+        added = els2 - els1
+        return (f"Only copies of elements already on the page appeared ({sum(added.values())}: "
+                f"{', '.join(_short(x) for x in list(added)[:limit])}). Whatever you opened is probably "
+                "already open – don't click it again; check the page instead.")
     parts = []
     if u1 != u2:
         parts.append(f"URL {_url_change(u1, u2)}")
@@ -72,6 +94,7 @@ def what_changed(before, after, limit=5):
         parts.append("only a typed value or tick changed")
     if parts:
         return "Changed: " + ". ".join(parts) + "."
-    if before.strip() != after.strip():
+    if _not_elements(before) != _not_elements(after):
         return "Changed: something outside the element list (e.g. page notes or tabs)."
+    # Same elements, maybe with new numbers: the page didn't really change.
     return "Nothing changed on the page – the action may not have worked."
