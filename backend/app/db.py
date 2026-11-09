@@ -26,6 +26,7 @@ def _now():
 class Task(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     text: str = Field(index=True)
+    client: str = Field(default="", index=True)  # extension install that ran it ("" = before per-person history)
     model: str = ""
     status: str = "running"  # running | done | ask | stopped | error
     summary: str = ""
@@ -58,6 +59,20 @@ class Limit(SQLModel, table=True):
 
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {})
 SQLModel.metadata.create_all(engine)
+
+
+def _add_missing_columns():
+    """create_all() makes new tables but never adds columns to old ones: add them by hand (SQLite)."""
+    if not DATABASE_URL.startswith("sqlite"):
+        return
+    with engine.begin() as conn:
+        columns = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(task)")}
+        if "client" not in columns:
+            conn.exec_driver_sql("ALTER TABLE task ADD COLUMN client VARCHAR NOT NULL DEFAULT ''")
+            conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_task_client ON task (client)")
+
+
+_add_missing_columns()
 
 
 def session():

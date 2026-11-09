@@ -55,3 +55,5 @@ MAX_STEPS = int(os.getenv("MAX_STEPS", "25"))  # safety limit per task
 # the extension's get_page_model). 0 = the old flat element list (get_elements).
 STRUCTURED_VIEW = os.getenv("STRUCTURED_VIEW", "1") == "1"
 PORT = int(os.getenv("PORT", "8765"))
+# 127.0.0.1 = only this PC. 0.0.0.0 = other PCs on your network can connect too.
+HOST = os.getenv("HOST", "127.0.0.1")

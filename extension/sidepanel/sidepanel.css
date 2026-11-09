@@ -121,6 +121,9 @@ button.small { font-size: 12px; padding: 4px 8px; }
 .fields input { font: inherit; padding: 5px 7px; border: 1px solid #c9ccd4; border-radius: 6px; }
 #elementInput { width: 70px; }
 #textInput { width: 180px; }
+.server .fields { align-items: flex-end; }
+#serverInput { width: 220px; }
+.server .hint { font-size: 12px; color: #666; margin: 6px 0; }
 #output {
   white-space: pre-wrap;
   word-break: break-word;

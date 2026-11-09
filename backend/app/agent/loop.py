@@ -44,6 +44,12 @@ PLAN_NOT_APPROVED = ("Skipped: waiting for the user to approve your plan. If the
                      "revise it and call plan again.")
 # "[12] input text "Email"" – an element's number, type and label, without its value/ticks/states.
 _ELEMENT_KEY = re.compile(r'\[\d+\] [^"\n]*"[^"\n]*"')
+# A submit that didn't go through: the page shows inline field errors (content.js's "Form error" lines).
+SUBMIT_WORDS = re.compile(r"save|submit|add|create|update|send|continue|next|confirm|apply|register|sign ?up|book|"
+                          r"post|done|finish|place order|pay", re.I)
+FORM_ERROR = "Form error – "
+FORM_NOT_SENT = ("\nNOT saved – the form shows errors: {}. Fill those fields (a \"clickable\" dropdown: click it, "
+                 "then click an option), then submit again.")
 
 
 def image_size(data_url):
@@ -64,6 +70,27 @@ def image_size(data_url):
 
 
 ELEMENT_FIELDS = ("element", "from_element", "to_element")
+
+
+def element_label(elements, element_id):
+    """The label of element [n] in the flat element list ("" if it isn't there)."""
+    try:
+        n = int(element_id)
+    except (TypeError, ValueError):
+        return ""
+    match = re.search(rf'^\s*\[{n}\] [^"\n]*"([^"\n]*)"', elements or "", re.M)
+    return match.group(1) if match else ""
+
+
+def form_not_sent(name, args, label, page_status):
+    """After a submit-like step: if the page now shows inline form errors, say plainly it wasn't saved."""
+    submitted = ((name == "click" and SUBMIT_WORDS.search(label or ""))
+                 or (name == "press_key" and str(args.get("key", "")).lower() == "enter")
+                 or (name == "type" and args.get("submit")))
+    if not submitted:
+        return ""
+    errors = [part[len(FORM_ERROR):] for part in (page_status or "").split(" | ") if part.startswith(FORM_ERROR)]
+    return FORM_NOT_SENT.format("; ".join(errors)) if errors else ""
 
 
 def uses_element(args):
@@ -430,7 +457,8 @@ def describe(name, args):
 class Agent:
     """One agent per side-panel connection. Keeps the chat so follow-ups work."""
 
-    def __init__(self, browser, ui, confirm, plan_review):
+    def __init__(self, browser, ui, confirm, plan_review, client=""):
+        self.client = client  # which extension install this is (history is kept per install)
         self.browser = browser  # async (name, args) -> str, raises on failure
         self.confirm = confirm  # async (text) -> bool: ask the user Allow / Block
         self.plan_review = plan_review  # async (steps) -> (action, steps): Approve / Update / Reject a plan
@@ -763,7 +791,7 @@ class Agent:
         self.tokens = 0
         self.trace = []
         self.model = model
-        self.task_id = history.start_task(task, model)
+        self.task_id = history.start_task(task, model, self.client)
         self.last_read = ""  # newest read_text result, to catch reading the same text again
         self.note_warnings = set()  # wrong-product warnings already given (the 2nd try is saved)
         self.product_check_failed = False  # final answer sent back once for not naming the product
@@ -983,6 +1011,7 @@ class Agent:
                         await self.stop_looping()
                         finished = True
                 else:
+                    label = element_label(self.elements, args.get("element"))  # before: numbers may change
                     result, status = await self.do_action(name, args)
                     if status != "ok":
                         self.messages.append({**tool_msg, "content": result})
@@ -996,7 +1025,8 @@ class Agent:
                     changed = page != prev_page
                     # Going back to a page from a few actions ago isn't progress (A→B→A→B loops).
                     new_page, loop_note = self.check_loop(page, changed)
-                    result = (f"{result}{self.check_progress(name, new_page)}"
+                    result = (f"{result}{form_not_sent(name, args, label, self.page_status)}"
+                              f"{self.check_progress(name, new_page)}"
                               f"{self.check_repeat(name, args, new_page)}{loop_note}")
                     more = any(c.function.name in ACTION_OPS for c in calls[i + 1:])
                     later = [_args_of(c) for c in calls[i + 1:] if c.function.name in ACTION_OPS]
@@ -1132,12 +1162,16 @@ class Agent:
             if op not in ACTION_OPS:
                 report.append(f"{n}. '{op}' can't be used in batch – stopped here.")
                 break
+            label = element_label(self.elements, args.get("element"))
             result, status = await self.do_action(op, args)
             if status != "ok":
                 report.append(f"{n}. {result}")
                 break
             ran += 1
             page = await self.page_view()
+            if not_sent := form_not_sent(op, args, label, self.page_status):
+                report.append(f"{n}. {result}{not_sent} – stopped here.")
+                break
             new_page, loop_note = self.check_loop(page, page != prev)
             self.check_progress(op, new_page)
             if loop_note:

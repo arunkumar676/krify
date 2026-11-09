@@ -1,7 +1,11 @@
 import { currentLocation, initLocation } from "./location.js";
 import { beginTask, resetTabs, runOperation, setWorking, showAgentTab, showMyTab } from "./operations.js";
 
-const SERVER_URL = "ws://127.0.0.1:8765/ws";
+// The Krify server: the shared office server by default. Each person can change it under
+// side panel → Server (e.g. 127.0.0.1 to use a server running on their own PC).
+const DEFAULT_SERVER = "ws://10.10.2.125:8765/ws";
+const DEFAULT_PORT = 8765;
+let serverUrl = DEFAULT_SERVER;
 
 const $ = (id) => document.getElementById(id);
 const logEl = $("log");
@@ -40,17 +44,51 @@ function setBusy(busy) {
 }
 
 function setConnected(on) {
-  statusEl.textContent = on ? "● Connected" : "● Not connected – start the server";
+  const host = new URL(serverUrl).hostname;
+  const local = host === "127.0.0.1" || host === "localhost";
+  statusEl.textContent = on ? "● Connected" : local ? "● Not connected – start the server"
+    : `● Not connected – is the Krify server at ${host} running?`;
   statusEl.className = `status ${on ? "on" : "off"}`;
   startBtn.disabled = !on;
 }
 
 // ---------- connection to the Python server ----------
 
-function connect() {
-  ws = new WebSocket(SERVER_URL);
+// "192.168.1.20", "192.168.1.20:8765" or "ws://192.168.1.20:8765/ws" → full ws:// address.
+function normalizeServer(input) {
+  let text = (input || "").trim();
+  if (!text) return DEFAULT_SERVER;
+  if (!/^wss?:\/\//i.test(text)) text = `ws://${text.replace(/^https?:\/\//i, "")}`;
+  const url = new URL(text); // throws on nonsense
+  if (!url.port) url.port = String(DEFAULT_PORT);
+  if (url.pathname === "/" || !url.pathname) url.pathname = "/ws";
+  url.search = "";
+  return url.toString();
+}
+
+// A random id this install keeps, so the server keeps each person's task history apart.
+async function clientId() {
+  let { clientId: id } = await chrome.storage.local.get("clientId");
+  if (!id) {
+    id = crypto.randomUUID();
+    await chrome.storage.local.set({ clientId: id });
+  }
+  return id;
+}
+
+async function connect() {
+  const saved = (await chrome.storage.local.get("serverUrl")).serverUrl;
+  serverUrl = saved || DEFAULT_SERVER;
+  // Fill the Server box only once: this runs again every 3 s while disconnected, and refilling it
+  // would wipe an address the user is typing (exactly when they need to type one).
+  if (!serverInput.dataset.filled) {
+    serverInput.value = serverUrl;
+    serverInput.dataset.filled = "1";
+  }
+  ws = new WebSocket(`${serverUrl}?client=${encodeURIComponent(await clientId())}`);
   ws.onopen = () => {
     setConnected(true);
+    serverNote.textContent = "";
     send({ type: "dev_mode", on: devModeToggle.checked }); // resync after (re)connect
   };
   ws.onclose = () => {
@@ -497,4 +535,24 @@ document.querySelectorAll("button[data-op]").forEach((btn) => {
 // ---------- start ----------
 
 setConnected(false);
+// ---------- server address ----------
+const serverInput = $("serverInput");
+const serverNote = $("serverNote");
+$("serverSave").onclick = async () => {
+  let url;
+  try {
+    url = normalizeServer(serverInput.value);
+  } catch {
+    serverNote.textContent = "That doesn't look like an address. Try e.g. 192.168.1.20";
+    return;
+  }
+  await chrome.storage.local.set({ serverUrl: url });
+  serverInput.value = url;
+  serverNote.textContent = `Connecting to ${url} …`;
+  ws?.close(); // onclose reconnects, to the new address
+};
+serverInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") $("serverSave").click();
+});
+
 connect();

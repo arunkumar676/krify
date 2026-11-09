@@ -207,14 +207,114 @@ if (!window.__krify) {
     );
   }
 
+  // ---------- clickable <div>s ----------
+  // React/Vue sites attach click handlers in JavaScript, so a custom dropdown ("Select a contact")
+  // and its options can be plain <div>s with no role, onclick attribute or tabindex – the only sign
+  // is the pointer cursor the site gives them. Only the outermost one counts (cursor is inherited),
+  // and never a box that already holds a real link/button (a product card: its links are listed).
+  const POINTER_TAGS = "div, span, li, p, td, img, svg, i";
+  const pointerish = new WeakSet();
+
+  function pointerTargets(roots) {
+    const found = [];
+    const cursors = new Map(); // each element's style is read once (a child's check reads its parent's)
+    const pointer = (el) => {
+      if (!cursors.has(el)) cursors.set(el, getComputedStyle(el).cursor === "pointer");
+      return cursors.get(el);
+    };
+    for (const r of roots) {
+      for (const el of r.querySelectorAll(POINTER_TAGS)) {
+        if (!pointer(el)) continue;
+        const parent = el.parentElement;
+        if (parent && pointer(parent)) continue; // inherited from a listed parent
+        if (el.closest(SELECTOR) || el.querySelector(SELECTOR)) continue;
+        pointerish.add(el);
+        found.push(el);
+      }
+    }
+    return found;
+  }
+
+  // ---------- form fields: visible label, required mark, inline error ----------
+  // Many forms (React + Tailwind and the like) show "Contact *" as a <label> that isn't linked to its
+  // control, and validation errors as plain red text with no ARIA. Both sit in the field's own
+  // wrapper, next to the control – read them from there.
+  const CONTROL = "input:not([type=hidden]), select, textarea, [role=combobox], [role=listbox], [contenteditable=true]";
+  const FORMISH = "form, [role=form], dialog, [role=dialog], [role=alertdialog], [aria-modal=true]";
+  const ERROR_CLASS = /error|invalid|danger|destructive|text-red|text-rose|ant-form-item-explain/i;
+  const ERROR_WORDS = /required|invalid|must |please|enter |select |choose |can.?t |cannot|at least|at most|too (short|long)|match|already|wrong|not valid|missing/i;
+  const isRed = (color) => {
+    const [r, g, b] = (color.match(/\d+/g) || []).map(Number);
+    return r >= 180 && g <= 80 && b <= 100;
+  };
+
+  // Text that reads as a validation error: an error-ish class (or role=alert), or red + error words.
+  function looksLikeError(node, text) {
+    const cls = node.getAttribute("class") || "";
+    if (/(^|\s)valid-feedback/.test(cls)) return false;
+    if (node.matches("[role=alert]") || ERROR_CLASS.test(cls) || /invalid-feedback/.test(cls)) return ERROR_WORDS.test(text) || text.length <= 60;
+    return isRed(getComputedStyle(node).color) && ERROR_WORDS.test(text);
+  }
+
+  const formLike = (el) => el.matches(CONTROL) || pointerish.has(el) || !!closestDeep(el, FORMISH);
+
+  // The field's wrapper: the nearest ancestor (≤ 4 up) holding a label for it and at most 2 controls.
+  function fieldGroupOf(el) {
+    let node = el;
+    for (let i = 0; i < 4; i++) {
+      node = node.parentElement;
+      if (!node || node === document.body) return null;
+      if (node.querySelectorAll(`${CONTROL}, [data-krify-id]`).length > 2) return null; // a whole form/row
+      const label = [...node.querySelectorAll("label, legend")].find(
+        (l) => !l.contains(el) && l.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING,
+      );
+      if (label) return { box: node, label };
+    }
+    return null;
+  }
+
+  // → { label, required, error } for a form field ("" / false when unknown).
+  function fieldInfo(el) {
+    const info = { label: "", required: false, error: "" };
+    if (!formLike(el)) return info;
+    const group = fieldGroupOf(el);
+    if (group) {
+      const raw = clean(group.label.innerText || group.label.textContent, 60);
+      info.label = raw.replace(/\s*\*\s*$/, "").trim();
+      info.required = /\*\s*$/.test(raw) || /required/i.test(group.label.getAttribute("class") || "");
+      for (const node of group.box.querySelectorAll("*")) {
+        if (node === group.label || group.label.contains(node) || node.contains(el) || el.contains(node)) continue;
+        if (node.matches(CONTROL) || node.children.length > 2 || !isRendered(node)) continue;
+        const text = clean(node.innerText, 120);
+        if (text && text.length <= 100 && looksLikeError(node, text)) {
+          info.error = text;
+          break;
+        }
+      }
+    }
+    if (!info.error && el.getAttribute("aria-invalid") === "true") {
+      info.error = clean(textOfIds(el, "aria-errormessage") || textOfIds(el, "aria-describedby"), 100);
+    }
+    return info;
+  }
+
   // Status/error/validation messages a site shows dynamically (toasts, banners, inline form
   // errors) – ARIA conventions a well-built site already uses for accessibility, reused here so
-  // Krify can see "it failed" even when the message isn't itself a clickable element.
+  // Krify can see "it failed" even when the message isn't itself a clickable element. Inline field
+  // errors without ARIA are found through fieldInfo() and marked "Form error".
   const STATUS_SELECTOR = '[role="alert"], [role="status"], [aria-live="polite"], [aria-live="assertive"]';
 
   function statusSignals() {
     const seen = new Set();
     const lines = [];
+    // Inline field errors first ("Form error – Contact: Contact is required"): they say exactly what to fix.
+    for (const el of listed.values()) {
+      if (!el.isConnected || !visibleEnough(el)) continue;
+      const { label, error } = fieldInfo(el);
+      if (!error || seen.has(error)) continue;
+      seen.add(error);
+      lines.push(keep(`Form error – ${label || labelOf(el)}: ${error}`, 150));
+    }
     for (const r of allRoots()) {
       for (const el of r.querySelectorAll(STATUS_SELECTOR)) {
         if (!visibleEnough(el)) continue;
@@ -248,7 +348,7 @@ if (!window.__krify) {
       if (el.type === "checkbox" || el.type === "radio") return `${type} "${label}" (${el.checked ? "checked" : "unchecked"})`;
       return `${type} "${label}"` + (el.value ? ` (value: "${keep(el.value, 40)}")` : " (empty)");
     }
-    const role = el.getAttribute("role") || (tag === "a" ? "link" : tag);
+    const role = el.getAttribute("role") || (tag === "a" ? "link" : pointerish.has(el) ? "clickable" : tag);
     return `${role} "${label}"`;
   }
 
@@ -293,7 +393,7 @@ if (!window.__krify) {
     // buttons) its items would otherwise fall past the shown-elements window.
     const popups = roots.flatMap((r) => [...r.querySelectorAll(POPUP)]).filter(rendered ? isRendered : isVisible);
     const inPopups = new Set(popups.flatMap((p) => [...p.querySelectorAll(SELECTOR)]));
-    let all = [...new Set([...inPopups, ...roots.flatMap((r) => [...r.querySelectorAll(SELECTOR)])])];
+    let all = [...new Set([...inPopups, ...roots.flatMap((r) => [...r.querySelectorAll(SELECTOR)]), ...pointerTargets(roots)])];
     let nearCount = all.length;
     if (whole) {
       const near = [];
@@ -327,9 +427,7 @@ if (!window.__krify) {
       candidates.push({ el, text, rect: el.getBoundingClientRect() });
     }
     candidates.forEach(({ el }) => el.removeAttribute("data-krify-cand"));
-    // Visual reading order (top to bottom, left to right), popups first – not raw DOM order, so
-    // which elements land in the shown window reflects what a person scanning the page would
-    // reach first, not an accident of markup order.
+    // Visual reading order (top to bottom, left to right), popups first – not raw DOM order, so which elements land in the shown window reflects what a person scanning the page would reach first, not an accident of markup order.
     candidates.sort((a, b) => {
       const pa = inPopups.has(a.el), pb = inPopups.has(b.el);
       if (pa !== pb) return pa ? -1 : 1;
@@ -491,8 +589,9 @@ if (!window.__krify) {
     return { title, price: pricesOf(card), rating: ratingOf(card, text), badges };
   }
 
-  // Accessibility states the plain description doesn't already show.
-  function statesOf(el) {
+  // Accessibility states the plain description doesn't already show. `field`: fieldInfo(el), so an
+  // unlinked "Contact *" label and a plain red "Contact is required" count as required / invalid too.
+  function statesOf(el, field = fieldInfo(el)) {
     const a = (name) => el.getAttribute(name);
     const role = a("role");
     const states = [];
@@ -509,8 +608,8 @@ if (!window.__krify) {
     if (a("aria-pressed") === "true") states.push("pressed");
     if (a("aria-current") && a("aria-current") !== "false") states.push("current");
     if (el.disabled || a("aria-disabled") === "true") states.push("disabled");
-    if (el.required || a("aria-required") === "true") states.push("required");
-    let invalid = a("aria-invalid") === "true";
+    if (el.required || a("aria-required") === "true" || field.required) states.push("required");
+    let invalid = a("aria-invalid") === "true" || !!field.error;
     try {
       invalid = invalid || el.matches(":user-invalid"); // only after the user touched it, not every empty required field
     } catch {
@@ -529,12 +628,21 @@ if (!window.__krify) {
     return states;
   }
 
-  // Extra help text for a field: its aria-describedby text, or a placeholder the label doesn't show.
-  function hintOf(el) {
-    const described = keep(textOfIds(el, "aria-describedby"), 60);
-    if (described) return described;
-    const placeholder = keep(el.getAttribute("placeholder") || "", 40);
-    return placeholder && !labelOf(el).includes(placeholder) ? placeholder : "";
+  // Extra help text for a field: the field's visible label when the element's own label doesn't
+  // say it ("Select a contact" → field: Contact), its error, else its aria-describedby text or a
+  // placeholder the label doesn't show.
+  function hintOf(el, field = fieldInfo(el)) {
+    const own = labelOf(el);
+    const parts = [];
+    if (field.label && !own.toLowerCase().includes(field.label.toLowerCase())) parts.push(`field: ${field.label}`);
+    if (field.error) parts.push(`error: ${field.error}`);
+    if (!field.error) {
+      const described = keep(textOfIds(el, "aria-describedby"), 60);
+      const placeholder = keep(el.getAttribute("placeholder") || "", 40);
+      if (described) parts.push(described);
+      else if (placeholder && !own.includes(placeholder) && /^(INPUT|TEXTAREA)$/.test(el.tagName)) parts.push(placeholder);
+    }
+    return parts.join("; ");
   }
 
   // Column header of a table cell the element sits in.
@@ -718,8 +826,9 @@ if (!window.__krify) {
       }
       const r = n.rect;
       const pos = inView(n.el) ? 0 : r.bottom < 0 ? -1 : r.top > innerHeight ? 1 : 2;
+      const field = fieldInfo(n.el);
       elements.push({
-        id: n.id, text: n.text, states: statesOf(n.el), hint: /^(INPUT|TEXTAREA)$/.test(n.el.tagName) ? hintOf(n.el) : "",
+        id: n.id, text: n.text, states: statesOf(n.el, field), hint: hintOf(n.el, field),
         col: columnOf(n.el), pos, s, c,
       });
     }

@@ -30,6 +30,14 @@ Extension (no build step — plain JS, ES modules):
    changes also need the target page reloaded).
 3. The side panel must show **● Connected** (i.e. the backend is running) to do anything.
 
+Using one backend from other PCs on the network: set `HOST=0.0.0.0` in `backend/.env` (default
+`127.0.0.1` = this PC only; the server logs the address to use on startup), allow TCP 8765 from the LAN
+in the firewall, and on each other PC load `extension/` and enter the server's IP under the side
+panel's **Server** section (saved in `chrome.storage.local` as `serverUrl`). There's no access key:
+only the `chrome-extension://` Origin check, so use it on trusted networks only. Each install sends a
+random `?client=` id on connect; task history is per client (`Task.client`), but only one task runs at a
+time across everyone (`running` in `main.py`) and AI quotas are shared.
+
 ## Architecture
 
 ### Two processes, one WebSocket protocol

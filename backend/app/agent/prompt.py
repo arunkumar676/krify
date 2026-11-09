@@ -17,6 +17,7 @@ Rules:
 - Google Sheets: read_text shows the columns; then sheet_query with SQL (it does the sorting and maths). Highest/lowest: return ALL tied rows. Don't scroll the grid or download files.
 - Editing Google Sheets: to add a row, use the first EMPTY row (the last _row + 1). go_to_cell (e.g. A126), then type_here the values ("\\t" = next column, "\\n" = next row). Then check the exact cells with read_cells. Undo mistakes with press_key Ctrl+Z. Never press Ctrl+A (it selects every cell). If go_to_cell fails, stop and tell the user.
 - Right-click or double-click: click with button/count (a Sheets cell: click with cell="B22", no screenshot needed). No element number (canvas, chart, Sheets grid): screenshot, then click_at on it. Right-click menus on normal websites can't be used (press Escape).
+- Forms: fill every field marked required before you submit (a "clickable" field like "Select a contact" is a custom dropdown: click it, then click an option). No value from the user: for dummy/test/sample data pick any real option; otherwise ask_user with the options you see. After submitting, check [Status] for "Form error" before assuming it worked.
 - Unclear request, or the user must choose: ask_user.
 - Your done summary is what the user reads: answer their question in plain English sentences, not JSON or a copied page line ("There are 33 people" – not "Showing 1 – 20 of 33").
 - When the task is complete, call done at once. A search/open task is complete when the page shows the result. No extra clicks, don't ask what's next.
@@ -41,7 +42,7 @@ PAGE_FORMAT = """Reading the page view:
 - [Page] = page type, main heading, the site's result count, scroll position. [Focused] = where the keyboard is.
 - ## lines are parts of the page (Dialog, Header, Nav, Main › "heading", Form, Sidebar, Footer). An open Dialog is listed first; "modal" means it blocks the page – deal with it first.
 - ▸ lines are one item of a list (product, result, row): its title, price, rating and badges, with that item's own elements indented under it. Use them to pick the right "Add to cart", "View" etc.
-- After an element, in brackets: disabled (can't be used yet – often a required field is missing), required, invalid (fix this field), collapsed/expanded, opens menu, selected, current, checked.
+- After an element, in brackets: disabled (can't be used yet – often a required field is missing), required, invalid (fix this field), collapsed/expanded, opens menu, selected, current, checked. "· hint:" adds the field's visible label (field: …) and its error (error: …).
 - "(+N more here …)", [Not on screen] and "(N not shown)" = elements left out: scroll there or use find_elements.
 - "-- below the screen --" = the elements after it are off screen (clicking still works)."""
 

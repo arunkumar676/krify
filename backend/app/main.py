@@ -1,6 +1,8 @@
 """Krify server. Run:  uv run python -m app.main
 
-The side panel connects to ws://127.0.0.1:8765/ws.
+The side panel connects to ws://<server>:8765/ws?client=<install id>. The server listens on HOST
+(.env; 127.0.0.1 = this PC only, 0.0.0.0 = other PCs on the network too). `client` is a random id
+each extension install keeps, so task history is per person.
 Side panel → server: {"type": "task", "text", "model", "location": {"country", "place"}} | {"type": "stop"} | {"type": "reset"}
                      | {"type": "result", "id", "ok", "value" | "error"}
                      | {"type": "confirm_result", "id", "allow"}
@@ -20,13 +22,15 @@ Server → side panel: {"type": "models", "models": [{"id", "label", "status"}]}
 import asyncio
 import itertools
 import logging
+import re
+import socket
 
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
 from app import history
 from app.agent.loop import Agent
-from app.config import MODELS, PORT, PROVIDERS, provider_of
+from app.config import HOST, MODELS, PORT, PROVIDERS, provider_of
 from app.llm.client import model_status
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -37,6 +41,10 @@ app = FastAPI(title="Krify")
 # Each tab's Krify panel has its own connection (its own chat), but only one task runs at a time:
 # free AI limits are shared, and two agents would fight over the browser.
 running = {"task": None}
+
+CLIENT_ID = re.compile(r"^[A-Za-z0-9-]{1,64}$")
+LOOPBACK = {"127.0.0.1", "::1", "localhost"}
+legacy_claimed = {"done": False}  # history saved before it was per person goes to this PC's own panel
 
 
 @app.get("/")
@@ -51,7 +59,14 @@ async def websocket_endpoint(ws: WebSocket):
         await ws.close(code=1008)
         return
     await ws.accept()
-    log.info("Side panel connected")
+    client = ws.query_params.get("client") or ""
+    if not CLIENT_ID.match(client):
+        client = "unknown"
+    peer = ws.client.host if ws.client else "?"
+    log.info("Side panel connected from %s (client %s)", peer, client[:8])
+    if peer in LOOPBACK and client != "unknown" and not legacy_claimed["done"]:
+        history.claim_legacy(client)
+        legacy_claimed["done"] = True
 
     pending = {}  # operation id -> Future waiting for the browser's answer
     ids = itertools.count(1)
@@ -106,7 +121,7 @@ async def websocket_endpoint(ws: WebSocket):
         finally:
             plan_reviews.pop(review_id, None)
 
-    agent = Agent(browser, ui, confirm, plan_review)
+    agent = Agent(browser, ui, confirm, plan_review, client=client)
     task = None
 
     async def send_models():
@@ -171,7 +186,8 @@ async def websocket_endpoint(ws: WebSocket):
                 if task and not task.done():
                     await ui("error", "Krify is still working. Press Stop first.")
                 elif running["task"] and not running["task"].done():
-                    await ui("error", "Krify is busy with a task in another tab. Stop it there first.")
+                    await ui("error", "Krify is busy with another task (in another tab, or another person on the "
+                             "network is using it). Try again when it finishes.")
                 else:
                     model = msg.get("model") if msg.get("model") in MODELS else next(iter(MODELS))
                     log.info("Task (%s): %s", model, msg.get("text"))
@@ -197,12 +213,12 @@ async def websocket_endpoint(ws: WebSocket):
                 # Its own task: look() waits on a browser "result" that this same loop must receive.
                 asyncio.create_task(send_ai_view())
             elif kind == "history":
-                await ws.send_json({"type": "history", "items": history.recent()})
+                await ws.send_json({"type": "history", "items": history.recent(client)})
             elif kind == "history_delete":
-                history.delete_text(msg.get("text", ""))
-                await ws.send_json({"type": "history", "items": history.recent()})
+                history.delete_text(msg.get("text", ""), client)
+                await ws.send_json({"type": "history", "items": history.recent(client)})
             elif kind == "history_clear":
-                history.clear()
+                history.clear(client)
                 await ws.send_json({"type": "history", "items": []})
     except WebSocketDisconnect:
         log.info("Side panel disconnected")
@@ -210,5 +226,19 @@ async def websocket_endpoint(ws: WebSocket):
             task.cancel()
 
 
+def lan_ip():
+    """This PC's address on the local network (no packet is actually sent)."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("10.255.255.255", 1))
+            return s.getsockname()[0]
+    except OSError:
+        return None
+
+
 if __name__ == "__main__":
-    uvicorn.run("app.main:app", host="127.0.0.1", port=PORT)
+    if HOST not in LOOPBACK:
+        ip = lan_ip() if HOST in ("0.0.0.0", "::") else HOST
+        log.info("Other PCs on your network can connect: in Krify's side panel → Server, enter %s "
+                 "(ws://%s:%s/ws)", ip or "this PC's IP", ip or "<this PC's IP>", PORT)
+    uvicorn.run("app.main:app", host=HOST, port=PORT)
