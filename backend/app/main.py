@@ -7,11 +7,13 @@ Side panel → server: {"type": "task", "text", "model", "location": {"country",
                      | {"type": "plan_review_result", "id", "action": "approve"|"update"|"reject", "steps"}
                      | {"type": "history"} | {"type": "history_delete", "text"} | {"type": "history_clear"}
                      | {"type": "dev_mode", "on"}  (debug trace appended to the final answer)
+                     | {"type": "ai_view"}  (show the page view the AI would get right now)
 Server → side panel: {"type": "models", "models": [{"id", "label", "status"}]}  (on connect + after each task)
                      | {"type": "run", "id", "name", "args"}  (do a browser operation)
                      | {"type": "confirm", "id", "text"}  (ask the user Allow / Block)
                      | {"type": "plan_review", "id", "steps"}  (ask the user to Approve / Update / Reject a plan)
                      | {"type": "history", "items": [{"text", "status", "summary", "tokens", "created_at"}]}
+                     | {"type": "ai_view", "ok", "text" | "error"}
                      | {"type": "step" | "done" | "ask" | "stopped" | "error", "text"}
 """
 
@@ -143,6 +145,18 @@ async def websocket_endpoint(ws: WebSocket):
             except Exception:
                 pass  # panel already gone
 
+    async def send_ai_view():
+        """The page view the AI would get right now (manual test button). Read-only: no task state."""
+        try:
+            text = (await agent.look())[0]
+            reply = {"type": "ai_view", "ok": True, "text": text}
+        except Exception as err:
+            reply = {"type": "ai_view", "ok": False, "error": str(err)}
+        try:
+            await ws.send_json(reply)
+        except Exception:
+            pass  # panel already gone
+
     await send_models()
 
     try:
@@ -179,6 +193,9 @@ async def websocket_endpoint(ws: WebSocket):
                 agent.reset()
             elif kind == "dev_mode":
                 agent.dev_mode = bool(msg.get("on"))
+            elif kind == "ai_view":
+                # Its own task: look() waits on a browser "result" that this same loop must receive.
+                asyncio.create_task(send_ai_view())
             elif kind == "history":
                 await ws.send_json({"type": "history", "items": history.recent()})
             elif kind == "history_delete":

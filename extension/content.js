@@ -47,6 +47,9 @@ if (!window.__krify) {
     s = (s || "").replace(/\s+/g, " ").trim();
     return s.length > max ? s.slice(0, max) + "…" : s;
   };
+  // Labels, titles and values: shortened to `max` normally, kept whole in Unrestricted mode
+  // (operations.js sets window.__krify.unrestricted before every call into the page).
+  const keep = (s, max) => clean(s, window.__krify?.unrestricted ? Infinity : max);
 
   // CSS-visible (has size, not hidden/display:none/near-zero-opacity) regardless of scroll position.
   function isRendered(el) {
@@ -178,7 +181,7 @@ if (!window.__krify) {
   }
 
   function labelOf(el) {
-    return clean(
+    return keep(
       textOfIds(el, "aria-labelledby") ||
       el.getAttribute("aria-label") ||
       (el.labels && el.labels[0] && el.labels[0].innerText) ||
@@ -190,7 +193,8 @@ if (!window.__krify) {
       (el.type === "submit" ? el.value : "") ||
       // A button inside a component often gets its label from the component itself.
       el.getRootNode()?.host?.getAttribute("aria-label") ||
-      el.getRootNode()?.host?.innerText
+      el.getRootNode()?.host?.innerText,
+      50
     );
   }
 
@@ -205,14 +209,14 @@ if (!window.__krify) {
     for (const r of allRoots()) {
       for (const el of r.querySelectorAll(STATUS_SELECTOR)) {
         if (!visibleEnough(el)) continue;
-        const text = clean(el.innerText, 150);
+        const text = keep(el.innerText, 150);
         if (!text || seen.has(text)) continue;
         seen.add(text);
         lines.push(text);
       }
       for (const el of r.querySelectorAll(":invalid")) {
         if (!visibleEnough(el) || !el.validationMessage) continue;
-        const text = clean(`${labelOf(el) || el.name || el.type}: ${el.validationMessage}`, 150);
+        const text = keep(`${labelOf(el) || el.name || el.type}: ${el.validationMessage}`, 150);
         if (seen.has(text)) continue;
         seen.add(text);
         lines.push(text);
@@ -226,13 +230,14 @@ if (!window.__krify) {
     const label = labelOf(el);
     if (tag === "select") {
       const current = el.options[el.selectedIndex]?.text || "";
-      const options = [...el.options].slice(0, 12).map((o) => clean(o.text, 30)).join(", ");
-      return `select "${label}" = "${clean(current, 40)}" (options: ${options})`;
+      const all = window.__krify?.unrestricted ? [...el.options] : [...el.options].slice(0, 12);
+      const options = all.map((o) => keep(o.text, 30)).join(", ");
+      return `select "${label}" = "${keep(current, 40)}" (options: ${options})`;
     }
     if (tag === "input" || tag === "textarea") {
       const type = tag === "textarea" ? "textarea" : `input ${el.type || "text"}`;
       if (el.type === "checkbox" || el.type === "radio") return `${type} "${label}" (${el.checked ? "checked" : "unchecked"})`;
-      return `${type} "${label}"` + (el.value ? ` (value: "${clean(el.value, 40)}")` : " (empty)");
+      return `${type} "${label}"` + (el.value ? ` (value: "${keep(el.value, 40)}")` : " (empty)");
     }
     const role = el.getAttribute("role") || (tag === "a" ? "link" : tag);
     return `${role} "${label}"`;
@@ -395,10 +400,10 @@ if (!window.__krify) {
   // groups of their own: "Main › "Results"").
   function sectionName(node, kind) {
     const label = textOfIds(node, "aria-labelledby") || node.getAttribute("aria-label");
-    if (label) return clean(label, 50);
+    if (label) return keep(label, 50);
     if (kind === "main") return "";
     const head = node.querySelector(HEADING_SELECTOR);
-    return head ? clean(head.innerText, 50) : "";
+    return head ? keep(head.innerText, 50) : "";
   }
 
   // Sibling signature, as in listCounts(): same tag + classes = "looks alike". Semantic list
@@ -464,13 +469,14 @@ if (!window.__krify) {
   function cardSummary(card, els) {
     const text = (card.innerText || "").replace(/\s+/g, " ");
     const head = card.querySelector(HEADING_SELECTOR);
-    let title = head ? clean(head.innerText, 80) : "";
+    let title = head ? keep(head.innerText, 80) : "";
     if (!title && card.tagName === "TR") {
-      title = clean([...card.cells].map((cell) => clean(cell.innerText, 40)).filter(Boolean).join(" | "), 80);
+      title = keep([...card.cells].map((cell) => keep(cell.innerText, 40)).filter(Boolean).join(" | "), 80);
     }
     if (!title) {
       const links = els.map((e) => labelOf(e.el)).filter(Boolean).sort((a, b) => b.length - a.length);
-      title = clean(links[0] || text, 80);
+      // The whole-card fallback stays short even in Unrestricted mode: the card's elements are listed anyway.
+      title = links[0] ? keep(links[0], 80) : clean(text, 80);
     }
     const badges = [...new Set((text.match(BADGES) || []).map((b) => b.replace(/\s+/g, " ")))].slice(0, 3);
     return { title, price: pricesOf(card), rating: ratingOf(card, text), badges };
@@ -507,7 +513,7 @@ if (!window.__krify) {
       const now = a("aria-valuetext") || a("aria-valuenow");
       const min = a("aria-valuemin");
       const max = a("aria-valuemax");
-      if (now !== null) states.push(`value ${clean(now, 20)}${min !== null && max !== null ? ` of ${min}–${max}` : ""}`);
+      if (now !== null) states.push(`value ${keep(now, 20)}${min !== null && max !== null ? ` of ${min}–${max}` : ""}`);
     }
     const sort = closestDeep(el, "th, [role=columnheader]")?.getAttribute("aria-sort");
     if (sort === "ascending" || sort === "descending") states.push(`sorted ${sort}`);
@@ -516,9 +522,9 @@ if (!window.__krify) {
 
   // Extra help text for a field: its aria-describedby text, or a placeholder the label doesn't show.
   function hintOf(el) {
-    const described = clean(textOfIds(el, "aria-describedby"), 60);
+    const described = keep(textOfIds(el, "aria-describedby"), 60);
     if (described) return described;
-    const placeholder = clean(el.getAttribute("placeholder") || "", 40);
+    const placeholder = keep(el.getAttribute("placeholder") || "", 40);
     return placeholder && !labelOf(el).includes(placeholder) ? placeholder : "";
   }
 
@@ -529,7 +535,7 @@ if (!window.__krify) {
     if (!table) return "";
     const head = table.tHead?.rows[0] || [...table.rows].find((r) => r.cells[0]?.tagName === "TH");
     const th = head?.cells[cell.cellIndex];
-    return th && th !== cell ? clean(th.innerText, 30) : "";
+    return th && th !== cell ? keep(th.innerText, 30) : "";
   }
 
   // "1-48 of over 10,000 results" – the site's own count, if it shows one.
@@ -673,7 +679,7 @@ if (!window.__krify) {
       })
       .map((h) => {
         const chain = chainOf(h);
-        return { y: h.getBoundingClientRect().top, section: chain[chain.length - 1] || null, text: clean(h.innerText, 50) };
+        return { y: h.getBoundingClientRect().top, section: chain[chain.length - 1] || null, text: keep(h.innerText, 50) };
       })
       .filter((h) => h.text)
       .sort((a, b) => a.y - b.y);
@@ -743,7 +749,7 @@ if (!window.__krify) {
     return {
       page: {
         type: window === top ? pageType(mainCards || cards.length, numbered, results) : "",
-        h1: h1 ? clean(h1.innerText, 80) : "",
+        h1: h1 ? keep(h1.innerText, 80) : "",
         results,
         scrollY: Math.round(scrollY),
         scrollMax: Math.max(0, doc.scrollHeight - innerHeight),
@@ -768,7 +774,7 @@ if (!window.__krify) {
     for (const node of el.childNodes) {
       if (node.nodeType === Node.TEXT_NODE) text += node.nodeValue;
     }
-    return clean(text, 80);
+    return keep(text, 80);
   }
 
   // Walk up from a numbered element to the nearest landmark-ish ancestor (or up to 4 levels),
@@ -793,7 +799,7 @@ if (!window.__krify) {
     const role = el.getAttribute("role") || STRUCTURAL_ROLE[el.tagName];
     if (!role) return null;
     if (role === "img") {
-      const alt = clean(el.getAttribute("alt") || el.getAttribute("aria-label") || "", 60);
+      const alt = keep(el.getAttribute("alt") || el.getAttribute("aria-label") || "", 60);
       return alt ? `img "${alt}"` : null;
     }
     const text = ownText(el);

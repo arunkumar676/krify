@@ -562,34 +562,44 @@ class Agent:
                         self.messages.append({"role": "tool", "tool_call_id": call["id"], "content": "Stopped by the user."})
                 break
 
+    async def look(self):
+        """Read the page and render the view the AI gets, WITHOUT touching any agent state – so the
+        side panel's "AI view" button can show it any time. → (view text, page info, flat element
+        list, status line, hint, the bare view without hint/header lines).
+        Structured (sections → items → elements, see pageview.py) or the old flat element list,
+        depending on STRUCTURED_VIEW."""
+        info = await self.browser("get_page_info", {})
+        if STRUCTURED_VIEW:
+            view = pageview.render(await self.browser("get_page_model", {}))
+            elements, shown, status, hint = view.flat, view.text, view.status, view.hint
+        else:
+            elements = shown = await self.browser("get_elements", {})
+            status = match.group(1) if (match := _STATUS_LINE.search(elements)) else ""
+            hint = ambiguity_hint(elements)
+        text = f"{shown}\n{hint}" if hint else shown
+        if is_sheet(info.get("url", "")):
+            text = f"{SHEET_HINT}\n{text}"
+        tabs = f"[Tabs] {info['tabs']}\n" if info.get("tabs") else ""
+        text = f"{tabs}[Current page] {info.get('title')} – {info.get('url')}\n{text}"
+        return text, info, elements, status, hint, shown
+
     async def page_view(self):
-        """Current URL, title and the page: structured (sections → items → elements, see
-        pageview.py) or the old flat element list, depending on STRUCTURED_VIEW."""
+        """The page view for the next message, recording what the safety/fact checks need."""
         try:
-            info = await self.browser("get_page_info", {})
-            if STRUCTURED_VIEW:
-                view = pageview.render(await self.browser("get_page_model", {}))
-                # The safety and fact checks get the flat list of EVERY collected element, never
-                # just the shortened view; item lines (titles, prices) count as read for the fact check.
-                elements, shown, self.page_status, hint = view.flat, view.text, view.status, view.hint
-                self.seen.append(shown)
-            else:
-                elements = shown = await self.browser("get_elements", {})
-                self.page_status = match.group(1) if (match := _STATUS_LINE.search(elements)) else ""
-                hint = ambiguity_hint(elements)
-            self.elements = elements
-            self.seen.append(elements)
-            self.current_url = info.get("url", "")
-            self.current_title = str(info.get("title") or "")
-            tabs = f"[Tabs] {info['tabs']}\n" if info.get("tabs") else ""
-            if hint:
-                self.boost_next = True
-                shown = f"{shown}\n{hint}"
-            if is_sheet(self.current_url):
-                shown = f"{SHEET_HINT}\n{shown}"
-            return f"{tabs}[Current page] {info.get('title')} – {info.get('url')}\n{shown}"
+            text, info, elements, self.page_status, hint, shown = await self.look()
         except Exception as err:
             return f"[Current page] (can't read it: {err})"
+        # The safety and fact checks get the flat list of EVERY collected element, never just the
+        # shortened view; item lines (titles, prices) count as read for the fact check.
+        if STRUCTURED_VIEW:
+            self.seen.append(shown)
+        self.elements = elements
+        self.seen.append(elements)
+        self.current_url = info.get("url", "")
+        self.current_title = str(info.get("title") or "")
+        if hint:
+            self.boost_next = True
+        return text
 
     def drop_screenshots(self):
         """Replace older screenshots with a short note: they cost tokens and need a vision model."""

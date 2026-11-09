@@ -67,6 +67,9 @@ function connect() {
       case "history":
         showHistory(msg.items);
         break;
+      case "ai_view":
+        showAiView(msg);
+        break;
       case "run": // the agent wants a browser operation
         try {
           const value = await runOperation(msg.name, msg.args);
@@ -443,6 +446,30 @@ function argsFor(btn) {
     case "wait": return { seconds: Number(btn.dataset.seconds) };
     default: return {};
   }
+}
+
+// "AI view": the server renders the page the same way it does for the AI (pageview.py), so this
+// shows the real text the model gets – not the raw get_page_model JSON or the old flat list.
+$("aiViewBtn").addEventListener("click", () => {
+  output.classList.remove("error");
+  if (ws?.readyState !== WebSocket.OPEN) {
+    output.textContent = "Not connected – start the server first.";
+    output.classList.add("error");
+    return;
+  }
+  output.textContent = "Working…";
+  send({ type: "ai_view" });
+});
+
+function showAiView(msg) {
+  if (!msg.ok) {
+    output.textContent = msg.error;
+    output.classList.add("error");
+    return;
+  }
+  const chars = msg.text.length;
+  const mode = unrestrictedToggle.checked ? "🔓 Unrestricted (whole page, full labels)" : "restricted (on-screen, short labels)";
+  output.textContent = `${msg.text}\n\n— ${chars} chars ≈ ${Math.round(chars / 4)} tokens · ${mode}`;
 }
 
 document.querySelectorAll("button[data-op]").forEach((btn) => {
