@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 
 from app import history, sheets
 from app.agent import safety
+from app.agent.changes import what_changed
 from app.agent.prompt import SYSTEM_PROMPT, where_line
 from app.agent.tools import TOOLS
 from app.agent.understand import understand
@@ -638,6 +639,9 @@ class Agent:
                     actions_done += 1
                     page = await self.page_view()
                     changed = page != prev_page
+                    # Say plainly what the action changed, so the model knows if it worked.
+                    if diff := what_changed(prev_page, page):
+                        result = f"{result}\n{diff}"
                     result = f"{result}{self.check_progress(name, changed)}{self.check_repeat(name, args, changed)}"
                     more = any(c.function.name in ACTION_OPS for c in calls[i + 1:])
                     later = [_args_of(c) for c in calls[i + 1:] if c.function.name in ACTION_OPS]
@@ -761,7 +765,8 @@ class Agent:
             if result.startswith("Error"):
                 report.append(f"{n}. {describe(op, args)} FAILED: {result} – stopped here.")
                 break
-            report.append(f"{n}. {result} ✓")
+            diff = what_changed(prev, page, limit=3)
+            report.append(f"{n}. {result} ✓" + (f" – {diff}" if diff else ""))
             moved = layout(page) != layout(prev) and any(uses_element(s) for s in steps[n:MAX_BATCH])
             prev = page
             if moved and n < len(steps):
