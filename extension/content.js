@@ -248,7 +248,8 @@ if (!window.__krify) {
   // <input type=submit> (opacity .01 on top of the yellow button), custom checkboxes/radios, file
   // buttons. The control is what actually gets clicked, so it counts as visible when the wrapper it
   // sits on is. Typing fields are left out on purpose: a transparent text box is usually a trap for
-  // bots ("leave this blank"), never something to fill.
+  // bots ("leave this blank"), never something to fill. One that clicks pass through
+  // (pointer-events: none) isn't a see-through control either: it's waiting for a hover.
   const SEE_THROUGH = "button, input[type=submit], input[type=button], input[type=image], input[type=reset], " +
     "input[type=checkbox], input[type=radio], input[type=file]";
 
@@ -259,6 +260,10 @@ if (!window.__krify) {
     if (r.width < 2 || r.height < 2) return null;
     const style = getComputedStyle(el);
     if (style.visibility === "hidden" || style.display === "none" || Number(style.opacity) > 0.05) return null;
+    // Clicks pass through it (pointer-events: none), so it isn't what gets clicked: it's a button the
+    // site shows only while the mouse is over its row (Mistral's "New Project" +). Left to
+    // hiddenUntilHover(), which lists it "(shows on hover)".
+    if (style.pointerEvents === "none") return null;
     let p = el.parentElement;
     for (let i = 0; i < 2 && p && p !== document.body && p !== document.documentElement; i++, p = p.parentElement) {
       const pr = p.getBoundingClientRect();
