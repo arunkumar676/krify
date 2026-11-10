@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 
 from app import history, sheets
 from app.agent import pageview, safety
-from app.agent.changes import click_result
+from app.agent.changes import click_result, opened_what_asked
 from app.agent.prompt import system_prompt, where_line
 from app.agent.tools import TOOLS
 from app.agent.understand import understand
@@ -1166,6 +1166,16 @@ class Agent:
                         if sentence := click_result(before, (self.current_url, self.elements), clicked, self.current_title):
                             log.info("  told the AI: %s", sentence)
                             result = f"{result}\n{sentence}"
+                    if (name == "click" and not failed and before[0] != self.current_url and not self.page_status
+                            and opened_what_asked(self.task_text, clicked)):
+                        # "open agents" + clicked "Agents" + a new page opened: that was the whole task.
+                        # Asking the AI again only made it doubt and click around (6 extra steps on Asana).
+                        opened = self.current_title or self.current_url
+                        self.seen.append(opened)
+                        self.messages.append({**tool_msg, "content": f"{result}\nThe task is finished."})
+                        await self.finish("done", f"Done – the page \"{opened}\" is open.")
+                        finished = True
+                        continue
                     changed = page != prev_page
                     # Going back to a page from a few actions ago isn't progress (A→B→A→B loops).
                     new_page, loop_note = self.check_loop(page, changed)

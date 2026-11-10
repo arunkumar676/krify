@@ -74,6 +74,30 @@ def _undoes(clicked, other):
     return bool(a and b) and b[0] in _OPPOSITES.get(a[0], ()) and a[1:] == b[1:]
 
 
+def _words(text):
+    """'AI Teammates' -> ('ai', 'teammate'): lowercase words, a plural 's' dropped ('agents' = 'agent')."""
+    return tuple(w[:-1] if len(w) > 3 and w.endswith("s") else w for w in re.findall(r"[a-z0-9]+", (text or "").lower()))
+
+
+# A task that is only "open one named place": "open agents", "go to the settings page".
+_OPEN_TASK = re.compile(
+    r"^\s*(?:please\s+)?(?:open|go\s+to|goto|navigate\s+to|take\s+me\s+to|show(?:\s+me)?)\s+"
+    r"(?:the\s+|my\s+)?(.+?)(?:\s+(?:page|tab|section|screen))?\s*[.!]?\s*$", re.I)
+# More to do after opening it ("open agents and create one"): the AI has to carry on, so no shortcut.
+_MORE_TO_DO = re.compile(r"\b(?:and|then|after|also|search|find|create|add|type|click|with)\b|[,;]", re.I)
+MAX_TARGET_WORDS = 4
+
+
+def opened_what_asked(task, clicked):
+    """True if the whole task was "open X" and the clicked element is labelled X (plural or not, any
+    case): after that click opened a new page there's nothing left to do. clicked: 'div "Agents"'."""
+    match = _OPEN_TASK.match(task or "")
+    if not match or _MORE_TO_DO.search(match.group(1)):
+        return False
+    target = _words(match.group(1))
+    return 0 < len(target) <= MAX_TARGET_WORDS and target == _words(_full_name(clicked))
+
+
 def click_result(before, after, clicked, title=""):
     """One sentence for the AI after a click, or '' if nothing clear changed.
     before/after: (url, flat element list). clicked: the clicked element's line ('div "Knowledge"'),
@@ -94,7 +118,11 @@ def click_result(before, after, clicked, title=""):
 
     if url1 != url2:
         shown = f" New on screen: {_names(added)}." if _names(added) else ""
-        return (f"✅ Your click on {label} worked: a new page opened (\"{_short(title)}\").{shown} "
+        # Asana's "Agents" opens "AI Teammates": the AI doubted it was there and clicked around.
+        renamed = (f" Sites often name a page differently from the button that opens it: this IS the page "
+                   f"{label} opens, even though it's called \"{_short(title)}\"."
+                   if clicked_name and title and not set(_words(clicked_name)) & set(_words(title)) else "")
+        return (f"✅ Your click on {label} worked: a new page opened (\"{_short(title)}\").{shown}{renamed} "
                 f"Don't click {label} again.{undo_note} If this is what the task asked for, call done; "
                 "otherwise continue.")
     # Only extra copies of things already on the page (e.g. "Load more" adding product tiles): say nothing.
