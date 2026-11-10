@@ -18,13 +18,46 @@ let ws = null;
 
 // ---------- step log ----------
 
-// Escape HTML, then turn **text** into bold. Nothing else from the AI becomes HTML.
+// Escape HTML, then turn **text** into bold and "- item" / "1. item" lines into lists. Nothing else
+// from the AI becomes HTML.
+const BULLET = /^\s*[-*•]\s+(.*)$/;
+const NUMBERED = /^\s*\d+[.)]\s+(.*)$/;
+
 function formatText(text) {
   const escaped = String(text)
+    .replace(/\\n/g, "\n") // a model that wrote "\n" inside its answer instead of a line break
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
-  return escaped.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+    .replace(/>/g, "&gt;")
+    .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
+  const out = [];
+  let list = null; // "ul" | "ol" while inside a list
+  for (const line of escaped.split("\n")) {
+    if (!line.trim() && (list || out.at(-1)?.startsWith("</"))) continue; // blank line after a list
+    const bullet = BULLET.exec(line);
+    const numbered = !bullet && NUMBERED.exec(line);
+    const kind = bullet ? "ul" : numbered ? "ol" : null;
+    if (list && kind !== list) out.push(`</${list}>`);
+    if (kind && kind !== list) {
+      // A list starts its own line: drop the line break (and blank lines) before it.
+      while (out.at(-1) === "\n") out.pop();
+      if (out.length) out[out.length - 1] = out.at(-1).replace(/\n$/, "");
+      out.push(`<${kind}>`);
+    }
+    list = kind;
+    if (kind) out.push(`<li>${(bullet || numbered)[1]}</li>`);
+    else out.push(`${line}\n`);
+  }
+  if (list) out.push(`</${list}>`);
+  return out.join("").replace(/\n$/, "");
+}
+
+// One-line plain text for previews (task history): no ** marks, list lines joined with ", ".
+function plainText(text) {
+  const lines = String(text || "").replace(/\\n/g, "\n").replace(/\*\*/g, "").split("\n").map((l) => l.trim()).filter(Boolean);
+  const items = lines.map((l) => (BULLET.exec(l) || NUMBERED.exec(l) || [l, l])[1]);
+  const lead = lines.length > 1 && !BULLET.test(lines[0]) && !NUMBERED.test(lines[0]) ? items.shift() : "";
+  return lead ? `${lead} ${items.join(", ")}` : items.join(", ");
 }
 
 function addEntry(kind, text) {
@@ -388,7 +421,7 @@ function showHistory(items) {
     bottom.className = "bottom";
     const summary = document.createElement("span");
     summary.className = "summary";
-    summary.textContent = item.summary || "";
+    summary.textContent = plainText(item.summary);
     const run = document.createElement("button");
     run.textContent = "▶";
     run.title = "Run again (in a new chat)";

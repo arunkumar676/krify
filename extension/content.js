@@ -355,6 +355,7 @@ if (!window.__krify) {
   }
 
   function labelOf(el) {
+    if (isClickableRow(el)) return el.getAttribute("aria-label") ? keep(el.getAttribute("aria-label"), 80) : rowLabel(el);
     return keep(
       textOfIds(el, "aria-labelledby") ||
       el.getAttribute("aria-label") ||
@@ -414,8 +415,55 @@ if (!window.__krify) {
         pointerish.add(el);
         found.push(el);
       }
+      // Table rows that open their record when clicked (see isClickableRow). Their cells were
+      // skipped above: each <td> inherits the row's pointer cursor.
+      for (const row of r.querySelectorAll("tr, [role=row]")) {
+        if (!row.closest(SELECTOR) && isClickableRow(row)) found.push(row);
+      }
     }
     return found;
+  }
+
+  // ---------- clickable table rows ----------
+  // React tables often open a record by clicking anywhere on its row – a <tr onClick tabIndex=0
+  // class="cursor-pointer"> with no link in it. Signs: the row's own pointer cursor (not inherited
+  // from a clickable box around the table) or a tabindex. Not header rows, and not a row whose
+  // first cell is already a link to the record (the link is listed; the row would repeat it).
+  // A row is one element: `row link "Acme | Website revamp | ₹2L"`; its buttons stay listed too.
+  const ROW_CELLS = ":scope > [role=cell], :scope > [role=gridcell], :scope > [role=columnheader], :scope > [role=rowheader]";
+  const rowCells = (row) => [...(row.tagName === "TR" ? row.cells : row.querySelectorAll(ROW_CELLS))];
+  // A link that goes somewhere (hash routes like "#/opportunities/9" too), not "#", script, email or phone.
+  const NAV_HREF = (a) => !/^(#?$|javascript:|mailto:|tel:)/i.test((a.getAttribute("href") || "").trim());
+
+  function isClickableRow(el) {
+    if (el?.nodeType !== 1 || !(el.tagName === "TR" || el.getAttribute("role") === "row")) return false;
+    if (el.closest("thead")) return false;
+    const cells = rowCells(el);
+    if (!cells.length || cells.every((c) => c.tagName === "TH" || c.getAttribute("role") === "columnheader")) return false;
+    const focusable = el.hasAttribute("tabindex") && el.tabIndex >= 0;
+    const pointer = getComputedStyle(el).cursor === "pointer" &&
+      !(el.parentElement && getComputedStyle(el.parentElement).cursor === "pointer");
+    if (!focusable && !pointer) return false;
+    const first = cells.find((c) => (c.innerText || "").trim());
+    const firstLink = first && [...first.querySelectorAll("a[href], [role=link]")].some((a) => a.getAttribute("role") === "link" || NAV_HREF(a));
+    return !firstLink;
+  }
+
+  // A row's name: its cells' text, "Acme | Website revamp | Proposal | ₹2L" (as cardSummary names a TR).
+  // Cells with no letter or digit ("⋯" menus, "—" blanks) are left out.
+  function rowLabel(row) {
+    return keep(rowCells(row).map((cell) => keep(cell.innerText, 40)).filter((t) => /[\p{L}\p{N}]/u.test(t)).join(" | "), 80);
+  }
+
+  // Where to click a row: the middle of a cell with nothing clickable in it – a row's middle is
+  // often its "⋯" menu or a status badge, and the click would go to that instead.
+  function rowSpots(row) {
+    return rowCells(row)
+      .filter((cell) => (cell.innerText || "").trim() && !cell.querySelector(SELECTOR))
+      .map((cell) => {
+        const r = cell.getBoundingClientRect();
+        return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+      });
   }
 
   // ---------- open custom dropdown lists ----------
@@ -773,6 +821,8 @@ if (!window.__krify) {
       if (buttonInputText(el) || /^(submit|button|reset|image)$/.test(el.type)) return `${type} "${label}"`; // a button: its text is the label
       return `${type} "${label}"` + (el.value ? ` (value: "${keep(el.value, 40)}")` : " (empty)");
     }
+    // A table row that opens its record (before the dropdown check: a row may end in a chevron).
+    if (isClickableRow(el)) return `row link "${label}"`;
     const role = el.getAttribute("role") || (tag === "a" ? "link" : pointerish.has(el) ? "clickable" : tag);
     // A <button> that submits (or resets) its form says so: the AI must know which button sends it.
     if (tag === "button" && !el.getAttribute("role") && el.form && (el.type === "submit" || el.type === "reset")) {
@@ -780,7 +830,17 @@ if (!window.__krify) {
     }
     // Opens a list of choices (a filter such as "My Activities ▾", a custom select): its text is only
     // the current choice – the other choices exist on the page only once it's open.
-    if (isDropdownTrigger(el)) return `dropdown "${label}"`;
+    if (isDropdownTrigger(el)) {
+      // Its choices are often not in the page while it's closed: read them from the page's React
+      // component (pagehook.js), else show what select_option saw when it last opened it.
+      const known = reactOptions(el);
+      const names = known?.names || seenOptions.get(el) || [];
+      if (!names.length) return `dropdown "${label}"`;
+      const shown = names.slice(0, upTo(12));
+      const total = Math.max(known?.total || 0, names.length);
+      const more = total > shown.length ? `, +${total - shown.length} more` : "";
+      return `dropdown "${label}" (options: ${shown.map((t) => keep(t, 30)).join(", ")}${more})`;
+    }
     return `${role} "${label}"`;
   }
 
@@ -903,7 +963,9 @@ if (!window.__krify) {
       const text = describe(el) + (hover ? " (shows on hover)" : "");
       if (/"\s*"/.test(text) && !/input|textarea|select/.test(text)) continue; // skip unlabeled
       if (hover) hoverCount += 1;
-      el.setAttribute("data-krify-cand", "1"); // temporary marker for the containment check above
+      // Temporary marker for the containment check above. Not on a clickable row: its own buttons
+      // and links ("⋯", an email) do something else than opening the row, so they stay listed.
+      if (!isClickableRow(el)) el.setAttribute("data-krify-cand", "1");
       candidates.push({ el, text, rect: el.getBoundingClientRect() });
     }
     candidates.forEach(({ el }) => el.removeAttribute("data-krify-cand"));
@@ -956,7 +1018,9 @@ if (!window.__krify) {
     const fresh = [...new Set([...roots.flatMap((r) => [...r.querySelectorAll(SELECTOR)]), ...pointerTargets(roots)])];
     for (const el of fresh) {
       if (known.has(el) || !renderedEnough(el) || el.disabled) continue;
-      if (el.parentElement?.closest("[data-krify-id]")) continue; // inside a numbered link/button: same click
+      // Inside a numbered link/button: same click (a clickable row's own buttons aren't, though).
+      const holder = el.parentElement?.closest("[data-krify-id]");
+      if (holder && !isClickableRow(holder)) continue;
       if (/"\s*"/.test(describe(el)) && !/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)) continue; // unlabeled
       id += 1;
       el.setAttribute("data-krify-id", String(id));
@@ -1452,6 +1516,10 @@ if (!window.__krify) {
     // Card summaries cost a few DOM reads each: on-screen cards always, all of them in full mode.
     let summaries = 0;
     const cardList = cards.map((card, i) => {
+      // A clickable row is itself numbered: pageview.py shows its element line as the card's title
+      // line instead of a summary that would repeat the same cell text.
+      const self = card.els.find((n) => n.el === card.node && isClickableRow(n.el));
+      if (self) return { title: "", price: "", rating: "", badges: [], summarised: false, row: self.id };
       const visible = elements.some((e) => e.c === i && e.pos === 0);
       if ((!visible && !full) || (summaries >= MAX_CARD_SUMMARIES && !full)) return { title: "", price: "", rating: "", badges: [], summarised: false };
       summaries += 1;
@@ -1852,7 +1920,7 @@ if (!window.__krify) {
       const inside = containsDeep(lastFormRoot, el) || !!openListOf(el) || !!closestDeep(el, POPUP);
       const link = closestDeep(el, "a[href]");
       const href = (link?.getAttribute("href") || "").trim();
-      const navigates = (!!link && !/^(#|javascript:)/i.test(href)) || el.getAttribute("role") === "link" ||
+      const navigates = (!!link && !/^(#|javascript:)/i.test(href)) || el.getAttribute("role") === "link" || isClickableRow(el) ||
         !!closestDeep(el, "nav, [role=navigation], aside, [role=complementary], header, [role=banner]");
       return { form: true, inside, navigates };
     },
@@ -1971,7 +2039,8 @@ if (!window.__krify) {
         if (!inner || inner === hit) break;
         hit = inner;
       }
-      return describe(closestDeep(hit, SELECTOR) || hit);
+      const row = hit.closest?.("tr, [role=row]");
+      return describe(closestDeep(hit, SELECTOR) || (isClickableRow(row) ? row : hit));
     },
 
     // Live description of a numbered element right now, or "" if it's gone – lets the backend check
@@ -2361,6 +2430,35 @@ if (!window.__krify) {
     return value;
   }
 
+  // A React dropdown's options, from its component's props (pagehook.js, in the page's own world,
+  // answers synchronously during dispatchEvent) → { names, total }, or null (not React / no hook).
+  function reactOptions(el) {
+    let reply = null;
+    const take = (event) => { reply = event.detail; };
+    el.addEventListener("krify:options-result", take);
+    try {
+      el.dispatchEvent(new CustomEvent("krify:options", { bubbles: true, composed: true }));
+    } catch {
+      // ignore
+    } finally {
+      el.removeEventListener("krify:options-result", take);
+    }
+    try {
+      const found = typeof reply === "string" ? JSON.parse(reply) : null;
+      return Array.isArray(found?.names) && found.names.length ? found : null;
+    } catch {
+      return null;
+    }
+  }
+
+  // A custom dropdown's options, as select_option last saw them (they're only in the page while its
+  // list is open), so later page views can show them: dropdown "My Activities" (options: …).
+  const seenOptions = new WeakMap();
+  function rememberOptions(field, els, onlyIfMore = false) {
+    const names = [...new Set(els.map(firstLine).filter((t) => t && !PROMPT_TEXT.test(t)))].slice(0, upTo(12));
+    if (names.length > (onlyIfMore ? seenOptions.get(field)?.length || 0 : 0)) seenOptions.set(field, names);
+  }
+
   async function pickInCustomDropdown(field, id, option) {
     const name = fieldInfo(field).label || labelOf(field) || "the field";
     if (openListOf(field)) {
@@ -2388,6 +2486,7 @@ if (!window.__krify) {
       }, typeable ? 700 : 2500) || shownOptions(field, before);
     }
     const firstSeen = found.options; // what the list showed before any search (for the "not found" reply)
+    rememberOptions(field, firstSeen);
     // Nothing opened and the field itself is a text box (a combobox you type into): type to filter.
     let typedInto = null;
     if (!found.options.length && !found.search && field.tagName === "INPUT" && SEARCHABLE.test(field.type)) {
@@ -2426,6 +2525,7 @@ if (!window.__krify) {
         if (box.scrollTop === top) break; // at the end
       }
       found = shownOptions(field, before);
+      if (!typedInto) rememberOptions(field, found.options, true); // more rows loaded by scrolling
     }
     if (!match) {
       // Clear Krify's search text, so the list (and the next page view) shows every option again.
@@ -2520,9 +2620,12 @@ if (!window.__krify) {
       } else if (visibleEnough(target) || visibleEnough(el)) {
         const settled = await waitStable(target, Math.min(600, Math.max(200, timeoutMs - (Date.now() - start))));
         const r = settled || target.getBoundingClientRect();
-        const spots = [[0.5, 0.5], [0.25, 0.5], [0.75, 0.5], [0.5, 0.3], [0.5, 0.7]]
-          .map(([fx, fy]) => ({ x: r.left + r.width * fx, y: r.top + r.height * fy }))
-          .filter((s) => s.x >= 0 && s.y >= 0 && s.x < innerWidth && s.y < innerHeight);
+        const spots = [
+          // A clickable row: a plain cell first, so the click doesn't land on its "⋯" menu or a badge.
+          ...(isClickableRow(el) ? rowSpots(el) : []),
+          ...[[0.5, 0.5], [0.25, 0.5], [0.75, 0.5], [0.5, 0.3], [0.5, 0.7]]
+            .map(([fx, fy]) => ({ x: r.left + r.width * fx, y: r.top + r.height * fy })),
+        ].filter((s) => s.x >= 0 && s.y >= 0 && s.x < innerWidth && s.y < innerHeight);
         let reached = null, cover = null;
         for (const spot of spots) {
           const hit = hitAt(spot.x, spot.y);

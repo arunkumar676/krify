@@ -26,6 +26,9 @@ OLD_PAGE = "\n[older page view removed to save space]"
 OLD_SCREEN = "[older screen text removed to save space – use your notes]"
 MAX_READ_SITES = 3  # newest page text is kept for this many sites
 SHEET_HINT = "[Google Sheet] Call read_text first to see the columns, then sheet_query with SQL."
+# Unrestricted mode: the whole page's text rides along with every page view (it's trimmed with it).
+PAGE_TEXT = ("\n[Page text] Unrestricted mode: all text on the page, top to bottom (paragraphs, tables, "
+             "details) – no need to call read_text for this page.\n{}")
 
 
 # Batches: actions the AI may send several of in one reply.
@@ -902,7 +905,15 @@ class Agent:
             elements = shown = await self.browser("get_elements", {})
             status = match.group(1) if (match := _STATUS_LINE.search(elements)) else ""
             hint = ambiguity_hint(elements)
+        # The page view lists only elements (and item titles); plain text – paragraphs, a table with
+        # nothing clickable, a record's detail fields – is otherwise only read with read_text. In
+        # Unrestricted mode it's sent too, uncut. Not on Sheets: their text is a canvas, read as CSV.
         text = f"{shown}\n{hint}" if hint else shown
+        if full and not is_sheet(info.get("url", "")):
+            page_text = await self.browser_quiet("read_text", {"scope": "page"})
+            if isinstance(page_text, str) and page_text.strip() and not page_text.startswith("(no text"):
+                shown += PAGE_TEXT.format(page_text)  # counts as read for the fact check
+                text += PAGE_TEXT.format(page_text)
         if is_sheet(info.get("url", "")):
             text = f"{SHEET_HINT}\n{text}"
         tabs = f"[Tabs] {info['tabs']}\n" if info.get("tabs") else ""

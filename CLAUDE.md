@@ -86,7 +86,16 @@ Key mechanics worth knowing before touching this file:
   `describe()` calls a button/clickable with a down-chevron icon (or role=combobox /
   aria-haspopup=listbox) `dropdown "…"`: list filters like "My Activities" only show their current
   choice. `filter_dropdowns()` in `loop.py` uses that to hint after an empty `find_text`/`find_elements`
-  and to send a "not found" answer back once (`check_filters`) if no filter was changed.
+  and to send a "not found" answer back once (`check_filters`) if no filter was changed. A native
+  `<select>` line always lists its options. A custom dropdown's options are usually only in the DOM
+  while it's open, so `describe()` asks `extension/pagehook.js` – injected next to `content.js` in the
+  page's own JS world (`world: "MAIN"`, `injectKrify()` in `operations.js`) – over a synchronous
+  `krify:options` / `krify:options-result` event pair; it reads the owning React component's
+  `options`/`items` prop (current fiber, ≤3 components up) without opening anything. Non-React sites
+  fall back to the options `pickInCustomDropdown` saw when it last opened that dropdown (`seenOptions`).
+  Either way the line reads `dropdown "…" (options: a, b, …, +N more)`.
+- **Answer format**: the prompt and the `done` tool ask for a one-line answer, then 3+ items as
+  `- item` / `1. item` lines; `formatText()` in `sidepanel.js` (escape first) renders those as lists.
 - **Fact check**: before a `done`, `check_facts()` rejects the summary once if it contains a 3+ digit
   number that never appeared in anything read this task (`self.seen`); a second rejection is allowed
   through with a caveat appended.
@@ -144,7 +153,12 @@ Injected on demand into the active page. Walks the DOM for a fixed `SELECTOR` li
 elements, filters to what's currently visible/on-screen, assigns each a stable `[n]` number via
 `data-krify-id`, and returns a compact text description (`describe()`), capped at `MAX_ELEMENTS`/
 `MAX_TEXT`/`MAX_SCREEN_TEXT` to keep requests small for free-tier token limits. Open popups/menus are
-listed first so they don't get pushed past the element cap on busy pages. The same script also owns
+listed first so they don't get pushed past the element cap on busy pages. Besides `SELECTOR`,
+`pointerTargets()` adds React elements that only show a pointer cursor, and table rows that open a record
+when clicked (`isClickableRow()`: own pointer cursor or a tabindex, not a header row, first cell not
+already a link). Such a row is one `row link "cell | cell | …"` element. Its own buttons/links stay listed,
+a click on it aims at a cell with nothing clickable in it (`rowSpots()`), and `safety.py` doesn't read
+its cell text as a risky label. The same script also owns
 the shadow-DOM overlay used for the visible cursor, the "Krify is working" glowing border, and the
 element-number labels drawn on screenshots.
 
@@ -162,7 +176,10 @@ always see the whole page. `find_elements`/`inspect` repeat the same numbering (
 so their ids match the view. To try the renderer without a browser:
 `uv run python -m app.agent.pageview fixtures/amazon_search.json [--full] [--flat]`.
 
-The page view (flat or structured) is the only page data sent automatically every step. When it doesn't show which
+The page view (flat or structured) is the only page data sent automatically every step. Plain text (paragraphs, a
+table with nothing clickable) otherwise needs `read_text`. In Unrestricted mode (structured view, not on Sheets),
+`look()` adds the whole page's `read_text` to the view under `[Page text]`, uncut, and it is trimmed along with the
+view. When it doesn't show which
 element goes with which (e.g. several identical "Add to cart" buttons in a list), the model can call
 the `inspect` tool: an indented accessibility-tree view (`getAccessibilityTree()`) built from the same
 numbered elements plus, with `filter="all"`, non-interactive structural context (headings, regions,

@@ -59,6 +59,11 @@ def check(name, args, elements, last_typed_line="", url=""):
     if name in ("click", "select_option", "click_at"):
         # click_at has no element number: the loop looks up what's under the spot ("_under").
         line = args.get("_under", "") if name == "click_at" else element_line(elements, args.get("element"))
+        # A clickable table row only opens its record; its label is the row's cell text ("Payment
+        # pending", "Deleted", "Sent" are statuses, not what the click does). The row's own buttons
+        # ("Delete") are separate elements and are still checked.
+        if name != "select_option" and line.startswith("row link "):
+            return None
         text = f"{visible_text(line)} {args.get('option', '')}"
         for category, words in RISKY_WORDS.items():
             if _find(words, text):

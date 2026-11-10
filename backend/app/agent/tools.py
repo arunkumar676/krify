@@ -93,8 +93,9 @@ TOOLS = [
           "check, only when the site turned out different from what you planned.",
           {"steps": {"type": "array", "items": TEXT}, "done_when": TEXT}, ["steps"]),
     _tool("note", "Save a fact for later, e.g. 'Amazon: iPhone 16 128GB ₹69,900'.", {"text": TEXT}, ["text"]),
-    _tool("done", "Task finished. summary: your answer to the user in plain English sentences "
-          "(not JSON, not a line copied from the page), e.g. \"There are 33 people – the page lists 1–20 of 33.\"",
+    _tool("done", "Task finished. summary: your answer to the user – a one-line direct answer in plain English "
+          "(not JSON, not a line copied from the page), e.g. \"There are 33 people – the page lists 1–20 of 33.\" "
+          "3+ items: one per line after it, e.g. \"The page lists 3 case studies:\\n- Fuel and Gas\\n- College\\n- RPA\"",
           {"summary": TEXT}, ["summary"]),
-    _tool("ask_user", "Ask the user a question.", {"question": TEXT}, ["question"]),
+    _tool("ask_user", "Ask the user a question. Choices: one per line as \"- choice\".", {"question": TEXT}, ["question"]),
 ]

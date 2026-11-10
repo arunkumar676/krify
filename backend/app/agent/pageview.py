@@ -296,6 +296,10 @@ def render(model):
             header += " (open dropdown list – click one of these options, or select_option on its field)"
         lines.append(header)
         card, pos = None, 0
+        # A clickable table row is its own card: its `row link "…"` line is the ▸ line, with the
+        # row's own buttons/links indented under it (a card summary would repeat the same cells).
+        row_ids = {cards[e.card]["row"] for e in visible if e.card and cards.get(e.card, {}).get("row")}
+        rows = {e.card: e for e in visible if e.el["id"] in row_ids}
         for e in visible:
             el_pos = e.el.get("pos", 0)
             if el_pos != pos:
@@ -303,8 +307,12 @@ def render(model):
                 pos = el_pos
             if e.card != card:
                 card = e.card
-                if card:
+                if card in rows:
+                    lines.append("▸ " + _element_line(rows[card].el))
+                elif card:
                     lines.append(_card_line(cards.get(card), el_pos))
+            if card in rows and e is rows[card]:
+                continue
             lines.append(("  " if card else "") + _element_line(e.el))
         more = [f"{cut} more on screen"] if cut else []
         more += [f"{n} {POSITION[p]}" for p, n in where.items() if n]

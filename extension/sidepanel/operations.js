@@ -222,10 +222,22 @@ const elementFrame = new Map(); // element number → frame id (0 = main page)
 // In-page functions whose first argument is an element number.
 const ELEMENT_FNS = new Set(["click", "hover", "type", "pointAt", "spotOf", "hoverSpot", "focusCheck", "selectOption", "scrollAt", "describeId", "enterTarget", "leaveCheck"]);
 
+/** Put Krify's page script in `target` (if it isn't there yet), plus pagehook.js in the page's own
+ *  world (it reads React dropdowns' options for content.js). The hook is optional: if it can't be
+ *  injected, dropdowns just show their options after select_option has opened them. */
+async function injectKrify(target) {
+  await chrome.scripting.executeScript({ target, files: ["content.js"] });
+  try {
+    await chrome.scripting.executeScript({ target, files: ["pagehook.js"], world: "MAIN" });
+  } catch {
+    // ignore
+  }
+}
+
 /** The tab's embedded pages worth looking at, in page order: [{ frameId, label }]. */
 async function embeddedPages(tabId) {
   try {
-    await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, files: ["content.js"] });
+    await injectKrify({ tabId, allFrames: true });
     const results = await chrome.scripting.executeScript({
       target: { tabId, allFrames: true },
       func: () => window.__krify?.frameInfo(),
@@ -243,7 +255,7 @@ async function embeddedPages(tabId) {
 async function callInAllFrames(fnName, args = []) {
   const tab = await webTab();
   try {
-    await chrome.scripting.executeScript({ target: { tabId: tab.id, allFrames: true }, files: ["content.js"] });
+    await injectKrify({ tabId: tab.id, allFrames: true });
     await chrome.scripting.executeScript({
       target: { tabId: tab.id, allFrames: true },
       func: (name, a) => window.__krify?.[name](...a),
@@ -307,7 +319,7 @@ async function callInPage(fnName, args = [], tabId = null, frameId = null) {
     });
     [result] = await call();
     if (result?.result?.missing) {
-      await chrome.scripting.executeScript({ target, files: ["content.js"] });
+      await injectKrify(target);
       [result] = await call();
     }
   } catch (err) {
