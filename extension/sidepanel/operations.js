@@ -435,7 +435,8 @@ export const operations = {
     const pages = [{ ...main, frame: "" }];
     let last = main.count;
     for (const { frameId, label } of frames) {
-      const room = Math.min(MODEL_MAX - last, MODEL_FRAME_SHARE);
+      // Unrestricted: every embedded page, all of it (content.js ignores `max` in that mode).
+      const room = full ? MODEL_FRAME_SHARE : Math.min(MODEL_MAX - last, MODEL_FRAME_SHARE);
       if (room <= 0) break;
       let inner;
       try {
@@ -482,8 +483,9 @@ export const operations = {
     // The main page's text, then each embedded page's (shorter), under its own heading.
     const tab = await webTab();
     const parts = [await callInPage("readText", [scope], null, 0)];
+    const unrestricted = await showUnrestricted(); // then each embedded page's text is read whole too
     for (const { frameId, label } of await embeddedPages(tab.id)) {
-      const text = await callInPage("readText", [scope, FRAME_TEXT], null, frameId).catch(() => "");
+      const text = await callInPage("readText", [scope, unrestricted ? null : FRAME_TEXT], null, frameId).catch(() => "");
       if (text && !text.startsWith("(no text")) parts.push(`--- inside embedded page "${label}" ---\n${text}`);
     }
     return parts.join("\n");

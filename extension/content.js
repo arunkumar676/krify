@@ -50,6 +50,8 @@ if (!window.__krify) {
   // Labels, titles and values: shortened to `max` normally, kept whole in Unrestricted mode
   // (operations.js sets window.__krify.unrestricted before every call into the page).
   const keep = (s, max) => clean(s, window.__krify?.unrestricted ? Infinity : max);
+  // How many of a list to pass on: `n` normally, all of them in Unrestricted mode.
+  const upTo = (n) => (window.__krify?.unrestricted ? Infinity : n);
 
   // What a person could see, regardless of scroll position: has size, isn't hidden, faded out or
   // clipped away – by its own CSS or an ancestor's – and isn't in an inert / aria-hidden part of
@@ -171,9 +173,9 @@ if (!window.__krify) {
     return kept
       // Table rows first: they're what "how many" questions are about, so they mustn't fall past the cap.
       .sort((a, b) => b.table - a.table || b.items.length - a.items.length)
-      .slice(0, 4)
+      .slice(0, upTo(4))
       .map(({ items, table }) => `${items.length} ${table ? "table " : ""}row${items.length === 1 ? "" : "s"} like ` +
-        `"${clean(items[0].innerText || items[0].textContent, 60)}"`);
+        `"${keep(items[0].innerText || items[0].textContent, 60)}"`);
   }
 
   // The parent, stepping out of a shadow root to the component that holds it.
@@ -339,6 +341,16 @@ if (!window.__krify) {
     );
   }
 
+  // A scrollable box's own name – never its text: labelOf() falls back to innerText, which for a
+  // scrolling <main> is the whole page (and uncut in Unrestricted mode), repeating every label in one
+  // line. A name, not page data, so it's short in both modes.
+  function boxName(box) {
+    const heading = box.querySelector("h1, h2, h3, [role=heading]");
+    const name = box.getAttribute("aria-label") || textOfIds(box, "aria-labelledby") || box.getAttribute("title") ||
+      (heading && heading.innerText) || (box.matches("main, [role=main]") ? "main content" : "");
+    return clean(name, 40);
+  }
+
   // ---------- clickable <div>s ----------
   // React/Vue sites attach click handlers in JavaScript, so a custom dropdown ("Select a contact")
   // and its options can be plain <div>s with no role, onclick attribute or tabindex – the only sign
@@ -351,7 +363,13 @@ if (!window.__krify) {
     const found = [];
     const cursors = new Map(); // each element's style is read once (a child's check reads its parent's)
     const pointer = (el) => {
-      if (!cursors.has(el)) cursors.set(el, getComputedStyle(el).cursor === "pointer");
+      if (!cursors.has(el)) {
+        const cursor = getComputedStyle(el).cursor;
+        // A custom dropdown that can't be opened yet ("Select a type" until a channel is chosen) shows
+        // a not-allowed cursor instead: still a field of the form, listed as (disabled).
+        cursors.set(el, cursor === "pointer" ||
+          (cursor === "not-allowed" && el.children.length <= 3 && PROMPT_TEXT.test(el.innerText || "") && (el.innerText || "").length <= 60));
+      }
       return cursors.get(el);
     };
     for (const r of roots) {
@@ -366,6 +384,68 @@ if (!window.__krify) {
     }
     return found;
   }
+
+  // ---------- open custom dropdown lists ----------
+  // A React/Tailwind dropdown's open list is often a plain <div> (no role=listbox): positioned
+  // (absolute/fixed + a z-index) under the field that opened it, poking out of that field's box,
+  // holding clickable rows. Found here so it's treated like a real popup – listed first, in one piece,
+  // named after its field – instead of being sorted in among the form fields it happens to cover.
+  let openLists = new Map(); // open list → the field (trigger) that opened it, from the latest numbering
+
+  function findOpenLists(clickables, shown) {
+    const lists = new Map();
+    const positioned = new Map(); // memo: node → is it a positioned, stacked panel?
+    const panel = (node) => {
+      if (!positioned.has(node)) {
+        const st = getComputedStyle(node);
+        positioned.set(node, (st.position === "absolute" || st.position === "fixed") && st.zIndex !== "auto" && Number(st.zIndex) > 0);
+      }
+      return positioned.get(node);
+    };
+    const rows = new Map();
+    for (const el of clickables) {
+      let node = el.parentElement;
+      for (let i = 0; node && node !== document.body && i < 6; node = node.parentElement, i++) {
+        if (panel(node)) {
+          rows.set(node, (rows.get(node) || 0) + 1);
+          break;
+        }
+      }
+    }
+    for (const [list, n] of rows) {
+      if (n < 2 || list.matches(POPUP) || list.querySelector(POPUP)) continue; // a real popup: handled already
+      const box = list.parentElement;
+      if (!box || box === document.body || box === document.documentElement || !shown(list)) continue;
+      const r = list.getBoundingClientRect();
+      if (r.width * r.height > innerWidth * innerHeight * 0.5) continue; // a drawer or page overlay, not a list
+      const b = box.getBoundingClientRect();
+      if (r.bottom <= b.bottom + 2 && r.top >= b.top - 2) continue; // stays inside its box: layout, not a pop-out
+      const trigger = clickables.find((c) => box.contains(c) && !list.contains(c));
+      if (trigger) lists.set(list, trigger);
+    }
+    return lists;
+  }
+
+  // The open list an element sits in (null if none).
+  function openListOf(el) {
+    for (const list of openLists.keys()) if (list.isConnected && containsDeep(list, el)) return list;
+    return null;
+  }
+
+  // Custom fields (a <div> dropdown) can't be :disabled – sites mark them with a class instead
+  // ("cursor-not-allowed", "disabled", "btn--disabled"), and a later cursor-pointer class can still
+  // win, so the cursor alone doesn't tell. Checks the element and its two nearest ancestors.
+  const DISABLED_CLASS = /^(cursor-not-allowed|disabled|is-disabled)$|--disabled$/;
+  function looksDisabled(el) {
+    for (let node = el, i = 0; node && i < 3; node = node.parentElement, i++) {
+      if ([...(node.classList || [])].some((c) => DISABLED_CLASS.test(c))) return true;
+    }
+    return getComputedStyle(el).cursor === "not-allowed";
+  }
+
+  // An option in an open custom list that only repeats the field's prompt ("Select a channel"):
+  // clicking it chooses nothing and just closes the list.
+  const PROMPT_TEXT = /^\s*(-+\s*)?(select|choose|pick)\b/i;
 
   // ---------- form fields: visible label, required mark, inline error ----------
   // Many forms (React + Tailwind and the like) show "Contact *" as a <label> that isn't linked to its
@@ -390,30 +470,82 @@ if (!window.__krify) {
 
   const formLike = (el) => el.matches(CONTROL) || pointerish.has(el) || !!closestDeep(el, FORMISH);
 
+  // A real field (something you type into or choose from), not a button: only fields get a label
+  // from nearby text, otherwise a "Save" button would be named after the field above it.
+  const isField = (el) => el.matches(CONTROL) || (pointerish.has(el) && !/^(BUTTON|A)$/.test(el.tagName));
+
+  // Text before a control that acts as its label without being a <label>: Tailwind forms often use a
+  // <div>/<p>/<span> for "Contact *". Short, text only, no controls or numbered elements inside.
+  function labelLike(node, el) {
+    if (!node || node.nodeType !== 1 || node.contains(el) || node.querySelector(CONTROL)) return false;
+    if (node.matches("label, legend")) return true;
+    if (!node.matches("div, span, p, dt, h4, h5, h6") || pointerish.has(node) || node.querySelector("[data-krify-id]")) return false;
+    const text = clean(node.innerText || "", 80);
+    return text.length > 0 && text.length <= 60 && node.children.length <= 3 && isRendered(node);
+  }
+
   // The field's wrapper: the nearest ancestor (≤ 4 up) holding a label for it and at most 2 controls.
+  // The label is the CLOSEST one before the field: in a two-column row ("Contact *" | "Channel *")
+  // the first label in the box belongs to the neighbour.
   function fieldGroupOf(el) {
     let node = el;
+    let child = el;
     for (let i = 0; i < 4; i++) {
+      child = node;
       node = node.parentElement;
       if (!node || node === document.body) return null;
-      if (node.querySelectorAll(`${CONTROL}, [data-krify-id]`).length > 2) return null; // a whole form/row
-      const label = [...node.querySelectorAll("label, legend")].find(
-        (l) => !l.contains(el) && l.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING,
-      );
+      // A whole form/row – not counting an open dropdown list's own search box and options, or
+      // parts of this field itself (an icon inside a custom dropdown).
+      const controls = [...node.querySelectorAll(`${CONTROL}, [data-krify-id]`)]
+        .filter((c) => !openListOf(c) && (c === el || !(el.contains(c) || c.contains(el))));
+      if (controls.length > 2) return null;
+      let label = null;
+      for (const l of node.querySelectorAll("label, legend")) {
+        if (!l.contains(el) && l.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) label = l;
+      }
+      if (!label && isField(el)) {
+        for (let sib = child.previousElementSibling; sib; sib = sib.previousElementSibling) {
+          if (labelLike(sib, el)) {
+            label = sib;
+            break;
+          }
+        }
+      }
       if (label) return { box: node, label };
     }
     return null;
   }
 
-  // → { label, required, error } for a form field ("" / false when unknown).
+  // Is the label marked required ("Contact *", "Email (required)", a CSS ::after "*") or optional
+  // ("Notes (optional)")? → "required" | "optional" | "".
+  const OPTIONAL_WORD = /\boptional\b/i;
+  function requiredMark(label, raw = clean(label.innerText || label.textContent || "", 80)) {
+    if (OPTIONAL_WORD.test(raw)) return "optional";
+    if (raw.includes("*") || /\brequired\b/i.test(raw) || /required/i.test(label.getAttribute("class") || "")) return "required";
+    for (const node of [label, ...label.querySelectorAll("*")].slice(0, 6)) {
+      for (const pseudo of ["::after", "::before"]) {
+        const content = getComputedStyle(node, pseudo).content;
+        if (content && content !== "none" && content.includes("*")) return "required";
+      }
+    }
+    return "";
+  }
+
+  // → { label, required, optional, error } for a form field ("" / false when unknown).
   function fieldInfo(el) {
-    const info = { label: "", required: false, error: "" };
-    if (!formLike(el)) return info;
+    const info = { label: "", required: false, optional: false, error: "" };
+    if (!formLike(el) || openListOf(el)) return info; // an option in an open list isn't a field of its own
     const group = fieldGroupOf(el);
     if (group) {
       const raw = clean(group.label.innerText || group.label.textContent, 60);
-      info.label = raw.replace(/\s*\*\s*$/, "").trim();
-      info.required = /\*\s*$/.test(raw) || /required/i.test(group.label.getAttribute("class") || "");
+      info.label = raw.replace(/\((required|optional)\)/gi, "").replace(/\s*\*\s*/g, " ").trim();
+      const mark = requiredMark(group.label);
+      info.required = mark === "required";
+      info.optional = mark === "optional";
+      // A custom dropdown often keeps its real value in a hidden <input required> next to the trigger.
+      if (!info.required && isField(el) && group.box.querySelector("input[required], select[required], textarea[required], [aria-required=true]")) {
+        info.required = true;
+      }
       for (const node of group.box.querySelectorAll("*")) {
         if (node === group.label || group.label.contains(node) || node.contains(el) || el.contains(node)) continue;
         if (node.matches(CONTROL) || node.children.length > 2 || !isRendered(node)) continue;
@@ -424,10 +556,115 @@ if (!window.__krify) {
         }
       }
     }
+    // <label>Topic <select>…</select></label>: the label wraps the field – its own words only,
+    // not the options' text.
+    const wrap = !group && el.labels?.[0]?.contains(el) ? el.labels[0] : null;
+    if (wrap) {
+      const own = clean([...wrap.childNodes].filter((n) => !n.contains(el)).map((n) => n.textContent).join(" "), 60);
+      info.label = own.replace(/\((required|optional)\)/gi, "").replace(/\s*\*\s*/g, " ").trim();
+      const mark = own ? requiredMark(wrap, own) : "";
+      info.required = mark === "required";
+      info.optional = mark === "optional";
+    }
+    if (el.required || el.getAttribute("aria-required") === "true") info.required = true;
     if (!info.error && el.getAttribute("aria-invalid") === "true") {
       info.error = clean(textOfIds(el, "aria-errormessage") || textOfIds(el, "aria-describedby"), 100);
     }
     return info;
+  }
+
+  // Does the field hold a value? → { filled, value }. A custom dropdown's text is its chosen value,
+  // or a prompt ("Select a contact", "--", "None") while nothing is chosen.
+  const EMPTY_TEXT = /^\s*(-+|—|none|please (select|choose).*|search\.*)?\s*$/i;
+  function filledState(el) {
+    const short = (t) => keep(t || "", 30);
+    const tag = el.tagName;
+    if (tag === "SELECT") {
+      const opt = el.options[el.selectedIndex];
+      const filled = !!opt && opt.value !== "" && !PROMPT_TEXT.test(opt.text) && !EMPTY_TEXT.test(opt.text);
+      return { filled, value: filled ? short(opt.text) : "" };
+    }
+    if (tag === "INPUT" && (el.type === "checkbox" || el.type === "radio")) {
+      const group = el.name ? [...(el.form || document).querySelectorAll(`input[name="${CSS.escape(el.name)}"]`)] : [el];
+      const on = group.find((i) => i.checked);
+      return { filled: !!on, value: on ? short(labelOf(on)) : "" };
+    }
+    if (tag === "INPUT" && el.type === "file") return { filled: el.files?.length > 0, value: short(el.files?.[0]?.name) };
+    if (tag === "INPUT" && el.type === "password") return { filled: !!el.value, value: el.value ? "••••" : "" };
+    if (tag === "INPUT" || tag === "TEXTAREA") return { filled: el.value.trim() !== "", value: short(el.value) };
+    const text = keep(el.innerText || el.textContent || "", 60);
+    const empty = !text || PROMPT_TEXT.test(text) || EMPTY_TEXT.test(text) || text === el.getAttribute("placeholder");
+    return { filled: !empty, value: empty ? "" : short(text) };
+  }
+
+  // The form being filled: an open dialog, else the form holding the focus, else the form with the
+  // most fields on screen. → a checklist { name, marks, fields, submits } for the server's [Form] line,
+  // or null. `marks`: the form marks required fields at all – if not, "not marked" means unknown,
+  // not optional.
+  // No dialog role and no <form> (a React drawer is often a plain fixed <div>): the floating panel
+  // (position fixed/absolute + z-index) holding the most labelled fields on screen, if ≥ 2.
+  function floatingPanel(numbered) {
+    const counts = new Map();
+    for (const { el } of numbered) {
+      if (!isField(el) || openListOf(el) || !inView(el) || !fieldGroupOf(el)) continue;
+      for (let node = el.parentElement; node && node !== document.body; node = node.parentElement) {
+        const st = getComputedStyle(node);
+        if ((st.position === "fixed" || st.position === "absolute") && st.zIndex !== "auto" && !openLists.has(node)) {
+          counts.set(node, (counts.get(node) || 0) + 1);
+          break;
+        }
+      }
+    }
+    const best = [...counts].sort((a, b) => b[1] - a[1])[0];
+    return best && best[1] >= 2 ? best[0] : null;
+  }
+
+  const SUBMIT_TEXT = /^\s*[+✓]?\s*(save|submit|add|create|update|send|continue|next|confirm|apply|register|sign ?up|book|post|done|finish|place order)\b/i;
+  const MAX_FORM_FIELDS = 25;
+  function formSummary(numbered) {
+    const fieldsIn = (root) => numbered.filter((n) => containsDeep(root, n.el) && isField(n.el) && !openListOf(n.el) &&
+      !/^(submit|button|reset|image|search)$/.test(n.el.type || ""));
+    const dialogs = deepAll("dialog[open], [role=dialog], [role=alertdialog], [aria-modal=true]").filter(isRendered);
+    const focus = activeDeep();
+    const forms = deepAll("form, [role=form]").filter(isRendered);
+    let root = dialogs.filter((d) => fieldsIn(d).length).pop()
+      || (focus && closestDeep(focus, "form, [role=form]"))
+      || forms.map((f) => [f, fieldsIn(f).filter((n) => inView(n.el)).length]).filter(([, k]) => k >= 2)
+        .sort((a, b) => b[1] - a[1])[0]?.[0];
+    root ||= floatingPanel(numbered);
+    if (!root) return null;
+    const seenGroups = new Set();
+    const fields = [];
+    for (const { id, el } of fieldsIn(root)) {
+      if (el.type === "radio" && el.name) {
+        if (seenGroups.has(el.name)) continue; // one entry per radio group
+        seenGroups.add(el.name);
+      }
+      const info = fieldInfo(el);
+      // "Attach files" is a clickable box in front of a hidden <input type=file>: the input holds the value.
+      const fileInput = pointerish.has(el) ? fieldGroupOf(el)?.box.querySelector("input[type=file]") : null;
+      const { filled, value } = filledState(fileInput || el);
+      fields.push({
+        id, label: keep(info.label || labelOf(el), 40), required: info.required, optional: info.optional,
+        filled, value, disabled: isDisabled(el), error: keep(info.error, 80),
+        kind: fileInput || el.type === "file" ? "file" : el.tagName === "SELECT" || pointerish.has(el) ? "dropdown" :
+          /date|time/.test(el.type || "") ? "date" : el.type === "checkbox" || el.type === "radio" ? "choice" : "text",
+      });
+      if (fields.length >= upTo(MAX_FORM_FIELDS)) break;
+    }
+    if (fields.length < 2) return null; // a lone search box isn't a form to fill
+    // Its submit button: real type=submit buttons, else the LAST save/add-like button (the footer's
+    // "Save", not a "+ Add" for a list inside the form).
+    const buttons = numbered.filter((n) => containsDeep(root, n.el) && (!isField(n.el) || n.el.type === "submit"));
+    // (A <button> outside a <form> also says type "submit": only real form submits count.)
+    let submits = buttons.filter((n) => n.el.type === "submit" && n.el.form && /^(BUTTON|INPUT)$/.test(n.el.tagName)).map((n) => n.id);
+    if (!submits.length) {
+      const last = buttons.filter((n) => SUBMIT_TEXT.test(labelOf(n.el))).pop();
+      if (last) submits = [last.id];
+    }
+    const heading = root.querySelector("h1, h2, h3, [role=heading]");
+    const name = keep(textOfIds(root, "aria-labelledby") || root.getAttribute("aria-label") || heading?.innerText || "", 50);
+    return { name, marks: fields.some((f) => f.required || f.optional), fields, submits };
   }
 
   // Status/error/validation messages a site shows dynamically (toasts, banners, inline form
@@ -448,7 +685,7 @@ if (!window.__krify) {
     const flagged = new Set(); // fields already reported, so the browser's own message isn't repeated
     const lines = [];
     const add = (text, el) => {
-      text = clean(text, 1000);
+      text = keep(text, 1000);
       if (!text || seen.has(text)) return;
       seen.add(text);
       lines.push(keep(text, 150) + offScreen(el));
@@ -482,7 +719,7 @@ if (!window.__krify) {
         add(`Form error – ${fieldInfo(el).label || labelOf(el) || el.name || el.type}: ${el.validationMessage}`, el);
       }
     }
-    return lines.slice(0, 5).join(" | ");
+    return lines.slice(0, upTo(5)).join(" | ");
   }
 
   function describe(el) {
@@ -547,9 +784,15 @@ if (!window.__krify) {
     const rendered = whole || window.__krify.unrestricted;
     // An open menu, dropdown or dialog comes first: on busy pages (Google Sheets has 100+ toolbar
     // buttons) its items would otherwise fall past the shown-elements window.
-    const popups = roots.flatMap((r) => [...r.querySelectorAll(POPUP)]).filter(rendered ? isRendered : isVisible);
-    const inPopups = new Set(popups.flatMap((p) => [...p.querySelectorAll(SELECTOR)]));
-    let all = [...new Set([...inPopups, ...roots.flatMap((r) => [...r.querySelectorAll(SELECTOR)]), ...pointerTargets(roots)])];
+    const shown = rendered ? isRendered : isVisible;
+    const selected = roots.flatMap((r) => [...r.querySelectorAll(SELECTOR)]);
+    const pointers = pointerTargets(roots);
+    const clickables = [...new Set([...selected, ...pointers])];
+    // A custom dropdown's open list (a plain <div>, no role) counts as a popup too.
+    openLists = findOpenLists(clickables, shown);
+    const popups = [...roots.flatMap((r) => [...r.querySelectorAll(POPUP)]).filter(shown), ...openLists.keys()];
+    const inPopups = new Set(clickables.filter((el) => popups.some((p) => containsDeep(p, el))));
+    let all = [...new Set([...inPopups, ...clickables])];
     let nearCount = all.length;
     if (whole) {
       const near = [];
@@ -569,7 +812,8 @@ if (!window.__krify) {
     const deadline = performance.now() + COLLECT_MS;
     let partial = false;
     for (const [i, el] of all.entries()) {
-      if (whole && (candidates.length >= max || (i >= nearCount && performance.now() > deadline))) {
+      // Unrestricted: every element on the page – no count or time limit.
+      if (whole && !window.__krify.unrestricted && (candidates.length >= max || (i >= nearCount && performance.now() > deadline))) {
         partial = true;
         break;
       }
@@ -592,19 +836,22 @@ if (!window.__krify) {
     }
     candidates.forEach(({ el }) => el.removeAttribute("data-krify-cand"));
     // Visual reading order (top to bottom, left to right), popups first – not raw DOM order, so which elements land in the shown window reflects what a person scanning the page would reach first, not an accident of markup order.
-    candidates.sort((a, b) => {
-      const pa = inPopups.has(a.el), pb = inPopups.has(b.el);
-      if (pa !== pb) return pa ? -1 : 1;
-      return a.rect.top - b.rect.top || a.rect.left - b.rect.left;
-    });
+    // An open dropdown list comes before the dialog it opened in (it covers part of it, so sorting
+    // both by position would mix its options in among the dialog's other fields).
+    const rank = (el) => (openListOf(el) ? 0 : inPopups.has(el) ? 1 : 2);
+    candidates.sort((a, b) => rank(a.el) - rank(b.el) || a.rect.top - b.rect.top || a.rect.left - b.rect.left);
+    // The rank above decides who fits in the window (an open list is never cut). The NUMBERS go to
+    // the open list's options last, though: opening a list then only adds numbers at the end, instead
+    // of shifting every form field by the list's length (the AI's next step would hit the wrong one).
+    const kept = !whole && !window.__krify.unrestricted ? candidates.slice(0, max) : candidates;
+    const inList = new Set(kept.filter(({ el }) => openListOf(el)));
     const numbered = [];
     let id = start;
-    for (const { el, text, rect } of candidates) {
+    for (const { el, text, rect } of [...kept.filter((c) => !inList.has(c)), ...inList]) {
       id += 1;
       el.setAttribute("data-krify-id", String(id));
       listed.set(String(id), el);
       numbered.push({ id, el, text, rect, popup: inPopups.has(el) });
-      if (!whole && !window.__krify.unrestricted && id - start >= max) break;
     }
     return { numbered, hasPopup: inPopups.size > 0, lastId: id, partial };
   }
@@ -665,6 +912,7 @@ if (!window.__krify) {
   // Is this node the start of a section? → { kind, modal } or null.
   function sectionKind(node) {
     if (node.nodeType !== 1) return null;
+    if (openLists.has(node)) return { kind: "menu", modal: false, list: true };
     const role = node.getAttribute("role");
     const tag = node.tagName;
     if (node.matches(POPUP)) {
@@ -695,6 +943,8 @@ if (!window.__krify) {
   // A section's own name: its label, or its first heading (not for main, whose headings become
   // groups of their own: "Main › "Results"").
   function sectionName(node, kind) {
+    const trigger = openLists.get(node);
+    if (trigger) return keep(fieldInfo(trigger).label || labelOf(trigger), 50); // "Channel"
     const label = textOfIds(node, "aria-labelledby") || node.getAttribute("aria-label");
     if (label) return keep(label, 50);
     if (kind === "main") return "";
@@ -750,7 +1000,7 @@ if (!window.__krify) {
     if (!all.length) return "";
     const plain = all.filter((p) => !p.label);
     const main = (plain.length ? plain : all).reduce((a, b) => (b.size > a.size ? b : a));
-    const others = all.filter((p) => p !== main).slice(0, 3).map((p) => `${p.label || "also"} ${p.value}`);
+    const others = all.filter((p) => p !== main).slice(0, upTo(3)).map((p) => `${p.label || "also"} ${p.value}`);
     return others.length ? `${main.value} (${others.join(", ")})` : main.value;
   }
 
@@ -771,10 +1021,9 @@ if (!window.__krify) {
     }
     if (!title) {
       const links = els.map((e) => labelOf(e.el)).filter(Boolean).sort((a, b) => b.length - a.length);
-      // The whole-card fallback stays short even in Unrestricted mode: the card's elements are listed anyway.
-      title = links[0] ? keep(links[0], 80) : clean(text, 80);
+      title = links[0] ? keep(links[0], 80) : keep(text, 80);
     }
-    const badges = [...new Set((text.match(BADGES) || []).map((b) => b.replace(/\s+/g, " ")))].slice(0, 3);
+    const badges = [...new Set((text.match(BADGES) || []).map((b) => b.replace(/\s+/g, " ")))].slice(0, upTo(3));
     return { title, price: pricesOf(card), rating: ratingOf(card, text), badges };
   }
 
@@ -786,7 +1035,7 @@ if (!window.__krify) {
     if (!submits || form.noValidate || el.formNoValidate) return "";
     return [...form.elements]
       .filter((f) => f.willValidate && !f.validity.valid)
-      .slice(0, 4)
+      .slice(0, upTo(4))
       .map((f) => `Form error – ${fieldInfo(f).label || labelOf(f) || f.name}: ${f.validationMessage.replace(/\.$/, "")}`)
       .join("; ");
   }
@@ -874,7 +1123,7 @@ if (!window.__krify) {
     } catch {
       // not a form element
     }
-    return el.disabled === true || el.getAttribute("aria-disabled") === "true";
+    return el.disabled === true || el.getAttribute("aria-disabled") === "true" || (pointerish.has(el) && looksDisabled(el));
   }
 
   // Accessibility states the plain description doesn't already show. `field`: fieldInfo(el), so an
@@ -888,6 +1137,13 @@ if (!window.__krify) {
     }
     if (a("aria-expanded") === "true") states.push("expanded");
     else if (a("aria-expanded") === "false") states.push("collapsed");
+    else if ([...openLists.values()].includes(el)) states.push("expanded – its list is open");
+    const list = openListOf(el);
+    if (list && el !== openLists.get(list) && !/^(INPUT|TEXTAREA)$/.test(el.tagName)) {
+      const own = labelOf(el);
+      if (PROMPT_TEXT.test(own)) states.push("placeholder – chooses nothing");
+      else if (own && own === labelOf(openLists.get(list))) states.push("selected");
+    }
     const popup = a("aria-haspopup");
     if (popup && popup !== "false") {
       states.push({ listbox: "opens list", dialog: "opens dialog", grid: "opens picker", tree: "opens picker" }[popup] || "opens menu");
@@ -897,6 +1153,7 @@ if (!window.__krify) {
     if (a("aria-current") && a("aria-current") !== "false") states.push("current");
     if (isDisabled(el)) states.push("disabled");
     if (el.required || a("aria-required") === "true" || field.required) states.push("required");
+    else if (field.optional) states.push("optional");
     let invalid = a("aria-invalid") === "true" || !!field.error;
     try {
       invalid = invalid || el.matches(":user-invalid"); // only after the user touched it, not every empty required field
@@ -1016,6 +1273,7 @@ if (!window.__krify) {
           kind: chainKinds.length ? chainKinds[chainKinds.length - 1].kind : "page",
           kinds: chainKinds.map((k) => k.kind),
           modal: !!(popupAt >= 0 && chainKinds[popupAt].modal),
+          list: !!(popupAt >= 0 && chainKinds[popupAt].list), // a custom dropdown's open list
         });
       }
       return sectionIds.get(name);
@@ -1123,7 +1381,7 @@ if (!window.__krify) {
     let summaries = 0;
     const cardList = cards.map((card, i) => {
       const visible = elements.some((e) => e.c === i && e.pos === 0);
-      if ((!visible && !full) || summaries >= MAX_CARD_SUMMARIES) return { title: "", price: "", rating: "", badges: [], summarised: false };
+      if ((!visible && !full) || (summaries >= MAX_CARD_SUMMARIES && !full)) return { title: "", price: "", rating: "", badges: [], summarised: false };
       summaries += 1;
       return { ...cardSummary(card.node, card.els), summarised: true };
     });
@@ -1137,7 +1395,7 @@ if (!window.__krify) {
       elements.push({ id, text, states: [], hint: "", col: "", pos: 0, s: sectionFor(chainOf(el), null), c: -1 });
     };
     for (const box of scrollBoxes()) {
-      extra(box, `scrollable box "${labelOf(box) ? clean(labelOf(box), 30) : ""}" (scroll with element=${id + 1} to see more)`);
+      extra(box, `scrollable box "${boxName(box)}" (scroll with element=${id + 1} to see more)`);
     }
     const doc = document.documentElement;
     const below = doc.scrollHeight - (scrollY + innerHeight);
@@ -1160,6 +1418,7 @@ if (!window.__krify) {
         scrollMax: Math.max(0, doc.scrollHeight - innerHeight),
       },
       status: statusSignals(),
+      form: formSummary(numbered),
       focused,
       popup: hasPopup,
       partial,
@@ -1261,7 +1520,9 @@ if (!window.__krify) {
       const status = statusSignals();
       if (status) lines.push(`[Status] ${status}`);
       if (hasPopup) lines.push("(an open menu/dialog is listed first)");
-      for (const { id, text } of numbered) lines.push(`[${id}] ${text}`);
+      // An open dropdown list's options are numbered last but listed first: they're the next pick.
+      const first = numbered.filter((n) => openListOf(n.el));
+      for (const { id, text } of [...first, ...numbered.filter((n) => !first.includes(n))]) lines.push(`[${id}] ${text}`);
       if (!window.__krify.unrestricted && numbered.length >= max) {
         lines.push("(more elements not shown – use find_elements(\"text\") to search for one)");
       }
@@ -1272,7 +1533,7 @@ if (!window.__krify) {
         id += 1;
         box.setAttribute("data-krify-id", String(id));
         listed.set(String(id), box);
-        lines.push(`[${id}] scrollable box "${labelOf(box) ? clean(labelOf(box), 30) : ""}" (scroll with element=${id} to see more)`);
+        lines.push(`[${id}] scrollable box "${boxName(box)}" (scroll with element=${id} to see more)`);
       }
       const below = document.documentElement.scrollHeight - (scrollY + innerHeight);
       if (window === top) {
@@ -1905,6 +2166,12 @@ if (!window.__krify) {
 
   // Name what's in the way, so the AI can deal with it ("covered by [3] button "Accept cookies"").
   function coverName(hit) {
+    const list = openListOf(hit);
+    if (list) {
+      const field = openLists.get(list);
+      const id = field.getAttribute("data-krify-id");
+      return `the open dropdown list of ${id ? `[${id}] ` : ""}${describe(field)} (pick one of its options first)`;
+    }
     const listedOne = hit.closest?.("[data-krify-id]");
     if (listedOne) return `[${listedOne.getAttribute("data-krify-id")}] ${describe(listedOne)}`;
     const box = hit.closest?.('[role=dialog], dialog, [aria-modal=true], [class*="cookie" i], [class*="consent" i], [class*="banner" i], [class*="overlay" i], [class*="backdrop" i], [class*="modal" i]') || hit;
@@ -1930,7 +2197,8 @@ if (!window.__krify) {
       if (isDisabled(el)) {
         disabledSince ??= Date.now();
         if (Date.now() - disabledSince > 800) {
-          throw new Error(`[${id}] is disabled – NOT clicked. Usually a required field is empty or invalid: ` +
+          throw new Error(`[${id}] is disabled – NOT clicked. Usually a required field is empty or invalid, or ` +
+            "another field must be chosen first (e.g. a type list that opens only once a channel is picked): " +
             "check the form's (required)/(invalid) fields and [Status], fill them, then try again.");
         }
       } else if (visibleEnough(target) || visibleEnough(el)) {

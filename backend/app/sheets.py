@@ -79,14 +79,14 @@ def _cell(value):
     return str(value)
 
 
-def _as_csv(columns, rows):
-    """Rows as CSV text, cut at MAX_CHARS."""
+def _as_csv(columns, rows, unlimited=False):
+    """Rows as CSV text, cut at MAX_CHARS (not in Unrestricted mode: `unlimited`)."""
     out = io.StringIO()
     writer = csv.writer(out, lineterminator="\n")
     writer.writerow(columns)
     for i, row in enumerate(rows):
         writer.writerow([_cell(v) for v in row])
-        if out.tell() > MAX_CHARS:
+        if not unlimited and out.tell() > MAX_CHARS:
             return out.getvalue() + f"…({len(rows) - i - 1} more rows not shown – ask for fewer rows or columns)"
     if not rows:
         writer.writerow(["(no matching rows)"])
@@ -173,14 +173,14 @@ def filled_cells(text, start, typed):
     return found
 
 
-def cells(text, ref):
+def cells(text, ref, unlimited=False):
     """Exact cell values by address (A130, or A128:C130), read from the sheet as it is now –
     used to check an edit landed in the right place."""
     ref = (ref or "").strip().upper().replace("$", "")
     start, _, end = ref.partition(":")
     (r1, c1), (r2, c2) = _cell_pos(start), _cell_pos(end or start)
     r1, r2, c1, c2 = min(r1, r2), max(r1, r2), min(c1, c2), max(c1, c2)
-    if (r2 - r1 + 1) * (c2 - c1 + 1) > MAX_CELLS:
+    if not unlimited and (r2 - r1 + 1) * (c2 - c1 + 1) > MAX_CELLS:
         raise ValueError(f"Too many cells – read at most {MAX_CELLS} at once.")
     rows = list(csv.reader(io.StringIO(text)))
     lines = []
@@ -207,8 +207,9 @@ def _with_ties(sql):
     return f"{base} QUALIFY RANK() OVER (ORDER BY {order}) <= {n} ORDER BY {order}"
 
 
-def query(text, sql):
-    """Run one read-only SQL statement on the sheet; the answer as CSV text."""
+def query(text, sql, unlimited=False):
+    """Run one read-only SQL statement on the sheet; the answer as CSV text (whole in Unrestricted
+    mode: `unlimited`)."""
     sql = (sql or "").strip().rstrip(";")
     if not re.match(r"(?is)^(select|with)\b", sql) or ";" in sql:
         raise ValueError("sheet_query takes one SELECT statement on table `sheet`.")
@@ -220,7 +221,7 @@ def query(text, sql):
         sheet_cols = [name for name, *_ in con.execute("DESCRIBE sheet").fetchall() if name != "_row"]
         letters = [f'"{c}" = column {_letter(sheet_cols.index(c) + 1)}' for c in columns if c in sheet_cols]
         if not letters and "_row" in columns:  # only row numbers asked: give every column's letter
-            letters = [f'"{c}" = {_letter(i)}' for i, c in enumerate(sheet_cols[:30], 1)]
+            letters = [f'"{c}" = {_letter(i)}' for i, c in enumerate(sheet_cols if unlimited else sheet_cols[:30], 1)]
         where = f"\n(in the sheet: {', '.join(letters)}; cell = letter + _row)" if letters else ""
         # Top-N: never hide a tie. If the rewrite doesn't work for this query, keep the original answer.
         if (tied_sql := _with_ties(sql)) is not None:
@@ -228,10 +229,10 @@ def query(text, sql):
                 tied = con.execute(tied_sql).fetchall()
                 if len(tied) > len(rows):
                     note = f"\n(includes {len(tied) - len(rows)} more row(s) tied with the last one – report them all)"
-                    return _as_csv(columns, tied) + note + where
+                    return _as_csv(columns, tied, unlimited) + note + where
             except duckdb.Error:
                 pass
-        return _as_csv(columns, rows) + where
+        return _as_csv(columns, rows, unlimited) + where
     except duckdb.Error as err:
         raise ValueError(f"SQL error: {str(err).splitlines()[0]}. Fix the query and try again.") from None
     finally:

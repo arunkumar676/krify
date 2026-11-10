@@ -245,6 +245,17 @@ REPEAT_NOTE = (
     "different way (another element, read_text, a fresh screenshot), or call ask_user."
 )
 LOOP_TRAIL = 8  # pages remembered (after each action) to spot going back and forth
+# Save/Submit while the [Form] checklist still shows required fields empty: refused once per form
+# and set of empty fields (the detection can be wrong – a second click goes through, and
+# form_not_sent then reports the site's own errors).
+REQUIRED_EMPTY = ("NOT clicked – required fields are still empty: {}. {} If you're sure they're already filled, "
+                  "click it again.")
+FILL_ANY = ("This is a dummy/test request: fill each with any real option (or short placeholder text), one field "
+            "at a time, then save.")
+ASK_ONCE = ("Use values from the user's request. For any the request doesn't give, call ask_user ONCE listing all "
+            "of them with the options you saw (open each dropdown to see them), then fill them and save.")
+DUMMY = re.compile(r"\b(dummy|test|testing|sample|fake|placeholder|example|random|any)\b", re.I)
+
 LOOP_NOTE = (
     "\n⚠️ Going in circles: your last clicks keep switching between the same pages ({}). More clicking "
     "won't help. Check the page open NOW: if it already does what the user asked (the page they named is "
@@ -529,6 +540,10 @@ class Agent:
         self.confirm = confirm  # async (text) -> bool: ask the user Allow / Block
         self.plan_review = plan_review  # async (steps) -> (action, steps): Approve / Update / Reject a plan
         self.elements = ""  # latest numbered element list, used by the safety check
+        self.open_list = None  # the open custom dropdown list in the latest view (pageview.View.open_list)
+        self.form = None  # the form being filled in the latest view (pageview.View.form)
+        self.unrestricted = False  # the side panel's Unrestricted switch, as of the latest page view
+        self.submit_guarded = set()  # (form name, empty fields) a Save click was already refused for
         # Sheets-only tools are sent only once a Google Sheet has been open (then always, since the
         # chat history may hold calls to them, and a call to a tool not sent is rejected by the API).
         self.sheet_tools = False
@@ -778,13 +793,17 @@ class Agent:
     async def look(self):
         """Read the page and render the view the AI gets, WITHOUT touching any agent state – so the
         side panel's "AI view" button can show it any time. → (view text, page info, flat element
-        list, status line, hint, the bare view without hint/header lines).
+        list, status line, hint, the bare view without hint/header lines, the open dropdown list
+        (field name, [option labels]) or None, the form checklist or None, Unrestricted on?).
         Structured (sections → items → elements, see pageview.py) or the old flat element list,
         depending on STRUCTURED_VIEW."""
         info = await self.browser("get_page_info", {})
+        open_list = form = None
+        full = False
         if STRUCTURED_VIEW:
             view = pageview.render(await self.browser("get_page_model", {}))
             elements, shown, status, hint = view.flat, view.text, view.status, view.hint
+            open_list, form, full = view.open_list, view.form, view.full
         else:
             elements = shown = await self.browser("get_elements", {})
             status = match.group(1) if (match := _STATUS_LINE.search(elements)) else ""
@@ -794,12 +813,13 @@ class Agent:
             text = f"{SHEET_HINT}\n{text}"
         tabs = f"[Tabs] {info['tabs']}\n" if info.get("tabs") else ""
         text = f"{tabs}[Current page] {info.get('title')} – {info.get('url')}\n{text}"
-        return text, info, elements, status, hint, shown
+        return text, info, elements, status, hint, shown, open_list, form, full
 
     async def page_view(self):
         """The page view for the next message, recording what the safety/fact checks need."""
         try:
-            text, info, elements, self.page_status, hint, shown = await self.look()
+            (text, info, elements, self.page_status, hint, shown, self.open_list, self.form,
+             self.unrestricted) = await self.look()
         except Exception as err:
             return f"[Current page] (can't read it: {err})"
         # The safety and fact checks get the flat list of EVERY collected element, never just the
@@ -922,6 +942,7 @@ class Agent:
         self.current_url = ""
         self.scrolls = {}  # url (+ " box") -> {"total", "idle" (scrolls that showed nothing new), "views" seen}
         self.edit_allowed = False  # the user allowed editing a Google Sheet/Doc in this task
+        self.form, self.submit_guarded = None, set()
         self.recent_steps = []  # for the repeat detector
         self.shot_size = None  # (width, height) of the last screenshot
         self.shot_page = None  # the page when the last screenshot was taken
@@ -1151,6 +1172,7 @@ class Agent:
                     label = element_label(self.elements, args.get("element"))  # before: numbers may change
                     # Remember the page before a click, to tell the AI plainly whether it worked.
                     before = (self.current_url, self.elements)
+                    open_list = self.open_list  # a dropdown list open before the click: did it get a choice?
                     clicked = safety.element_line(self.elements, args.get("element")) if name == "click" else ""
                     result, status = await self.do_action(name, args)
                     if status != "ok":
@@ -1163,7 +1185,8 @@ class Agent:
                     failed = result.startswith("Error")
                     page = await self.page_view()
                     if name in ("click", "click_at") and not failed:
-                        if sentence := click_result(before, (self.current_url, self.elements), clicked, self.current_title):
+                        if sentence := click_result(before, (self.current_url, self.elements), clicked, self.current_title,
+                                                     open_list):
                             log.info("  told the AI: %s", sentence)
                             result = f"{result}\n{sentence}"
                     changed = page != prev_page
@@ -1276,6 +1299,9 @@ class Agent:
             target = await self.browser_quiet("enter_target", {"element": args.get("element") if name == "type" else None})
             if isinstance(target, dict):
                 args = {**args, "_enter": target}
+        if refusal := self.required_empty(name, args):
+            await self.ui("step", "📝 Required fields still empty – filling those first")
+            return refusal, "refused"
         reason = safety.check(name, args, self.elements, self.last_typed_line, self.current_url)
         if reason == "Editing" and self.edit_allowed:
             reason = None  # editing this document was already allowed in this task
@@ -1305,6 +1331,19 @@ class Agent:
             self.actions.append((name, {k: v for k, v in args.items() if not k.startswith("_")}, result))
         return result, "ok"
 
+    def required_empty(self, name, args):
+        """Refuse (once) a click on the form's Save/Submit button while the [Form] checklist still
+        shows required fields empty. → the refusal text, or '' to let the click through."""
+        form = self.form
+        if name != "click" or not form or str(args.get("element")) not in {str(i) for i in form.get("submits") or []}:
+            return ""
+        missing = pageview.missing_required(form)
+        key = (form.get("name", ""), tuple(missing))
+        if not missing or key in self.submit_guarded:
+            return ""
+        self.submit_guarded.add(key)
+        return REQUIRED_EMPTY.format(", ".join(missing), FILL_ANY if DUMMY.search(self.task_text) else ASK_ONCE)
+
     async def run_batch(self, tool_msg, steps):
         """The batch tool: several actions in a row, the page shown once at the end. Stops at a
         blocked or failed step, or when the page changes (element numbers may have moved).
@@ -1320,12 +1359,19 @@ class Agent:
                 report.append(f"{n}. '{op}' can't be used in batch – stopped here.")
                 break
             label = element_label(self.elements, args.get("element"))
+            before, open_list = (self.current_url, self.elements), self.open_list
+            clicked = safety.element_line(self.elements, args.get("element")) if op == "click" else ""
             result, status = await self.do_action(op, args)
             if status != "ok":
                 report.append(f"{n}. {result}")
                 break
             ran += 1
             page = await self.page_view()
+            if op in ("click", "click_at") and not result.startswith("Error"):
+                if sentence := click_result(before, (self.current_url, self.elements), clicked,
+                                            self.current_title, open_list):
+                    log.info("  told the AI: %s", sentence)
+                    result = f"{result}\n{sentence}"
             if not_sent := form_not_sent(op, args, label, self.page_status):
                 report.append(f"{n}. {result}{not_sent} – stopped here.")
                 break
@@ -1397,8 +1443,8 @@ class Agent:
             if name == "read_text":
                 return sheets.summary(data.get("csv", ""), data.get("title", ""), data.get("tab", ""))
             if name == "read_cells":
-                return sheets.cells(data.get("csv", ""), str(args.get("cells", "")))
-            return sheets.query(data.get("csv", ""), args.get("sql", ""))
+                return sheets.cells(data.get("csv", ""), str(args.get("cells", "")), self.unrestricted)
+            return sheets.query(data.get("csv", ""), args.get("sql", ""), self.unrestricted)
         except Exception as err:
             await self.ui("step", f"⚠️ {err}")
             return f"Error: {err}"

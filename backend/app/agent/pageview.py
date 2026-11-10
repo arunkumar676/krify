@@ -31,6 +31,8 @@ KEY_CONTROL = re.compile(r'^(button submit|input submit|input image)\b|"\s*(next
                          r'show more|see more|view more|more results|›|»|‹|«)\s*"', re.I)
 MAX_KEY_CONTROLS = 6
 MAX_AMBIGUITY_GROUPS = 3
+MAX_FORM_REQUIRED = 12  # names listed in the [Form] checklist
+MAX_FORM_OPTIONAL = 10
 POSITION = {-1: "above the screen", 1: "below the screen", 2: "off to the side"}
 
 
@@ -40,6 +42,12 @@ class View:
     flat: str  # every collected element, old format – for safety/fact checks
     status: str  # the page's own status/error message ("" if none)
     hint: str  # warning about identical elements the view can't tell apart ("" if none)
+    # An open custom dropdown list: (its field's name, [option labels]), or None. Lets the loop tell
+    # the AI when a click closed the list without choosing anything (changes.click_result).
+    open_list: tuple | None = None
+    # The form being filled (content.js formSummary): {name, marks, fields, submits}, or None.
+    form: dict | None = None
+    full: bool = False  # Unrestricted mode: nothing was cut (the loop then lifts its own caps too)
 
 
 @dataclass
@@ -69,6 +77,58 @@ def _scroll(page):
     if y >= top - 50:
         return "at the bottom"
     return f"{round(100 * y / top)}% down, more above and below"
+
+
+def _field(f):
+    """'Contact [16] ✗ empty' / 'Subject [2] ✓ "Dummy Activity"' for the [Form] checklist."""
+    name = f"{f.get('label') or '(no label)'} [{f['id']}]"
+    if f.get("filled"):
+        state = f'✓ "{f["value"]}"' if f.get("value") else "✓"
+    else:
+        state = "✗ empty"
+    if f.get("disabled") and not f.get("filled"):
+        state += " (disabled – opens after an earlier field is chosen)"
+    if f.get("error"):
+        state += f' (error: "{f["error"]}")'
+    return f"{name} {state}"
+
+
+def form_lines(form, full=False):
+    """The [Form] checklist: which fields are required (filled ✓ / empty ✗) and which are optional,
+    so the AI fills the right ones and knows what's still missing. [] if there's no form."""
+    if not form or not form.get("fields"):
+        return []
+    name = f' "{form["name"]}"' if form.get("name") else ""
+    fields = form["fields"]
+    cap_required, cap_optional = (None, None) if full else (MAX_FORM_REQUIRED, MAX_FORM_OPTIONAL)
+    if not form.get("marks"):
+        filled = [f for f in fields if f.get("filled")]
+        done = f" Filled: {', '.join(_field(f) for f in filled[:cap_required])}." if filled else ""
+        return [f"[Form{name}] It marks no fields as required: fill what the user gave; after saving, "
+                f"read [Status] for anything missing.{done}"]
+    required = [f for f in fields if f.get("required")]
+    optional = [f for f in fields if not f.get("required")]
+    more = f" (+{len(required) - cap_required} more)" if cap_required and len(required) > cap_required else ""
+    lines = [f"[Form{name}] Required: " + " · ".join(_field(f) for f in required[:cap_required]) + more]
+    if optional:
+        names = ", ".join(f"{f.get('label') or '(no label)'} [{f['id']}]" + (" ✓" if f.get("filled") else "")
+                          for f in optional[:cap_optional])
+        extra = f" (+{len(optional) - cap_optional} more)" if cap_optional and len(optional) > cap_optional else ""
+        lines.append(f"Optional (fill only if the user gave a value; don't ask about these): {names}{extra}")
+    return lines
+
+
+def missing_required(form):
+    """Labels of required fields that are still empty ([] if none, or the form marks nothing)."""
+    if not form or not form.get("marks"):
+        return []
+    return [f.get("label") or f"[{f['id']}]" for f in form.get("fields") or [] if f.get("required") and not f.get("filled")]
+
+
+def _label(text):
+    """'clickable "Amit Verma"' → 'Amit Verma' ('' without a quoted label)."""
+    quoted = re.search(r'"([^"]*)"', text or "")
+    return quoted.group(1) if quoted else ""
 
 
 def _element_line(el):
@@ -162,12 +222,13 @@ def _choose(entries, sections, focused, full):
 def _ambiguity(entries, shown):
     """Shown elements with the same description and no item line to tell them apart: twice inside
     one item, or several with no item at all. (Identical buttons in different items are fine –
-    the ▸ line above each says which is which.)"""
+    the ▸ line above each says which is which – and so are ones whose states differ, e.g. a
+    dropdown field "expanded" and its list's "placeholder" option with the same text.)"""
     groups = {}
     for e in entries:
         if e.order in shown and '"' in e.el["text"]:
-            groups.setdefault((e.el["text"], e.card), []).append(e.el["id"])
-    dupes = [(text.split('"')[1], ids) for (text, _), ids in groups.items() if len(ids) > 1]
+            groups.setdefault((e.el["text"], tuple(e.el.get("states") or ()), e.card), []).append(e.el["id"])
+    dupes = [(text.split('"')[1], ids) for (text, _, _), ids in groups.items() if len(ids) > 1]
     return dupes_warning(dupes) if dupes else ""
 
 
@@ -176,7 +237,7 @@ def render(model):
     pages = model.get("pages") or []
     full = bool(model.get("full"))
     if not pages:
-        return View("(no interactive elements visible)", "(no interactive elements visible)", "", "")
+        return View("(no interactive elements visible)", "(no interactive elements visible)", "", "", None)
     sections, cards = {}, {}
     for p, page in enumerate(pages):
         prefix = f'Embedded page "{page.get("frame")}" › ' if p else ""
@@ -197,12 +258,20 @@ def render(model):
         lines.append(f"[Status] {' | '.join(statuses)}")
     if focused:
         lines.append("[Focused] " + " ".join(f"[{i}]" for i in sorted(focused)))
+    form = next((page["form"] for page in pages if page.get("form")), None)
+    lines += form_lines(form, full)
 
     by_section = {}
     for e in entries:
         by_section.setdefault(e.section, []).append(e)
+    # An open dropdown list goes first: its options are numbered after everything else (so opening
+    # it doesn't shift the form's numbers) but they're what the AI should pick from next.
+    ordered = sorted(by_section.items(), key=lambda item: not sections[item[0]].get("list"))
+    open_list = next(((sections[key]["name"], [_label(e.el["text"]) for e in group  # options, not its search box
+                                                if not e.el["text"].startswith(("input", "textarea"))])
+                      for key, group in ordered if sections[key].get("list")), None)
     off_screen = []
-    for key, group in by_section.items():
+    for key, group in ordered:
         sec = sections[key]
         visible = [e for e in group if e.order in shown]
         hidden = [e for e in group if e.order not in shown]
@@ -221,6 +290,8 @@ def render(model):
             header += f" ({items} items)"
         if sec.get("modal"):
             header += " (modal – blocks the page)"
+        if sec.get("list"):
+            header += " (open dropdown list – click one of these options to choose it)"
         lines.append(header)
         card, pos = None, 0
         for e in visible:
@@ -242,7 +313,8 @@ def render(model):
         lines.append(f"[Not on screen] {' · '.join(off_screen)} – scroll there or use find_elements")
     if any(page.get("partial") for page in pages):
         lines.append("(very large page: far-off parts weren't listed – scroll there to see them)")
-    return View("\n".join(lines), flat_lines(model), statuses[0] if statuses else "", _ambiguity(entries, shown))
+    return View("\n".join(lines), flat_lines(model), statuses[0] if statuses else "", _ambiguity(entries, shown),
+                open_list, form, full)
 
 
 if __name__ == "__main__":

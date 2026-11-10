@@ -518,6 +518,7 @@ function showAiView(msg) {
   const chars = msg.text.length;
   const mode = unrestrictedToggle.checked ? "🔓 Unrestricted (whole page, full labels)" : "restricted (on-screen, short labels)";
   output.textContent = `${msg.text}\n\n— ${chars} chars ≈ ${Math.round(chars / 4)} tokens · ${mode}`;
+  output.scrollTop = 0; // start at the top ([Page], [Form], …) – not the last line of a long view
 }
 
 document.querySelectorAll("button[data-op]").forEach((btn) => {
