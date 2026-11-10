@@ -219,11 +219,39 @@ if (!window.__krify) {
     return isRendered(el);
   }
 
+  // A button the site shows only while the mouse is over its row (Mistral's project "…", mail row
+  // actions): on screen and full size, but transparent or visibility:hidden until hovered. It counts
+  // only if it sits inside a visible row – closed menus (drawn outside their button) and hidden
+  // templates stay out.
+  const MAX_HOVER = 20; // these add up on list pages (every row has some): keep the token cost small
+  function hiddenUntilHover(el) {
+    const rect = el.getBoundingClientRect();
+    if (rect.width < 2 || rect.height < 2) return false;
+    if (rect.bottom < 0 || rect.top > innerHeight || rect.right < 0 || rect.left > innerWidth) return false;
+    let node = el;
+    for (let depth = 0; node && depth < 4; depth++, node = parentOf(node)) {
+      if (node.nodeType !== 1) return false;
+      const style = getComputedStyle(node);
+      if (style.display === "none") return false;
+      if (Number(style.opacity) > 0.05 && style.visibility !== "hidden") continue;
+      // The hidden part found: its row is the nearest visible element around it.
+      for (let row = parentOf(node), up = 0; row && up < 4; row = parentOf(row), up++) {
+        if (row.nodeType !== 1 || !isVisible(row)) continue;
+        const box = row.getBoundingClientRect();
+        const cx = rect.left + rect.width / 2, cy = rect.top + rect.height / 2;
+        return cx >= box.left && cx <= box.right && cy >= box.top && cy <= box.bottom;
+      }
+      return false;
+    }
+    return false;
+  }
+
   // A real control made (almost) transparent and laid over a styled wrapper: Amazon's "Add to cart"
   // <input type=submit> (opacity .01 on top of the yellow button), custom checkboxes/radios, file
   // buttons. The control is what actually gets clicked, so it counts as visible when the wrapper it
   // sits on is. Typing fields are left out on purpose: a transparent text box is usually a trap for
-  // bots ("leave this blank"), never something to fill.
+  // bots ("leave this blank"), never something to fill. One that clicks pass through
+  // (pointer-events: none) isn't a see-through control either: it's waiting for a hover.
   const SEE_THROUGH = "button, input[type=submit], input[type=button], input[type=image], input[type=reset], " +
     "input[type=checkbox], input[type=radio], input[type=file]";
 
@@ -234,6 +262,10 @@ if (!window.__krify) {
     if (r.width < 2 || r.height < 2) return null;
     const style = getComputedStyle(el);
     if (style.visibility === "hidden" || style.display === "none" || Number(style.opacity) > 0.05) return null;
+    // Clicks pass through it (pointer-events: none), so it isn't what gets clicked: it's a button the
+    // site shows only while the mouse is over its row (Mistral's "New Project" +). Left to
+    // hiddenUntilHover(), which lists it "(shows on hover)".
+    if (style.pointerEvents === "none") return null;
     let p = el.parentElement;
     for (let i = 0; i < 2 && p && p !== document.body && p !== document.documentElement; i++, p = p.parentElement) {
       const pr = p.getBoundingClientRect();
@@ -328,6 +360,7 @@ if (!window.__krify) {
       el.getAttribute("aria-label") ||
       (el.labels && el.labels[0] && el.labels[0].innerText) ||
       el.innerText ||
+      (getComputedStyle(el).visibility === "hidden" ? el.textContent : "") || // hidden until hover: innerText is empty
       buttonInputText(el) ||
       el.getAttribute("placeholder") ||
       el.getAttribute("title") ||
@@ -811,6 +844,7 @@ if (!window.__krify) {
     }
     const deadline = performance.now() + COLLECT_MS;
     let partial = false;
+    let hoverCount = 0;
     for (const [i, el] of all.entries()) {
       // Unrestricted: every element on the page – no count or time limit.
       if (whole && !window.__krify.unrestricted && (candidates.length >= max || (i >= nearCount && performance.now() > deadline))) {
@@ -818,19 +852,23 @@ if (!window.__krify) {
         break;
       }
       const visible = whole ? renderedEnough(el) : visibleEnough(el);
+      // Hidden until the mouse is over its row: still listed, tagged "(shows on hover)".
+      const hover = !visible && hoverCount < MAX_HOVER && hiddenUntilHover(el);
       // A disabled button in a form/dialog still tells the AI something ("Continue" is disabled =
       // a required field is missing), so the whole-page view keeps it, marked (disabled).
       const keepDisabled = whole && closestDeep(el, "form, [role=form], dialog, [role=dialog], [aria-modal=true]");
-      if (!visible || (el.disabled && !keepDisabled)) continue;
+      if (!(visible || hover) || (el.disabled && !keepDisabled)) continue;
       // Fewer tokens: inside an already-listed link/button = same click; same link target = listed once
-      // (shops link each product from its picture AND its title).
-      if (el.parentElement?.closest("[data-krify-cand]")) continue;
+      // (shops link each product from its picture AND its title). A hover button inside a row link
+      // is a different action ("…" menu of a project), so it stays.
+      if (!hover && el.parentElement?.closest("[data-krify-cand]")) continue;
       if (el.tagName === "A" && el.href) {
         if (seenLinks.has(el.href)) continue;
         seenLinks.add(el.href);
       }
-      const text = describe(el);
+      const text = describe(el) + (hover ? " (shows on hover)" : "");
       if (/"\s*"/.test(text) && !/input|textarea|select/.test(text)) continue; // skip unlabeled
+      if (hover) hoverCount += 1;
       el.setAttribute("data-krify-cand", "1"); // temporary marker for the containment check above
       candidates.push({ el, text, rect: el.getBoundingClientRect() });
     }
@@ -1885,6 +1923,16 @@ if (!window.__krify) {
       return { ...spot, nameBox: el.matches(NAME_BOX) };
     },
 
+    // Before clicking: if [id] is a "(shows on hover)" button that is still hidden, scroll to it and
+    // return the spot to put the real mouse on (that hovers its row, so the site shows it). Else null.
+    async hoverSpot(id) {
+      const el = find(id);
+      if (visibleEnough(el) || !hiddenUntilHover(el)) return null;
+      await bringIntoView(el);
+      const r = el.getBoundingClientRect();
+      return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+    },
+
     // An element's spot without scrolling (a drag target must already be on screen).
     async spotOf(id) {
       const el = find(id);
@@ -2201,6 +2249,11 @@ if (!window.__krify) {
             "another field must be chosen first (e.g. a type list that opens only once a channel is picked): " +
             "check the form's (required)/(invalid) fields and [Status], fill them, then try again.");
         }
+      } else if (!visibleEnough(target) && !visibleEnough(el) && hiddenUntilHover(el)) {
+        // "(shows on hover)" and the real mouse couldn't reveal it: it can't pass the visible / not
+        // covered checks (a visibility:hidden button is never "on top"), but a click still reaches it.
+        const r = el.getBoundingClientRect();
+        return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
       } else if (visibleEnough(target) || visibleEnough(el)) {
         const settled = await waitStable(target, Math.min(600, Math.max(200, timeoutMs - (Date.now() - start))));
         const r = settled || target.getBoundingClientRect();

@@ -79,23 +79,84 @@ def _still_empty(open_list):
             f"options{example}.")
 
 
+# First words that undo each other: after "Collapse sidebar", a new "Open sidebar" is its undo button.
+_OPPOSITES = {
+    "collapse": {"expand", "open", "show"}, "expand": {"collapse", "close", "hide"},
+    "close": {"open", "show", "expand"}, "open": {"close", "hide", "collapse"},
+    "hide": {"show", "open", "expand"}, "show": {"hide", "close", "collapse"},
+    "minimize": {"maximize", "restore", "expand"}, "maximize": {"minimize", "restore"},
+}
+_CLOSING = {"collapse", "close", "hide", "minimize", "dismiss"}  # clicks meant to make things go away
+
+
+def _full_name(line):
+    """'button "Open sidebar"' -> 'Open sidebar' (not shortened, for comparing)."""
+    quoted = re.search(r'"([^"]*)"', line or "")
+    return " ".join(quoted.group(1).split()) if quoted else ""
+
+
+def _undoes(clicked, other):
+    """True if `other` undoes `clicked`: same words except an opposite first word
+    ('Collapse sidebar' / 'Open sidebar', 'Close' / 'Open')."""
+    a, b = clicked.lower().split(), other.lower().split()
+    return bool(a and b) and b[0] in _OPPOSITES.get(a[0], ()) and a[1:] == b[1:]
+
+
+def _words(text):
+    """'AI Teammates' -> ('ai', 'teammate'): lowercase words, a plural 's' dropped ('agents' = 'agent')."""
+    return tuple(w[:-1] if len(w) > 3 and w.endswith("s") else w for w in re.findall(r"[a-z0-9]+", (text or "").lower()))
+
+
+# A task that is only "open one named place": "open agents", "go to the settings page".
+_OPEN_TASK = re.compile(
+    r"^\s*(?:please\s+)?(?:open|go\s+to|goto|navigate\s+to|take\s+me\s+to|show(?:\s+me)?)\s+"
+    r"(?:the\s+|my\s+)?(.+?)(?:\s+(?:page|tab|section|screen))?\s*[.!]?\s*$", re.I)
+# More to do after opening it ("open agents and create one"): the AI has to carry on, so no shortcut.
+_MORE_TO_DO = re.compile(r"\b(?:and|then|after|also|search|find|create|add|type|click|with)\b|[,;]", re.I)
+MAX_TARGET_WORDS = 4
+
+
+def opened_what_asked(task, clicked):
+    """True if the whole task was "open X" and the clicked element is labelled X (plural or not, any
+    case): after that click opened a new page there's nothing left to do. clicked: 'div "Agents"'."""
+    match = _OPEN_TASK.match(task or "")
+    if not match or _MORE_TO_DO.search(match.group(1)):
+        return False
+    target = _words(match.group(1))
+    return 0 < len(target) <= MAX_TARGET_WORDS and target == _words(_full_name(clicked))
+
+
 def click_result(before, after, clicked, title="", open_list=None):
     """One sentence for the AI after a click, or '' if nothing clear changed.
     before/after: (url, flat element list). clicked: the clicked element's line ('div "Knowledge"'),
     or '' for click_at. title: the page title after the click. open_list: (field name, [option
-    labels]) of a custom dropdown list that was open before the click, or None."""
+    labels]) of a custom dropdown list that was open before the click, or None.
+    A new button that would undo the click ("Open sidebar" after "Collapse sidebar") is never offered
+    as a next step: it's named with a warning instead (the AI clicked it and undid its own work)."""
     (url1, flat1), (url2, flat2) = before, after
     old, new = _labels(flat1), _labels(flat2)
     added, gone = new - old, old - new  # Counter subtraction keeps only what really appeared / went
     label = f'"{_name(clicked)}"' if _name(clicked) else "that spot"
+    clicked_name = _full_name(clicked)
+    undo = [key for key in added if clicked_name and _undoes(clicked_name, _full_name(key))]
+    added = Counter({key: n for key, n in added.items() if key not in undo})
+    undo_note = (f' "{_name(undo[0])}" would undo your click – don\'t click it unless you need that back.'
+                 if undo else "")
+    # What went away apart from the clicked button itself (it often swaps for its undo button).
+    gone_others = Counter({key: n for key, n in gone.items() if _full_name(key) != clicked_name})
 
     if url1 != url2:
         shown = f" New on screen: {_names(added)}." if _names(added) else ""
-        return (f"✅ Your click on {label} worked: a new page opened (\"{_short(title)}\").{shown} "
-                f"Don't click {label} again. If this is what the task asked for, call done; otherwise continue.")
+        # Asana's "Agents" opens "AI Teammates": the AI doubted it was there and clicked around.
+        renamed = (f" Sites often name a page differently from the button that opens it: this IS the page "
+                   f"{label} opens, even though it's called \"{_short(title)}\"."
+                   if clicked_name and title and not set(_words(clicked_name)) & set(_words(title)) else "")
+        return (f"✅ Your click on {label} worked: a new page opened (\"{_short(title)}\").{shown}{renamed} "
+                f"Don't click {label} again.{undo_note} If this is what the task asked for, call done; "
+                "otherwise continue.")
     # Only extra copies of things already on the page (e.g. "Load more" adding product tiles): say nothing.
     brand_new = [key for key in added if key not in old]
-    if not _names(brand_new) and not _names(gone):
+    if not _names(brand_new) and not _names(gone) and not undo:
         return ""
     outcome = _list_outcome(open_list, clicked, gone)
     if outcome == "picked":
@@ -109,11 +170,17 @@ def click_result(before, after, clicked, title="", open_list=None):
                 f"{opened}. Nothing was selected.{_still_empty(open_list)} Fill the fields one at a time.")
     if added and sum(added.values()) >= sum(gone.values()):
         return (f"✅ Your click on {label} worked: it opened {_names(added)}. Don't click {label} again "
-                "(that may close it). Pick one of these, or call done if this is what the task asked for.")
-    if _names(brand_new) and _names(gone):
+                f"(that may close it).{undo_note} Pick one of these, or call done if this is what the task asked for.")
+    if undo and not gone_others:  # only the button swapped ("Collapse sidebar" became "Open sidebar")
+        return f"✅ Your click on {label} worked.{undo_note}"
+    if gone and (clicked_name.lower().split() or [""])[0] in _CLOSING:
+        # Collapse / Close / Hide: things going away is what it's for (the button itself isn't news).
+        return (f"✅ Your click on {label} worked: it hid {_names(gone_others or gone)}.{undo_note} Don't click "
+                f"{label} again; continue with the task, or call done if this is what it asked for.")
+    if _names(brand_new) and _names(gone_others or gone):
         # One panel swapped for another: say both, not just "it HID things".
-        return (f"Your click on {label} closed {_names(gone)} and opened {_names(brand_new)}. "
-                "Use what's open now, or call done if this is what the task asked for.")
+        return (f"Your click on {label} closed {_names(gone_others or gone)} and opened {_names(brand_new)}."
+                f"{undo_note} Use what's open now, or call done if this is what the task asked for.")
     if gone:
         return (f"⚠️ Your click on {label} HID things that were on screen ({_names(gone)}). {label} probably "
                 "opens/closes a panel, so your previous click had already done the job. Don't keep clicking "
