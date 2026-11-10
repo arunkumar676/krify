@@ -654,7 +654,9 @@ if (!window.__krify) {
 
   const SUBMIT_TEXT = /^\s*[+✓]?\s*(save|submit|add|create|update|send|continue|next|confirm|apply|register|sign ?up|book|post|done|finish|place order)\b/i;
   const MAX_FORM_FIELDS = 25;
+  let lastFormRoot = null; // the form of the latest summary: leaveCheck() asks if a click is outside it
   function formSummary(numbered) {
+    lastFormRoot = null;
     const fieldsIn = (root) => numbered.filter((n) => containsDeep(root, n.el) && isField(n.el) && !openListOf(n.el) &&
       !/^(submit|button|reset|image|search)$/.test(n.el.type || ""));
     const dialogs = deepAll("dialog[open], [role=dialog], [role=alertdialog], [aria-modal=true]").filter(isRendered);
@@ -686,6 +688,7 @@ if (!window.__krify) {
       if (fields.length >= upTo(MAX_FORM_FIELDS)) break;
     }
     if (fields.length < 2) return null; // a lone search box isn't a form to fill
+    lastFormRoot = root;
     // Its submit button: real type=submit buttons, else the LAST save/add-like button (the footer's
     // "Save", not a "+ Add" for a list inside the form).
     const buttons = numbered.filter((n) => containsDeep(root, n.el) && (!isField(n.el) || n.el.type === "submit"));
@@ -775,7 +778,38 @@ if (!window.__krify) {
     if (tag === "button" && !el.getAttribute("role") && el.form && (el.type === "submit" || el.type === "reset")) {
       return `button ${el.type} "${label}"`;
     }
+    // Opens a list of choices (a filter such as "My Activities ▾", a custom select): its text is only
+    // the current choice – the other choices exist on the page only once it's open.
+    if (isDropdownTrigger(el)) return `dropdown "${label}"`;
     return `${role} "${label}"`;
+  }
+
+  // A button / clickable <div> that opens a list of choices. Sites rarely mark these (no
+  // aria-haspopup=listbox, no role=combobox) – the sign is the down-chevron after the text (Lucide's
+  // "lucide-chevron-down", Font Awesome's "fa-caret-down", Material's "expand_more", a "▾").
+  // Not: sidebar/nav groups and accordions (they toggle a section: aria-expanded without a popup),
+  // menus (aria-haspopup=menu → "opens menu"), or an option inside an open list.
+  const CHEVRON = /chevron-?down|caret-?down|arrow-?drop-?down|expand[-_]?more|angle-?down|keyboard[-_]arrow[-_]down|select-?(arrow|icon|indicator)|dropdown-?(arrow|icon|indicator|toggle)/i;
+  function isDropdownTrigger(el) {
+    const tag = el.tagName;
+    if (/^(SELECT|INPUT|TEXTAREA|A)$/.test(tag)) return false;
+    const role = el.getAttribute("role");
+    const popup = el.getAttribute("aria-haspopup");
+    if (role === "combobox" || popup === "listbox") return true;
+    if (popup && popup !== "false") return false; // a menu or dialog: listed as "opens menu"/"opens dialog"
+    if (!(tag === "BUTTON" || role === "button" || pointerish.has(el))) return false;
+    if (el.hasAttribute("aria-expanded")) return false; // an accordion / collapsible group
+    if (openListOf(el) || closestDeep(el, "nav, [role=navigation], aside, [role=complementary], [role=menu], [role=listbox]")) return false;
+    if (closestDeep(el, "header, [role=banner]") && !closestDeep(el, "main, [role=main], form, dialog, [role=dialog]")) return false; // the site's top bar (account menu)
+    const text = (el.innerText || "").trim();
+    if (text.length > 60) return false; // a card or row, not a field
+    if (/[▾▼⌄˅]$/.test(text)) return true;
+    for (const icon of el.querySelectorAll("svg, i, span, img")) {
+      const hint = `${icon.getAttribute("class") || ""} ${icon.getAttribute("data-icon") || ""} ${icon.getAttribute("data-testid") || ""} ` +
+        `${icon.getAttribute("src") || ""} ${/^(I|SPAN)$/.test(icon.tagName) && icon.children.length === 0 && /icon/i.test(icon.getAttribute("class") || "") ? icon.textContent : ""}`;
+      if (CHEVRON.test(hint)) return true;
+    }
+    return false;
   }
 
   // find_elements(): common UI-action synonyms, so searching "sign out" also matches "Logout".
@@ -1801,43 +1835,26 @@ if (!window.__krify) {
 
     async click(id) {
       const el = find(id);
-      const shown = clickTarget(el); // a hidden checkbox is clicked through its label, like a person does
-      await bringIntoView(shown);
-      const spot = await waitActionable(el, id);
-      if (this.animate) {
-        await moveCursorTo(shown);
-        glow(shown);
-        ripple(spot.x, spot.y);
-        await sleep(150);
-      }
-      // Make the click look like a real mouse: many apps (React Aria, Radix, Asana…) ignore clicks
-      // at (0, 0) or with no pointerType / pressed button. isTrusted can't be faked, though.
-      const { x, y } = spot;
-      // A real click lands on whatever is on top at that spot (often a child, e.g. the text span).
-      const top = hitAt(x, y);
-      const target = top && containsDeep(shown, top) ? top : shown;
-      const base = { bubbles: true, cancelable: true, composed: true, view: window, clientX: x, clientY: y, screenX: x + window.screenX, screenY: y + window.screenY, button: 0 };
-      const ptr = { pointerId: 1, pointerType: "mouse", isPrimary: true, width: 1, height: 1 };
-      const fire = (Type, type, extra = {}) => target.dispatchEvent(new Type(type, { ...base, ...extra }));
-      fire(PointerEvent, "pointerover", { ...ptr, buttons: 0 });
-      fire(PointerEvent, "pointerenter", { ...ptr, buttons: 0, bubbles: false });
-      fire(MouseEvent, "mouseover", { buttons: 0 });
-      fire(MouseEvent, "mouseenter", { buttons: 0, bubbles: false });
-      fire(PointerEvent, "pointermove", { ...ptr, buttons: 0 });
-      fire(MouseEvent, "mousemove", { buttons: 0 });
-      fire(PointerEvent, "pointerdown", { ...ptr, buttons: 1, pressure: 0.5 });
-      const notCancelled = fire(MouseEvent, "mousedown", { buttons: 1, detail: 1 });
-      if (notCancelled) el.focus?.({ preventScroll: true }); // real browsers focus on mousedown unless prevented
-      fire(PointerEvent, "pointerup", { ...ptr, buttons: 0, pressure: 0 });
-      fire(MouseEvent, "mouseup", { buttons: 0, detail: 1 });
-      // A dispatched "click" still follows links and ticks checkboxes, like el.click() did.
-      const blocked = validationProblems(el); // checked first: the browser's own checks run on this click
-      inThisTab(el, () => fire(PointerEvent, "click", { ...ptr, buttons: 0, detail: 1 }));
+      const blocked = await clickElement(el, id);
       if (blocked) {
         return `Clicked [${id}] ${describe(el)} – but the browser did NOT send the form: ${blocked}. ` +
           "Fill those fields, then submit again.";
       }
       return `Clicked [${id}] ${describe(el)}`;
+    },
+
+    // Leaving the form being filled? For the server's unsaved-form guard: is [id] outside the form
+    // (and outside any open list/popup), and would clicking it go somewhere else (a link, or
+    // anything in the site's navigation)? → { form, inside, navigates }.
+    leaveCheck(id) {
+      const el = find(id);
+      if (!lastFormRoot?.isConnected) return { form: false, inside: false, navigates: false };
+      const inside = containsDeep(lastFormRoot, el) || !!openListOf(el) || !!closestDeep(el, POPUP);
+      const link = closestDeep(el, "a[href]");
+      const href = (link?.getAttribute("href") || "").trim();
+      const navigates = (!!link && !/^(#|javascript:)/i.test(href)) || el.getAttribute("role") === "link" ||
+        !!closestDeep(el, "nav, [role=navigation], aside, [role=complementary], header, [role=banner]");
+      return { form: true, inside, navigates };
     },
 
     // Point at an element without clicking, so hover menus open (e.g. Amazon "Account & Lists").
@@ -2114,7 +2131,8 @@ if (!window.__krify) {
 
     async selectOption(id, option) {
       const el = find(id);
-      if (el.tagName !== "SELECT") throw new Error(`[${id}] is not a dropdown. Try clicking it instead.`);
+      option = String(option ?? "");
+      if (el.tagName !== "SELECT") return pickInCustomDropdown(el, id, option);
       const want = option.trim().toLowerCase();
       const match =
         [...el.options].find((o) => o.text.trim().toLowerCase() === want) ||
@@ -2196,6 +2214,251 @@ if (!window.__krify) {
       hit = inner;
     }
     return hit;
+  }
+
+  // A mouse-like click on an element: scroll to it, wait until it can be clicked, then the full
+  // pointer/mouse event sequence. `id` names it in error messages. → the browser's own form
+  // validation problems if this click submits a form that won't send ("" otherwise).
+  async function clickElement(el, id) {
+    const shown = clickTarget(el); // a hidden checkbox is clicked through its label, like a person does
+    await bringIntoView(shown);
+    const spot = await waitActionable(el, id);
+    if (window.__krify.animate) {
+      await moveCursorTo(shown);
+      glow(shown);
+      ripple(spot.x, spot.y);
+      await sleep(150);
+    }
+    // Make the click look like a real mouse: many apps (React Aria, Radix, Asana…) ignore clicks
+    // at (0, 0) or with no pointerType / pressed button. isTrusted can't be faked, though.
+    const { x, y } = spot;
+    // A real click lands on whatever is on top at that spot (often a child, e.g. the text span).
+    const top = hitAt(x, y);
+    const target = top && containsDeep(shown, top) ? top : shown;
+    const base = { bubbles: true, cancelable: true, composed: true, view: window, clientX: x, clientY: y, screenX: x + window.screenX, screenY: y + window.screenY, button: 0 };
+    const ptr = { pointerId: 1, pointerType: "mouse", isPrimary: true, width: 1, height: 1 };
+    const fire = (Type, type, extra = {}) => target.dispatchEvent(new Type(type, { ...base, ...extra }));
+    fire(PointerEvent, "pointerover", { ...ptr, buttons: 0 });
+    fire(PointerEvent, "pointerenter", { ...ptr, buttons: 0, bubbles: false });
+    fire(MouseEvent, "mouseover", { buttons: 0 });
+    fire(MouseEvent, "mouseenter", { buttons: 0, bubbles: false });
+    fire(PointerEvent, "pointermove", { ...ptr, buttons: 0 });
+    fire(MouseEvent, "mousemove", { buttons: 0 });
+    fire(PointerEvent, "pointerdown", { ...ptr, buttons: 1, pressure: 0.5 });
+    const notCancelled = fire(MouseEvent, "mousedown", { buttons: 1, detail: 1 });
+    if (notCancelled) el.focus?.({ preventScroll: true }); // real browsers focus on mousedown unless prevented
+    fire(PointerEvent, "pointerup", { ...ptr, buttons: 0, pressure: 0 });
+    fire(MouseEvent, "mouseup", { buttons: 0, detail: 1 });
+    // A dispatched "click" still follows links and ticks checkboxes, like el.click() did.
+    const blocked = validationProblems(el); // checked first: the browser's own checks run on this click
+    inThisTab(el, () => fire(PointerEvent, "click", { ...ptr, buttons: 0, detail: 1 }));
+    return blocked;
+  }
+
+  // ---------- choosing an option in any dropdown (select_option) ----------
+  // Custom dropdowns differ per site: a role=listbox (Radix, Headless UI, MUI), a plain <div> list
+  // (React + Tailwind), a list rendered at the end of <body> (a "portal"), with or without a search
+  // box, options that load as you scroll or type, or an <input> you type into to filter. Instead of
+  // the AI clicking the field and then guessing option numbers, this does it in one go: open the
+  // list, find the option (searching / scrolling if needed), click it, and check the field shows it.
+  const OPTION_ROLES = "[role=option], [role=menuitem], [role=menuitemradio], [role=menuitemcheckbox], [role=treeitem]";
+  const SEARCHABLE = /^(text|search|email|tel|url|)$/; // a box you type into to filter a list
+  const norm = (s) => (s || "").replace(/\s+/g, " ").trim().toLowerCase();
+  const optionText = (el) => norm(el.innerText || el.textContent || labelOf(el));
+  const firstLine = (el) => ((el.innerText || el.textContent || labelOf(el) || "").split("\n").map((s) => s.trim()).find(Boolean) || "").trim();
+
+  // Everything clickable that's rendered right now – to see what opening a dropdown added.
+  function renderedClickables() {
+    const roots = allRoots();
+    const all = new Set([...roots.flatMap((r) => [...r.querySelectorAll(`${SELECTOR}, ${OPTION_ROLES}`)]), ...pointerTargets(roots)]);
+    return new Set([...all].filter((el) => isRendered(el) && !el.closest?.("krify-overlay")));
+  }
+
+  // The list a field already has open: from the latest numbering's open lists, or the popup its
+  // aria-controls / aria-owns points at (also on a combobox input inside the field).
+  function openListFor(field) {
+    for (const [list, trigger] of openLists) {
+      if (list.isConnected && isRendered(list) && (trigger === field || containsDeep(trigger, field) || containsDeep(field, trigger))) return list;
+    }
+    const owners = [field, ...field.querySelectorAll("[aria-controls], [aria-owns]")];
+    for (const owner of owners) {
+      const ids = `${owner.getAttribute("aria-controls") || ""} ${owner.getAttribute("aria-owns") || ""}`.trim().split(/\s+/).filter(Boolean);
+      for (const id of ids) {
+        const box = owner.getRootNode().getElementById?.(id) || document.getElementById(id);
+        if (box && isRendered(box) && box.querySelector(`${OPTION_ROLES}, li, div`)) return box;
+      }
+    }
+    return null;
+  }
+
+  // The options showing for `field`: those inside its open list if known, else what appeared since
+  // `before` (role=option ones first), never the field itself. Plus the list's search box, if any.
+  // `before` null: the list was open before Krify looked, so nothing tells which new things are its
+  // options – then only real option-role elements in an open popup count (never the whole page).
+  function shownOptions(field, before) {
+    const list = openListFor(field);
+    const now = renderedClickables();
+    let fresh = list ? [...now].filter((el) => containsDeep(list, el))
+      : before ? [...now].filter((el) => !before.has(el))
+        : [...now].filter((el) => el.matches(OPTION_ROLES) && closestDeep(el, POPUP));
+    fresh = fresh.filter((el) => el !== field && !containsDeep(field, el) && !containsDeep(el, field));
+    const search = fresh.find((el) => el.tagName === "INPUT" && SEARCHABLE.test(el.type) && !el.disabled) ||
+      (list && [...list.querySelectorAll("input")].find((el) => SEARCHABLE.test(el.type) && isRendered(el))) || null;
+    let options = fresh.filter((el) => !/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName));
+    const roled = options.filter((el) => el.matches(OPTION_ROLES));
+    if (roled.length) options = roled;
+    // An option and a button inside it are one choice: keep the outer one.
+    options = options.filter((el) => !options.some((o) => o !== el && containsDeep(o, el)));
+    return { options: options.filter((el) => !isDisabled(el)), search, list };
+  }
+
+  // The option that best matches `want`: same text, then same first line, then starts with it,
+  // then contains it (shortest first), then has all its words. Never a "Select a …" prompt row
+  // unless that's what was asked for.
+  function bestOption(options, want) {
+    const w = norm(want);
+    if (!w) return null;
+    const real = options.filter((el) => !PROMPT_TEXT.test(optionText(el)) || PROMPT_TEXT.test(w));
+    const byLength = [...real].sort((a, b) => optionText(a).length - optionText(b).length);
+    const words = w.split(" ");
+    return real.find((el) => optionText(el) === w) ||
+      real.find((el) => norm(firstLine(el)) === w || norm(labelOf(el)) === w) ||
+      byLength.find((el) => optionText(el).startsWith(w)) ||
+      byLength.find((el) => optionText(el).includes(w)) ||
+      byLength.find((el) => words.every((x) => optionText(el).includes(x))) || null;
+  }
+
+  // Type into a box the way a person would, so React/Vue notice (native value setter + input event).
+  function setBoxValue(box, value) {
+    box.focus();
+    const proto = box.tagName === "TEXTAREA" ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    Object.getOwnPropertyDescriptor(proto, "value").set.call(box, value);
+    box.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+
+  // Does the field (or its close wrapper, which often shows the chosen value next to a combobox
+  // input) now show `text`?
+  function fieldShows(field, text) {
+    const want = norm(text);
+    if (!want) return false;
+    if (/^(INPUT|TEXTAREA)$/.test(field.tagName) && norm(field.value).includes(want)) return true;
+    let node = field;
+    for (let i = 0; node && node !== document.body && i < 3; i++, node = node.parentElement) {
+      if (openLists.has(node) || node.querySelector?.(OPTION_ROLES)) break; // don't read the open list's own text
+      if (norm(node.innerText).includes(want)) return true;
+    }
+    return false;
+  }
+
+  // Wait (up to `ms`) until `test()` gives something truthy; → that value, or the last one.
+  async function waitFor(test, ms) {
+    const end = Date.now() + ms;
+    let value = test();
+    while (!value && Date.now() < end) {
+      await sleep(120);
+      value = test();
+    }
+    return value;
+  }
+
+  async function pickInCustomDropdown(field, id, option) {
+    const name = fieldInfo(field).label || labelOf(field) || "the field";
+    if (openListOf(field)) {
+      throw new Error(`[${id}] is an OPTION inside an open list, not a dropdown field. Give select_option the ` +
+        "dropdown field's own number (the box that shows the current choice) and the option's text.");
+    }
+    if (/^(INPUT)$/.test(field.tagName) && /date|time|month|week/.test(field.type)) {
+      throw new Error(`[${id}] is a date/time box, not a dropdown: use type with the value (e.g. 2025-12-31).`);
+    }
+    if (field.tagName === "INPUT" && /checkbox|radio/.test(field.type)) {
+      throw new Error(`[${id}] is a checkbox/radio button, not a dropdown: click it.`);
+    }
+    // Open it – unless its list is already open (clicking again would close it).
+    let before = null;
+    let found = openListFor(field) || field.getAttribute("aria-expanded") === "true" ? shownOptions(field, before) : null;
+    if (!found?.options.length) {
+      before = renderedClickables();
+      const blocked = await clickElement(field, id);
+      if (blocked) throw new Error(`Couldn't open [${id}]: ${blocked}`);
+      // A box you type into (a combobox) often opens nothing until you type: don't wait long for it.
+      const typeable = field.tagName === "INPUT" && SEARCHABLE.test(field.type);
+      found = await waitFor(() => {
+        const f = shownOptions(field, before);
+        return f.options.length || f.search ? f : null;
+      }, typeable ? 700 : 2500) || shownOptions(field, before);
+    }
+    const firstSeen = found.options; // what the list showed before any search (for the "not found" reply)
+    // Nothing opened and the field itself is a text box (a combobox you type into): type to filter.
+    let typedInto = null;
+    if (!found.options.length && !found.search && field.tagName === "INPUT" && SEARCHABLE.test(field.type)) {
+      found = { ...found, search: field };
+    }
+    let match = bestOption(found.options, option);
+    // Not listed (yet): search for it, if the list has a search box. Search results often load from
+    // the server, so wait for the list to change.
+    if (!match && found.search) {
+      typedInto = found.search;
+      setBoxValue(found.search, option);
+      await window.__krify.settle(300, 2500);
+      match = await waitFor(() => bestOption(shownOptions(field, before).options, option), 2500);
+      if (!match) {
+        // A shorter search (first word) catches "Amit Verma (Acme)" when asked for "Amit Verma Acme".
+        const word = option.trim().split(/\s+/)[0];
+        if (word && word.length >= 2 && word.toLowerCase() !== option.trim().toLowerCase()) {
+          setBoxValue(found.search, word);
+          await window.__krify.settle(300, 2500);
+          match = await waitFor(() => bestOption(shownOptions(field, before).options, option), 1500);
+        }
+      }
+      found = shownOptions(field, before);
+    }
+    // Still not there: long lists load more rows as you scroll them.
+    if (!match && found.options.length) {
+      let box = null;
+      for (let p = found.options[found.options.length - 1].parentElement; p && p !== document.body; p = p.parentElement) {
+        if (canScroll(p)) { box = p; break; }
+      }
+      for (let i = 0; box && !match && i < 5; i++) {
+        const top = box.scrollTop;
+        box.scrollTop = box.scrollHeight;
+        await window.__krify.settle(250, 1500);
+        match = bestOption(shownOptions(field, before).options, option);
+        if (box.scrollTop === top) break; // at the end
+      }
+      found = shownOptions(field, before);
+    }
+    if (!match) {
+      // Clear Krify's search text, so the list (and the next page view) shows every option again.
+      if (typedInto && typedInto !== field) {
+        setBoxValue(typedInto, "");
+        await window.__krify.settle(250, 1500);
+      }
+      // The real options (not "Select a …" prompts): as the list shows them now, else as it first did.
+      const names = (els) => [...new Set(els.map(firstLine).filter((t) => t && !PROMPT_TEXT.test(t)))];
+      let seen = names(typedInto ? shownOptions(field, before).options : found.options);
+      if (!seen.length) seen = names(firstSeen);
+      const list = seen.slice(0, upTo(15)).map((t) => `"${clean(t, 40)}"`).join(", ");
+      const more = seen.length > upTo(15) ? ` (+${seen.length - upTo(15)} more)` : "";
+      const searched = typedInto ? ` (searched for "${option}" in its search box)` : "";
+      if (!seen.length) {
+        throw new Error(`No option "${option}" in [${id}] "${name}"${searched}: its list showed no options. ` +
+          "It may still be loading, or need an earlier field chosen first – look at the page.");
+      }
+      throw new Error(`No option "${option}" in [${id}] "${name}"${searched}. Its options: ${list}${more}. ` +
+        "Call select_option again with one of these (for a dummy/test value any real one is fine), or ask_user.");
+    }
+    const chosen = firstLine(match) || optionText(match);
+    try {
+      await clickElement(match, id);
+    } catch (err) {
+      throw new Error(`Found option "${clean(chosen, 40)}" in [${id}] but couldn't click it: ${err.message.replace(/^\[[^\]]*\] /, "")}`);
+    }
+    await window.__krify.settle(200, 1500);
+    const ok = await waitFor(() => fieldShows(field, chosen) || match.getAttribute("aria-selected") === "true", 1200);
+    if (ok) return `Selected "${clean(chosen, 60)}" in [${id}] "${name}" – the field now shows it.`;
+    const now = filledState(field).value;
+    return `Clicked option "${clean(chosen, 60)}" in [${id}]'s list, but the field doesn't show it yet` +
+      `${now ? ` (it shows "${now}")` : ""}. Look at the page: if it isn't chosen, try select_option once more.`;
   }
 
   // a contains b, across shadow-root edges (Node.contains stops at them).

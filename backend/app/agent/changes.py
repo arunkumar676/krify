@@ -75,8 +75,8 @@ def _still_empty(open_list):
     example = next((o for o in options if o and not _PROMPT.match(o)), "")
     example = f' (e.g. "{_short(example)}")' if example else ""
     field = f'"{_short(field)}"' if field else "That field"
-    return (f" {field} is still empty: click its field once, then make your very next click one of its "
-            f"options{example}.")
+    return (f" {field} is still empty: use select_option with its field's number and the option's text"
+            f"{example}.")
 
 
 # First words that undo each other: after "Collapse sidebar", a new "Open sidebar" is its undo button.

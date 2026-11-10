@@ -82,6 +82,8 @@ def _scroll(page):
 def _field(f):
     """'Contact [16] ✗ empty' / 'Subject [2] ✓ "Dummy Activity"' for the [Form] checklist."""
     name = f"{f.get('label') or '(no label)'} [{f['id']}]"
+    if f.get("kind") == "dropdown":
+        name += " (dropdown)"
     if f.get("filled"):
         state = f'✓ "{f["value"]}"' if f.get("value") else "✓"
     else:
@@ -291,7 +293,7 @@ def render(model):
         if sec.get("modal"):
             header += " (modal – blocks the page)"
         if sec.get("list"):
-            header += " (open dropdown list – click one of these options to choose it)"
+            header += " (open dropdown list – click one of these options, or select_option on its field)"
         lines.append(header)
         card, pos = None, 0
         for e in visible:

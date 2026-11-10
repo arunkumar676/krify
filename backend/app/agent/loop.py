@@ -4,6 +4,7 @@ import ast
 import base64
 import json
 import logging
+import os
 import re
 from urllib.parse import urlparse
 
@@ -50,8 +51,24 @@ _ELEMENT_KEY = re.compile(r'\[\d+\] [^"\n]*"[^"\n]*"')
 SUBMIT_WORDS = re.compile(r"save|submit|add|create|update|send|continue|next|confirm|apply|register|sign ?up|book|"
                           r"post|done|finish|place order|pay", re.I)
 FORM_ERROR = "Form error – "
-FORM_NOT_SENT = ("\nNOT saved – the form shows errors: {}. Fill those fields (a \"clickable\" dropdown: click it, "
-                 "then click an option), then submit again.")
+FORM_NOT_SENT = ("\nNOT saved – the form shows errors: {}. Fill those fields (a dropdown: select_option with the "
+                 "field and the option's text), then submit again.")
+# A batch step on an element that wasn't in the page view the AI sent the batch from (a dropdown's
+# options appear only once it's open – the AI guessed their numbers and hit a sidebar link instead).
+NOT_IN_VIEW = ("Skipped: [{}] wasn't in the page view you sent these steps from – it appeared only after an earlier "
+               "step (a dropdown's options exist only while it's open). Look at the page now; for a dropdown use "
+               "select_option with the field and the option's text.")
+CHANGED_IN_BATCH = ("Skipped: [{}] is now {}, but when you sent these steps it was {} – an earlier step changed the "
+                    "page. Look at the new page and decide again.")
+BATCH_REFUSED = "Skipped: an earlier step in this batch was not done. Look at the page and decide again."
+# The AI's label for [n] doesn't fit what [n] is now: it used a number from an older view.
+WRONG_ELEMENT = ('NOT done: [{id}] is {line}, not "{label}". Element numbers change with every page view – use the '
+                 'number shown next to "{label}" in the LATEST page view{hint}.')
+# A click that would navigate away from a form the AI has started filling.
+LEAVE_FORM = ("NOT done: {what} is outside the form{name} you are filling and would leave it – what you entered{filled} "
+              "isn't saved and would be lost. If you meant a field or option of this form, use its number from the "
+              "LATEST page view (dropdowns: select_option). Finish the form and save it{submit} first. Only if you "
+              "really must leave it unsaved, send this same step again (the user will be asked).")
 
 
 def image_size(data_url):
@@ -154,6 +171,59 @@ def form_not_sent(name, args, label, page_status):
     return FORM_NOT_SENT.format("; ".join(errors)) if errors else ""
 
 
+# Filter dropdowns on a list page ("My Activities") show only their current choice, and rows outside
+# the filter aren't on the page at all: a search that finds nothing may just be filtered out.
+FILTER_HINT = ("\nThis page has dropdowns that may be filtering what's listed: {}. If what you're looking for could be "
+               "hidden by one (\"My …\" = only yours), change it with select_option first (e.g. option = the person's "
+               "name), then look again.")
+FILTER_CHECK = ("REJECTED – not sent to the user: you're saying it isn't there, but this page's list may be filtered "
+                "by {} and you haven't changed any filter. Set the filter that matches the request with select_option "
+                "(e.g. option = the person's name or the type), read the list again, then answer.")
+NOT_FOUND = re.compile(r"\b(no|none|not found|couldn'?t find|could not find|nothing|zero|isn'?t any|aren'?t any|"
+                       r"there are no|didn'?t find|did not find)\b", re.I)
+_DROPDOWN_LINE = re.compile(r'^\[(\d+)\] (?:dropdown|select) "([^"]*)"', re.M)
+
+
+# Words that say what KIND of element it is, not which one: "Save button" is the "Save" element.
+_KIND_WORDS = {"the", "a", "an", "to", "of", "in", "on", "for", "and", "button", "link", "field", "box", "input",
+               "dropdown", "option", "icon", "menu", "tab", "text", "clickable", "select", "choose", "enter", "your",
+               "item", "list", "checkbox"}
+
+
+def _words_of(text):
+    """'Opportunity Titles' -> {'opportunity', 'title'}: lowercase words, a plural 's' dropped, kind words out."""
+    return {w[:-1] if len(w) > 3 and w.endswith("s") else w for w in re.findall(r"[a-z0-9]+", text.lower())} - _KIND_WORDS
+
+
+def _same_word(a, b):
+    """Same word, or the same stem ('opportunity' / 'opportunitie', 'create' / 'created')."""
+    if a == b:
+        return True
+    common = len(os.path.commonprefix([a, b]))
+    return common >= 4 and common >= min(len(a), len(b)) - 2
+
+
+def label_matches(label, names):
+    """Does the AI's label for an element fit what the element is now? names: its element line(s),
+    form-field label and value. Short labels must match every word ("Create Opportunity" is not the
+    "Opportunities" link); longer ones two thirds of their words."""
+    want = " ".join(str(label).lower().split()).strip(" \"'")
+    have = " ".join(" ".join(names).lower().split())
+    if not want or (len(want) >= 3 and want in have):
+        return True
+    words, have_words = _words_of(want), _words_of(have)
+    if not words:
+        return True
+    hits = sum(any(_same_word(w, h) for h in have_words) for w in words)
+    return hits == len(words) if len(words) <= 2 else hits / len(words) >= 2 / 3
+
+
+def _line_key(line):
+    """'input text "Email" (value: "x")' -> 'input text "Email"': what the element is, not its state."""
+    match = re.match(r'[^"\n]*"[^"\n]*"', line or "")
+    return match.group(0) if match else (line or "")
+
+
 def uses_element(args):
     """Does this step point at an element number? Only those can hit the wrong thing when the page
     changes; steps by cell (go_to_cell, type_here, click cell=) or keys can't."""
@@ -251,9 +321,11 @@ LOOP_TRAIL = 8  # pages remembered (after each action) to spot going back and fo
 REQUIRED_EMPTY = ("NOT clicked – required fields are still empty: {}. {} If you're sure they're already filled, "
                   "click it again.")
 FILL_ANY = ("This is a dummy/test request: fill each with any real option (or short placeholder text), one field "
-            "at a time, then save.")
+            "at a time, then save. Dropdown: select_option with a likely option – if it isn't there, the reply lists "
+            "the real ones.")
 ASK_ONCE = ("Use values from the user's request. For any the request doesn't give, call ask_user ONCE listing all "
-            "of them with the options you saw (open each dropdown to see them), then fill them and save.")
+            "of them with the options you saw (select_option with a guess lists a dropdown's real options), then fill "
+            "them and save.")
 DUMMY = re.compile(r"\b(dummy|test|testing|sample|fake|placeholder|example|random|any)\b", re.I)
 
 LOOP_NOTE = (
@@ -544,6 +616,9 @@ class Agent:
         self.form = None  # the form being filled in the latest view (pageview.View.form)
         self.unrestricted = False  # the side panel's Unrestricted switch, as of the latest page view
         self.submit_guarded = set()  # (form name, empty fields) a Save click was already refused for
+        self.view_text = ""  # the latest page view as the AI reads it (structured lines with field hints)
+        self.form_edit = None  # {url, name}: a form Krify started filling and hasn't submitted yet
+        self.leave_warned = set()  # steps that would leave that form, refused once already
         # Sheets-only tools are sent only once a Google Sheet has been open (then always, since the
         # chat history may hold calls to them, and a call to a tool not sent is rejected by the API).
         self.sheet_tools = False
@@ -586,6 +661,7 @@ class Agent:
         self.notes = []
         self.seen = []  # everything read from pages this task – used by the fact check
         self.fact_check_failed = False
+        self.filter_check_failed = False
         self.claim_check_failed = False
         self.handoff_check_failed = False
         self.actions = []  # (op, args, result) that really ran – checked against "I have …" claims
@@ -658,6 +734,24 @@ class Agent:
                         if re.match(r"^\[\d+\] ", line) and re.search(r"sign ?in|log ?in", line, re.I)), "")
         hint = f" The sign-in link is on this page: {sign_in} – click it." if sign_in else ""
         return HANDOFF_REJECTED.format(hint)
+
+    def filter_dropdowns(self):
+        """Dropdowns on the page outside the form being filled – list filters such as
+        '[16] "My Activities"' (at most 4)."""
+        in_form = {str(f.get("id")) for f in (self.form or {}).get("fields") or []}
+        found = [f'[{n}] "{label}"' for n, label in _DROPDOWN_LINE.findall(self.elements or "") if n not in in_form]
+        return found[:4]
+
+    def check_filters(self, summary):
+        """Before a 'not found' answer: reject once if the page has filter dropdowns and none was
+        changed this task – the rows may just be filtered out ("My Activities" hid Geetha's)."""
+        if self.filter_check_failed or not NOT_FOUND.search(summary or ""):
+            return None
+        filters = self.filter_dropdowns()
+        if not filters or any(op == "select_option" for op, _, _ in self.actions):
+            return None
+        self.filter_check_failed = True
+        return FILTER_CHECK.format(", ".join(filters))
 
     def check_ui_state(self):
         """UI check before 'done': reject once if the page is showing a status/error message
@@ -827,6 +921,7 @@ class Agent:
         if STRUCTURED_VIEW:
             self.seen.append(shown)
         self.elements = elements
+        self.view_text = text
         self.seen.append(elements)
         self.current_url = info.get("url", "")
         self.current_title = str(info.get("title") or "")
@@ -924,6 +1019,7 @@ class Agent:
             self.plan_approved = False
             self.actions = []
             self.seen = [task]  # numbers the user gave count as known
+            self.form_edit, self.leave_warned = None, set()
         self.idle_steps = 0
         self.tokens = 0
         self.trace = []
@@ -933,6 +1029,7 @@ class Agent:
         self.note_warnings = set()  # wrong-product warnings already given (the 2nd try is saved)
         self.product_check_failed = False  # final answer sent back once for not naming the product
         self.fact_check_failed = False
+        self.filter_check_failed = False
         self.claim_check_failed = False
         self.handoff_check_failed = False
         self.turn_start = len(self.actions)
@@ -1001,6 +1098,10 @@ class Agent:
                     await self.ui("step", "🔍 Checking the page isn't showing an error before finishing")
                     self.messages.append({"role": "user", "content": rejection})
                     continue
+                if kind == "done" and (rejection := self.check_filters(text)):
+                    await self.ui("step", "🔍 The list may be filtered – asking Krify to check the filters first")
+                    self.messages.append({"role": "user", "content": rejection})
+                    continue
                 if kind == "done" and (rejection := self.check_facts(text)):
                     await self.ui("step", "🔍 Fact check: answer sent back to be checked")
                     self.messages.append({"role": "user", "content": rejection})
@@ -1027,6 +1128,7 @@ class Agent:
             actions_done = 0
             batch_stopped = ""  # why the rest of the batch is skipped
             prev_page = self.last_page
+            seen = self.elements  # the element list the AI saw when it sent these calls
             for i, call in enumerate(calls):
                 name = call.function.name
                 tool_msg = {"role": "tool", "tool_call_id": call.id}
@@ -1052,6 +1154,10 @@ class Agent:
                         continue
                     if rejection := self.check_claims(summary):
                         await self.ui("step", "🔍 Claim check: Krify said it did something it didn't – sent back")
+                        self.messages.append({**tool_msg, "content": rejection})
+                        continue
+                    if rejection := self.check_filters(summary):
+                        await self.ui("step", "🔍 The list may be filtered – asking Krify to check the filters first")
                         self.messages.append({**tool_msg, "content": rejection})
                         continue
                     if rejection := self.check_facts(summary):
@@ -1134,6 +1240,15 @@ class Agent:
                         result = f"Error: {name} only works on a Google Sheets page."
                     else:
                         result = await self.safe_run(name, args)
+                    if name == "inspect" and args.get("ref") is not None and re.search(
+                            rf'^\[{re.escape(str(args["ref"]))}\] (dropdown|select) ', self.elements or "", re.M):
+                        # A closed dropdown's choices aren't on the page: inspecting it can't show them.
+                        result = (f"{result}\n[{args['ref']}] is a dropdown: its choices exist only while it's open, so "
+                                  f"inspect can't show them. Use select_option(element={args['ref']}, option=<the choice "
+                                  "you want>) – it opens, searches and picks; a miss lists the real choices.")
+                    if (name in ("find_text", "find_elements") and str(result).startswith(("(no text", "(no elements"))
+                            and (filters := self.filter_dropdowns())):
+                        result = f"{result}{FILTER_HINT.format(', '.join(filters))}"
                     same_read = name == "read_text" and str(result) == self.last_read
                     stuck = self.check_progress("same_read" if same_read else name, False)
                     self.seen.append(str(result))
@@ -1174,12 +1289,13 @@ class Agent:
                     before = (self.current_url, self.elements)
                     open_list = self.open_list  # a dropdown list open before the click: did it get a choice?
                     clicked = safety.element_line(self.elements, args.get("element")) if name == "click" else ""
-                    result, status = await self.do_action(name, args)
+                    # Later steps of a batch are checked against the view the AI sent them from.
+                    result, status = await self.do_action(name, args, seen=seen if actions_done else None)
                     if status != "ok":
                         self.messages.append({**tool_msg, "content": result})
                         self.check_progress(name, False)
-                        if status == "blocked":
-                            batch_stopped = "Skipped: an earlier step was blocked by the user."
+                        batch_stopped = ("Skipped: an earlier step was blocked by the user." if status == "blocked"
+                                         else BATCH_REFUSED)
                         continue
                     actions_done += 1
                     failed = result.startswith("Error")
@@ -1254,8 +1370,10 @@ class Agent:
         await self.ui("step", "✅ Allowed by you" if allowed else "⛔ Blocked")
         return allowed
 
-    async def do_action(self, name, args):
+    async def do_action(self, name, args, seen=None):
         """One browser action, with the safety check and the scroll limit.
+        seen: for the 2nd+ step of a batch, the element list the AI sent the batch from (its numbers
+        are checked against that view, not just the newest one).
         Returns (result text, status): status "ok", "blocked" (by the user) or "refused" (scroll limit)."""
         label = describe(name, args)
         # Say WHAT was clicked, not just its number: "Click [24] · link "People"" (numbers change per page).
@@ -1297,6 +1415,12 @@ class Agent:
             if element_id is None:
                 continue
             expected = safety.element_line(self.elements, element_id)
+            if seen is not None:  # a later step of a batch: was this number in the view it was sent from?
+                composed = safety.element_line(seen, element_id)
+                if not composed:
+                    return NOT_IN_VIEW.format(element_id), "refused"
+                if expected and _line_key(composed) != _line_key(expected):
+                    return CHANGED_IN_BATCH.format(element_id, _line_key(expected), _line_key(composed)), "refused"
             if not expected:
                 continue  # nothing recorded to compare against – not our problem to flag
             live = str(await self.safe_run("describe_element", {"element": element_id}))
@@ -1304,6 +1428,11 @@ class Agent:
                 now = f', now "{live}"' if live else ", now gone"
                 return (f'NOT done: [{element_id}] has changed since you looked (expected "{expected}"{now}) '
                         "– get the elements again."), "refused"
+            if field == "element" and (refusal := self.wrong_element(element_id, args.get("label"))):
+                await self.ui("step", f"🔢 [{element_id}] isn't \"{args.get('label')}\" any more – sent back")
+                return refusal, "refused"
+        if leaving := await self.leave_guard(name, args):
+            return leaving
         # Enter sends whatever form the field is in: look at that form's own button (e.g. "Place order").
         if (name == "press_key" and str(args.get("key", "")).strip().lower() == "enter") or (name == "type" and args.get("submit")):
             target = await self.browser_quiet("enter_target", {"element": args.get("element") if name == "type" else None})
@@ -1339,7 +1468,101 @@ class Agent:
         result = str(await self.safe_run(name, args))
         if not result.startswith("Error"):
             self.actions.append((name, {k: v for k, v in args.items() if not k.startswith("_")}, result))
+            self.track_form_edit(name, args)
         return result, "ok"
+
+    def element_names(self, element_id):
+        """What [n] is in the latest view: its flat line, its structured line (with the field's visible
+        label as a hint) and, for a form field, the [Form] checklist's label and value."""
+        names = []
+        if line := safety.element_line(self.elements, element_id):
+            names.append(line)
+        try:
+            n = int(element_id)
+        except (TypeError, ValueError):
+            return names
+        if match := re.search(rf"^\s*\[{n}\] (.*)$", self.view_text or "", re.M):
+            names.append(match.group(1))
+        for f in (self.form or {}).get("fields") or []:
+            if str(f.get("id")) == str(n):
+                names.append(f'"{f.get("label", "")}" "{f.get("value", "")}"')
+        return names
+
+    def wrong_element(self, element_id, label):
+        """The refusal when the AI's label for [n] doesn't fit what [n] is now ('' if it fits, or if
+        either is unknown). Names the number(s) that do carry that label now, if any."""
+        label = str(label or "").strip()
+        names = self.element_names(element_id)
+        if not label or not names or label_matches(label, names):
+            return ""
+        now = [m.group(1) for m in re.finditer(r'^\[(\d+)\] [^\n]*$', self.elements or "", re.M)
+               if label_matches(label, [m.group(0)[len(m.group(1)) + 3:]])]
+        if now:
+            hint = f" (\"{label}\" is {', '.join(f'[{i}]' for i in now[:3])} now)"
+        else:
+            hint = (" – it isn't on the page now. A dropdown's options exist only while it's open: use select_option "
+                    "with the dropdown field and the option's text")
+        line = safety.element_line(self.elements, element_id)
+        return WRONG_ELEMENT.format(id=element_id, line=_line_key(line) or line, label=label, hint=hint)
+
+    def track_form_edit(self, name, args):
+        """Remember that Krify has started filling the form in view (typed into / chose in one of its
+        fields), so a click that would leave it is caught; forget it once the form is submitted.
+        self.form is still the view from before this action."""
+        form = self.form
+        if not form:
+            return
+        el = str(args.get("element"))
+        submits = {str(i) for i in form.get("submits") or []}
+        submitted = ((name == "click" and (el in submits or (not submits and SUBMIT_WORDS.search(
+                         element_label(self.elements, el) or ""))))
+                     or (name == "type" and args.get("submit"))
+                     or (name == "press_key" and str(args.get("key", "")).strip().lower() == "enter"))
+        if submitted:
+            self.form_edit, self.leave_warned = None, set()
+            return
+        kinds = {str(f.get("id")): f.get("kind") for f in form.get("fields") or []}
+        # Clicked one of an open list's options, or ticked a checkbox/radio (opening a dropdown isn't filling it).
+        picked = name == "click" and self.open_list is not None and element_label(self.elements, el) in self.open_list[1]
+        ticked = name == "click" and kinds.get(el) == "choice"
+        if (name in ("type", "select_option") and el in kinds) or picked or ticked:
+            self.form_edit = {"url": self.current_url, "name": form.get("name", "")}
+
+    async def leave_guard(self, name, args):
+        """A step that would leave a form Krify has started filling (a sidebar/header link or other
+        link outside it, open_url, back, reload): refused once with an explanation – usually the AI
+        used a stale number. Sent again: the user decides (Allow/Block).
+        → (refusal text, status) or None to go ahead."""
+        edit, form = self.form_edit, self.form
+        if not edit:
+            return None
+        if edit["url"] != self.current_url or not form:
+            self.form_edit = None  # that form is gone (saved, closed or left already)
+            return None
+        if name == "click" and args.get("element") is not None and not args.get("cell"):
+            where = await self.browser_quiet("leave_check", {"element": args["element"]})
+            if not (isinstance(where, dict) and where.get("form") and not where.get("inside") and where.get("navigates")):
+                return None
+            line = safety.element_line(self.elements, args["element"])
+            what = f"[{args['element']}] {_line_key(line)}".strip()
+        elif name in ("open_url", "go_back", "reload"):
+            what = {"open_url": f"opening {args.get('url')}", "go_back": "going back", "reload": "reloading"}[name]
+            what = what[0].upper() + what[1:]
+        else:
+            return None
+        key = (name, str(args.get("element") if args.get("element") is not None else args.get("url", "")))
+        if key not in self.leave_warned:
+            self.leave_warned.add(key)
+            await self.ui("step", "📝 That would leave the unsaved form – sent back")
+            filled = [f'{f.get("label") or "[" + str(f.get("id")) + "]"} = "{f.get("value")}"'
+                      for f in form.get("fields") or [] if f.get("filled") and f.get("value")]
+            filled_text = f" ({', '.join(filled[:4])}{' …' if len(filled) > 4 else ''})" if filled else ""
+            submits = [f"[{i}] \"{element_label(self.elements, i)}\"" for i in form.get("submits") or []]
+            return LEAVE_FORM.format(what=what, name=f' "{form["name"]}"' if form.get("name") else "",
+                                     filled=filled_text, submit=f" with {submits[0]}" if submits else ""), "refused"
+        if await self.ask_permission("Leaves a form Krify filled in without saving it", name, args):
+            return None
+        return BLOCKED, "blocked"
 
     def required_empty(self, name, args):
         """Refuse (once) a click on the form's Save/Submit button while the [Form] checklist still
@@ -1362,6 +1585,7 @@ class Agent:
         count = min(len(steps), MAX_BATCH)
         await self.ui("step", f"📦 {count} step{'s' if count != 1 else ''} at once")
         report, page, prev, ran = [], None, self.last_page, 0
+        seen = self.elements  # the element list the AI saw when it sent the batch
         for n, step in enumerate(steps[:MAX_BATCH], 1):
             op = step.get("op")
             args = {k: v for k, v in step.items() if k != "op"}
@@ -1371,7 +1595,7 @@ class Agent:
             label = element_label(self.elements, args.get("element"))
             before, open_list = (self.current_url, self.elements), self.open_list
             clicked = safety.element_line(self.elements, args.get("element")) if op == "click" else ""
-            result, status = await self.do_action(op, args)
+            result, status = await self.do_action(op, args, seen=seen if ran else None)
             if status != "ok":
                 report.append(f"{n}. {result}")
                 break

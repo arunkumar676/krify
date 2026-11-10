@@ -73,6 +73,20 @@ Key mechanics worth knowing before touching this file:
   page keys (URL + `layout()`): landing back on a page from a few actions ago isn't progress for
   either detector, a repeating cycle (A→B→A→B, A→B→C→A→B→C) gets `LOOP_NOTE`, and a second cycle
   in the same task ends it as an `ask` (`stop_looping()`) instead of burning steps.
+- **Element numbers are re-assigned every page view**, so actions on an element are checked before they
+  run (`do_action`): the model sends `label` (the element's quoted text) with each number and
+  `wrong_element()` refuses the step if [n] is something else now; later steps of a batch must
+  refer to numbers that were in the view the batch was sent from (`seen`); and once Krify has
+  typed/chosen in a form, `leave_guard()` refuses (then asks Allow/Block for) a link/nav click,
+  `open_url`, back or reload that would leave it unsaved (`leaveCheck` in `content.js`).
+- **Dropdowns**: `select_option` handles native `<select>` and custom dropdowns alike
+  (`pickInCustomDropdown` in `content.js`): opens the field, finds its list (aria-controls, the open
+  list, or whatever opening it added – portals too), types into its search box / scrolls a lazy list
+  if needed, clicks the match and checks the field shows it. A miss returns the real option names.
+  `describe()` calls a button/clickable with a down-chevron icon (or role=combobox /
+  aria-haspopup=listbox) `dropdown "…"`: list filters like "My Activities" only show their current
+  choice. `filter_dropdowns()` in `loop.py` uses that to hint after an empty `find_text`/`find_elements`
+  and to send a "not found" answer back once (`check_filters`) if no filter was changed.
 - **Fact check**: before a `done`, `check_facts()` rejects the summary once if it contains a 3+ digit
   number that never appeared in anything read this task (`self.seen`); a second rejection is allowed
   through with a caveat appended.

@@ -220,7 +220,7 @@ const FRAME_TEXT = 1200; // characters of text read per embedded page
 const elementFrame = new Map(); // element number → frame id (0 = main page)
 
 // In-page functions whose first argument is an element number.
-const ELEMENT_FNS = new Set(["click", "hover", "type", "pointAt", "spotOf", "hoverSpot", "focusCheck", "selectOption", "scrollAt", "describeId", "enterTarget"]);
+const ELEMENT_FNS = new Set(["click", "hover", "type", "pointAt", "spotOf", "hoverSpot", "focusCheck", "selectOption", "scrollAt", "describeId", "enterTarget", "leaveCheck"]);
 
 /** The tab's embedded pages worth looking at, in page order: [{ frameId, label }]. */
 async function embeddedPages(tabId) {
@@ -601,6 +601,8 @@ export const operations = {
   },
   // What [id] currently points at (for the staleness check before acting on an element number).
   describe_element: ({ element } = {}) => callInPage("describeId", [element]),
+  // Would clicking [element] leave the form being filled (for the unsaved-form guard)?
+  leave_check: ({ element } = {}) => callInPage("leaveCheck", [element]),
   // What pressing Enter would send (for the safety check): field, its form's default button, password?
   enter_target: ({ element } = {}) => callInPage("enterTarget", [element ?? null]),
   async click_at({ x, y, button = "left", count = 1 }) {
