@@ -22,7 +22,6 @@ const statusEl = $("status");
 let ws = null;
 
 // ---------- step log ----------
-
 // Escape HTML, then turn **text** into bold and "- item" / "1. item" lines into lists. Nothing else
 // from the AI becomes HTML.
 const BULLET = /^\s*[-*•]\s+(.*)$/;
