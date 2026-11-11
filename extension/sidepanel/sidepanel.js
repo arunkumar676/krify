@@ -7,6 +7,11 @@ const DEFAULT_SERVER = "ws://10.10.2.125:8765/ws";
 const DEFAULT_PORT = 8765;
 let serverUrl = DEFAULT_SERVER;
 
+// Temporarily off: token counts in the panel (the "· used 1.2k tokens" line under answers, the model
+// picker's "64% used" / "18k tokens today", the AI view's "≈ N tokens"). The server still counts them.
+// Set to true to show them again.
+const SHOW_TOKENS = false;
+
 const $ = (id) => document.getElementById(id);
 const logEl = $("log");
 const taskInput = $("taskInput");
@@ -160,7 +165,7 @@ async function connect() {
         addEntry("step", msg.text);
         break;
       case "done":
-        addEntry("done", `✅ ${msg.text}`);
+        addEntry("done", `✅ ${SHOW_TOKENS ? msg.text : msg.text.replace(/\n· used [\d.]+k tokens$/, "")}`);
         setBusy(false);
         showMyTab();
         break;
@@ -317,7 +322,7 @@ let selectedModel = "";
 function showSelected() {
   const m = models.find((x) => x.id === selectedModel);
   modelButton.querySelector(".model-name").textContent = m ? m.label : "(connect to the server)";
-  modelButton.querySelector(".model-status").textContent = m?.status || "";
+  modelButton.querySelector(".model-status").textContent = SHOW_TOKENS ? m?.status || "" : "";
   for (const li of modelList.children) li.setAttribute("aria-selected", li.dataset.id === selectedModel);
 }
 
@@ -337,7 +342,7 @@ async function fillModels(list) {
     name.textContent = m.label;
     const status = document.createElement("span");
     status.className = "model-status";
-    status.textContent = m.status || "";
+    status.textContent = SHOW_TOKENS ? m.status || "" : "";
     li.append(name, status);
     li.onclick = () => {
       selectedModel = m.id;
@@ -550,7 +555,8 @@ function showAiView(msg) {
   }
   const chars = msg.text.length;
   const mode = unrestrictedToggle.checked ? "🔓 Unrestricted (whole page, full labels)" : "restricted (on-screen, short labels)";
-  output.textContent = `${msg.text}\n\n— ${chars} chars ≈ ${Math.round(chars / 4)} tokens · ${mode}`;
+  const size = SHOW_TOKENS ? `${chars} chars ≈ ${Math.round(chars / 4)} tokens` : `${chars} chars`;
+  output.textContent = `${msg.text}\n\n— ${size} · ${mode}`;
   output.scrollTop = 0; // start at the top ([Page], [Form], …) – not the last line of a long view
 }
 
