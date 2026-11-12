@@ -10,12 +10,15 @@ Side panel → server: {"type": "task", "text", "model", "location": {"country",
                      | {"type": "history"} | {"type": "history_delete", "text"} | {"type": "history_clear"}
                      | {"type": "dev_mode", "on"}  (debug trace appended to the final answer)
                      | {"type": "ai_view"}  (show the page view the AI would get right now)
+                     | {"type": "llm_report", "task_id"?}  (every AI request of a task; default = your latest task)
 Server → side panel: {"type": "models", "models": [{"id", "label", "status"}]}  (on connect + after each task)
                      | {"type": "run", "id", "name", "args"}  (do a browser operation)
                      | {"type": "confirm", "id", "text"}  (ask the user Allow / Block)
                      | {"type": "plan_review", "id", "steps"}  (ask the user to Approve / Update / Reject a plan)
-                     | {"type": "history", "items": [{"text", "status", "summary", "tokens", "created_at"}]}
+                     | {"type": "history", "items": [{"id", "text", "status", "summary", "tokens", "calls",
+                       "prompt_tokens", "completion_tokens", "created_at"}]}
                      | {"type": "ai_view", "ok", "text" | "error"}
+                     | {"type": "llm_report", "ok", "report" {task, totals, by_model, by_purpose, calls}, "markdown" | "error"}
                      | {"type": "step" | "done" | "ask" | "stopped" | "error", "text"}
 """
 
@@ -31,6 +34,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from app import history
 from app.agent.loop import Agent
 from app.config import HOST, MODELS, PORT, PROVIDERS, provider_of
+from app.llm import report
 from app.llm.client import model_status
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -212,6 +216,15 @@ async def websocket_endpoint(ws: WebSocket):
             elif kind == "ai_view":
                 # Its own task: look() waits on a browser "result" that this same loop must receive.
                 asyncio.create_task(send_ai_view())
+            elif kind == "llm_report":
+                task_id = msg.get("task_id")
+                task_id = task_id if isinstance(task_id, int) else report.latest_task_id(client)
+                data = report.task_report(task_id, client) if task_id else None  # only this client's own tasks
+                if data:
+                    await ws.send_json({"type": "llm_report", "ok": True, "report": data,
+                                        "markdown": report.task_report_markdown(data)})
+                else:
+                    await ws.send_json({"type": "llm_report", "ok": False, "error": "No report for that task."})
             elif kind == "history":
                 await ws.send_json({"type": "history", "items": history.recent(client)})
             elif kind == "history_delete":

@@ -77,6 +77,19 @@ The agent is split by what each part does; extension files mirror the same names
 `main.py`, `config.py`, `db.py`, `history.py` (task history for the side panel, never fed to the model) and
 `llm/` sit outside the layers.
 
+### LLM report (`backend/app/llm/report.py`)
+
+Every real request to an AI model – including rate-limit/broken-reply retries and switches to another
+model – is saved as an `LlmCall` row by `_try_model` in `llm/client.py`: the exact messages sent
+(screenshots redacted to `[image ~N KB]`), tool names, the reply (text + tool calls), the provider's
+prompt/completion/total/reasoning token counts, duration and status. Which task/step a call belongs to
+comes from a `ContextVar` (`report.set_task` in `Agent.run()`, `set_step` per loop step), so `ask_ai`'s
+signature must stay `(messages, tools, preferred, on_note, need_vision, boost)` (`checks/replay.py`
+fakes it). `task_report()`/`task_report_markdown()` feed the side panel's **📊 Report** view
+(`llm_report` message; per-task button in History; .md/.json download). Full request/response text is
+kept for the newest 50 tasks (`report.prune`), numbers forever; deleting a task deletes its calls.
+`checks/llm_report_check.py` (run by `checks/run.py`) asserts the numbers, redaction and ownership.
+
 How the pieces fit:
 - **`TaskState`** (`agent/state.py`) holds everything about the task in progress and the page it's on
   (`task_text`, `plan`, `notes`, `seen`, `actions`, the `*_check_failed` flags, `elements`, `form`, …).

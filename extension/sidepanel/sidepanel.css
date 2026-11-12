@@ -12,6 +12,23 @@ body {
 }
 header { display: flex; align-items: center; gap: 8px; }
 
+/* LLM report */
+.report { flex: 1; min-height: 120px; display: flex; flex-direction: column; gap: 8px; overflow: hidden; }
+.report-body { overflow-y: auto; display: flex; flex-direction: column; gap: 8px; font-size: 12px; }
+.report-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.report-card { border: 1px solid #e2e4e9; border-radius: 8px; padding: 6px 8px; }
+.report-card b { display: block; font-size: 16px; }
+.report-card span { color: #666; }
+.report table { width: 100%; border-collapse: collapse; }
+.report th, .report td { text-align: right; padding: 2px 4px; border-bottom: 1px solid #eee; }
+.report th:first-child, .report td:first-child { text-align: left; word-break: break-all; }
+.report details { border: 1px solid #e2e4e9; border-radius: 8px; padding: 4px 8px; }
+.report details.failed { border-color: #e0a3a3; background: #fff6f6; }
+.report summary { cursor: pointer; }
+.report pre { margin: 4px 0; padding: 6px; background: #f6f7f9; border-radius: 6px; white-space: pre-wrap; word-break: break-word; max-height: 240px; overflow: auto; font-size: 11px; }
+.report h4 { margin: 6px 0 2px; font-size: 12px; }
+.report .muted { color: #777; }
+
 /* task history */
 .history { flex: 1; min-height: 120px; display: flex; flex-direction: column; gap: 8px; overflow: hidden; }
 .confirm-clear { font-size: 12px; padding: 6px 8px; border: 1px solid #c9ccd4; border-radius: 6px; }

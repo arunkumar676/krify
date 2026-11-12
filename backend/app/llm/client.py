@@ -11,7 +11,7 @@ import openai
 from openai import AsyncOpenAI
 
 from app.config import MODELS, PROVIDERS, model_name, provider_of
-from app.llm import usage
+from app.llm import report, usage
 
 log = logging.getLogger("krify")
 
@@ -69,13 +69,23 @@ def _blocked_for(model):
     return _blocked_until.get(model, 0) - time.time()
 
 
-async def _try_model(model, messages, tools, on_note, boost=False):
+def _record(model, chat, tools, extra, boost, need_vision, attempt, started, response=None, status="ok", error=""):
+    """Put the request in the LLM report. The report must never break a task."""
+    try:
+        report.record_call(model, provider_of(model), attempt, chat, tools, extra, boost, need_vision,
+                           round((time.monotonic() - started) * 1000), response, status, error)
+    except Exception:
+        log.exception("Couldn't save the LLM report entry")
+
+
+async def _try_model(model, messages, tools, on_note, boost=False, need_vision=False):
     """One model, with in-place retries. Returns (message, tokens) or None (model now blocked)."""
     provider = provider_of(model)
     chat = _for_provider(messages, provider)
     tool_args = {"tools": tools, "tool_choice": "auto"} if tools else {}  # no tools: a plain text reply
     extra = {**MODELS[model]["extra"], **MODELS[model]["boost"]} if boost and MODELS[model].get("boost") else MODELS[model]["extra"]
     for attempt in range(3):
+        started = time.monotonic()
         try:
             response = await _clients[provider].chat.completions.create(
                 model=model_name(model), messages=chat, **tool_args, **extra
@@ -85,8 +95,10 @@ async def _try_model(model, messages, tools, on_note, boost=False):
             if u:
                 log.info("%s: in %s / out %s tokens", _label(model), u.prompt_tokens, u.completion_tokens)
             usage.record(model, tokens)
+            _record(model, chat, tools, extra, boost, need_vision, attempt, started, response)
             return response.choices[0].message, tokens
         except openai.RateLimitError as err:
+            _record(model, chat, tools, extra, boost, need_vision, attempt, started, status="rate_limit", error=err)
             usage.learn_from_limit_error(model, err)
             wait = _retry_seconds(err)
             if wait <= 20 and attempt < 2:  # short per-minute limit: just wait
@@ -98,6 +110,9 @@ async def _try_model(model, messages, tools, on_note, boost=False):
             _blocked_why[model] = "limit"
             reason = "limit reached"
         except openai.BadRequestError as err:
+            broken = getattr(err, "code", None) in BROKEN_REPLY_CODES
+            _record(model, chat, tools, extra, boost, need_vision, attempt, started,
+                    status="broken_reply" if broken else "rejected", error=err)
             # Some models now and then produce a malformed tool call; asking again usually fixes it.
             if getattr(err, "code", None) in BROKEN_REPLY_CODES and attempt < 2:
                 log.info("%s sent a broken reply, asking again", model)
@@ -109,12 +124,14 @@ async def _try_model(model, messages, tools, on_note, boost=False):
         except (openai.APITimeoutError, openai.APIConnectionError, openai.InternalServerError,
                 openai.PermissionDeniedError, openai.NotFoundError) as err:
             log.warning("%s unavailable: %s", model, str(err)[:200])
+            _record(model, chat, tools, extra, boost, need_vision, attempt, started, status="unavailable", error=err)
             _blocked_until[model] = time.time() + 120  # busy/down: skip it for 2 minutes
             _blocked_why[model] = "busy"
             reason = "is busy"
         except openai.APIStatusError as err:
             # e.g. 413 "request too large" (a small per-minute size limit): use another model for now.
             log.warning("%s refused the request (%s): %s", model, err.status_code, str(err)[:200])
+            _record(model, chat, tools, extra, boost, need_vision, attempt, started, status="rejected", error=err)
             _blocked_until[model] = time.time() + 60
             _blocked_why[model] = "busy"
             reason = "can't take a request this big" if err.status_code == 413 else "had a problem"
@@ -169,7 +186,7 @@ async def ask_ai(messages, tools, preferred, on_note=None, need_vision=False, bo
         waiting_for_preferred = False
         for model in first:
             if _blocked_for(model) <= 0:
-                result = await _try_model(model, messages, tools, on_note, boost)
+                result = await _try_model(model, messages, tools, on_note, boost, need_vision)
                 if result:
                     return result[0], model, result[1]
                 if model == preferred and _short_wait(preferred, usable):
@@ -187,7 +204,7 @@ async def ask_ai(messages, tools, preferred, on_note=None, need_vision=False, bo
 
         for model in backup:
             if model not in first and _blocked_for(model) <= 0:
-                result = await _try_model(model, messages, tools, on_note, boost)
+                result = await _try_model(model, messages, tools, on_note, boost, need_vision)
                 if result:
                     return result[0], model, result[1]
         break

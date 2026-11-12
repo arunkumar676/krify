@@ -10,6 +10,7 @@
     <h1>Krify</h1>
     <span class="spacer"></span>
     <span id="status" class="status off">● Not connected</span>
+    <button id="reportBtn" class="small" title="Every AI request of your latest task: what was sent, what came back, tokens">📊 Report</button>
     <button id="historyBtn" class="small" title="Past tasks">🕘 History</button>
   </header>
 
@@ -27,6 +28,17 @@
       <button id="clearNoBtn" class="small">No</button>
     </div>
     <ul id="historyList" class="history-list"></ul>
+  </section>
+
+  <section id="reportView" class="report" hidden>
+    <div class="row">
+      <strong id="reportTitle">📊 LLM report</strong>
+      <span class="spacer"></span>
+      <button id="reportMdBtn" class="small" title="Download as Markdown">⬇ .md</button>
+      <button id="reportJsonBtn" class="small" title="Download as JSON">⬇ .json</button>
+      <button id="closeReportBtn" class="small">✕ Close</button>
+    </div>
+    <div id="reportBody" class="report-body"></div>
   </section>
 
   <div id="log" class="log">

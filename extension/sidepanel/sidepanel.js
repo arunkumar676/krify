@@ -142,6 +142,9 @@ async function connect() {
       case "history":
         showHistory(msg.items);
         break;
+      case "llm_report":
+        showReport(msg);
+        break;
       case "ai_view":
         showAiView(msg);
         break;
@@ -164,7 +167,7 @@ async function connect() {
         addEntry("step", msg.text);
         break;
       case "done":
-        addEntry("done", `✅ ${SHOW_TOKENS ? msg.text : msg.text.replace(/\n· used [\d.]+k tokens$/, "")}`);
+        addEntry("done", `✅ ${SHOW_TOKENS ? msg.text : msg.text.replace(/\n· used [\d.]+k tokens.*$/, "")}`);
         setBusy(false);
         showMyTab();
         break;
@@ -388,6 +391,7 @@ const STATUS_ICON = { done: "✅", ask: "❓", stopped: "⛔", error: "⚠️", 
 function openHistory(open) {
   historyView.hidden = !open;
   logEl.hidden = open;
+  if (open) reportView.hidden = true;
   $("clearConfirm").hidden = true;
   if (open) send({ type: "history" });
 }
@@ -429,10 +433,13 @@ function showHistory(items) {
     const run = document.createElement("button");
     run.textContent = "▶";
     run.title = "Run again (in a new chat)";
+    const rep = document.createElement("button");
+    rep.textContent = "📊";
+    rep.title = item.calls ? `LLM report: ${item.calls} calls, ${item.prompt_tokens} in / ${item.completion_tokens} out tokens` : "LLM report";
     const del = document.createElement("button");
     del.textContent = "🗑";
     del.title = "Delete from history";
-    bottom.append(summary, run, del);
+    bottom.append(summary, rep, run, del);
     li.append(top, bottom);
 
     li.onclick = () => {
@@ -448,6 +455,11 @@ function showHistory(items) {
       newChat();
       taskInput.value = item.text;
       start();
+    };
+    rep.onclick = (e) => {
+      e.stopPropagation();
+      openHistory(false);
+      openReport(true, item.id);
     };
     del.onclick = (e) => {
       e.stopPropagation();
@@ -465,6 +477,123 @@ $("clearYesBtn").onclick = () => {
   send({ type: "history_clear" });
   $("clearConfirm").hidden = true;
 };
+
+// ---------- LLM report: every request sent to an AI model, with its answer and token counts ----------
+
+const reportView = $("reportView");
+const reportBody = $("reportBody");
+let lastReport = null; // { report, markdown } – what the download buttons save
+
+function openReport(open, taskId) {
+  reportView.hidden = !open;
+  logEl.hidden = open;
+  historyView.hidden = true;
+  if (!open) return;
+  reportBody.textContent = "Loading…";
+  send(taskId ? { type: "llm_report", task_id: taskId } : { type: "llm_report" });
+}
+
+const fmtN = (n) => (n == null ? "n/a" : n.toLocaleString());
+
+function el(tag, text, className) {
+  const node = document.createElement(tag);
+  if (text != null) node.textContent = text;
+  if (className) node.className = className;
+  return node;
+}
+
+function messageText(m) {
+  let body = m.content;
+  if (Array.isArray(body)) body = body.map((p) => p.text ?? p.image_url?.url ?? "").join("\n");
+  if (m.tool_calls?.length) body = `${body || ""}\ntool_calls: ${JSON.stringify(m.tool_calls)}`;
+  return body || "";
+}
+
+function table(headers, rows) {
+  const t = el("table");
+  const head = el("tr");
+  headers.forEach((h) => head.append(el("th", h)));
+  t.append(head);
+  rows.forEach((r) => {
+    const tr = el("tr");
+    r.forEach((c) => tr.append(el("td", c)));
+    t.append(tr);
+  });
+  return t;
+}
+
+function callBlock(c) {
+  const box = el("details");
+  if (c.status !== "ok") box.className = "failed";
+  const where = c.purpose === "planner" ? "planner" : `step ${c.step}`;
+  const tokens = c.status === "ok" ? `${fmtN(c.prompt_tokens)} in / ${fmtN(c.completion_tokens)} out` : c.status;
+  box.append(el("summary", `#${c.seq} ${where} · ${c.model.split(":")[1] || c.model} · ${tokens} · ${(c.duration_ms / 1000).toFixed(1)}s`));
+  if (c.error) box.append(el("div", c.error, "muted"));
+  if (!c.request) {
+    box.append(el("div", "Text no longer stored (older than the newest 50 tasks).", "muted"));
+    return box;
+  }
+  const roles = Object.entries(c.sent_by_role).map(([r, v]) => `${r} ×${v.messages} (${fmtN(v.chars)} chars)`).join(" · ");
+  box.append(el("h4", `Sent – ${c.message_count} messages: ${roles}`));
+  box.append(el("div", `Tools offered: ${c.request.tools.join(", ") || "none"}`, "muted"));
+  for (const m of c.request.messages) {
+    const d = el("details");
+    d.append(el("summary", `${m.role}${m.tool_calls ? " (tool calls)" : ""} · ${fmtN(messageText(m).length)} chars`));
+    d.append(el("pre", messageText(m)));
+    box.append(d);
+  }
+  box.append(el("h4", `Received – ${fmtN(c.completion_tokens)} tokens${c.reasoning_tokens ? ` (${fmtN(c.reasoning_tokens)} reasoning)` : ""}`));
+  const r = c.response || {};
+  if (r.content) box.append(el("pre", r.content));
+  for (const call of r.tool_calls || []) box.append(el("pre", `${call.function?.name}(${call.function?.arguments})`));
+  if (!r.content && !(r.tool_calls || []).length) box.append(el("div", "(no reply)", "muted"));
+  return box;
+}
+
+function showReport(msg) {
+  reportBody.replaceChildren();
+  if (!msg.ok) {
+    reportBody.textContent = msg.error;
+    lastReport = null;
+    return;
+  }
+  lastReport = msg;
+  const { task, totals: t, by_model, calls } = msg.report;
+  $("reportTitle").textContent = `📊 LLM report – task ${task.id}`;
+  reportBody.append(el("div", `${STATUS_ICON[task.status] || "•"} ${task.text}`));
+  const cards = el("div", null, "report-cards");
+  [
+    [t.calls, `LLM calls (${t.ok} ok, ${t.failed} failed)`],
+    [fmtN(t.prompt_tokens), "tokens sent"],
+    [fmtN(t.completion_tokens), "tokens received"],
+    [fmtN(t.total_tokens), "tokens total"],
+    [fmtN(t.reasoning_tokens), "of received: reasoning"],
+    [`${(t.duration_ms / 1000).toFixed(1)}s`, "waiting for models"],
+  ].forEach(([v, label]) => {
+    const card = el("div", null, "report-card");
+    card.append(el("b", String(v)), el("span", label));
+    cards.append(card);
+  });
+  reportBody.append(cards);
+  if (t.tokens_unknown) reportBody.append(el("div", `${t.tokens_unknown} call(s): the provider sent no token counts.`, "muted"));
+  reportBody.append(table(["Model", "Calls", "Failed", "Sent", "Received", "Total"],
+    Object.entries(by_model).map(([m, g]) => [m, g.calls, g.failed, fmtN(g.prompt_tokens), fmtN(g.completion_tokens), fmtN(g.total_tokens)])));
+  reportBody.append(el("h4", "Every call"));
+  calls.forEach((c) => reportBody.append(callBlock(c)));
+}
+
+function download(name, text, type) {
+  const url = URL.createObjectURL(new Blob([text], { type }));
+  const a = Object.assign(document.createElement("a"), { href: url, download: name });
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+$("reportBtn").onclick = () => openReport(reportView.hidden);
+$("closeReportBtn").onclick = () => openReport(false);
+$("reportMdBtn").onclick = () => lastReport && download(`krify-llm-report-task-${lastReport.report.task.id}.md`, lastReport.markdown, "text/markdown");
+$("reportJsonBtn").onclick = () =>
+  lastReport && download(`krify-llm-report-task-${lastReport.report.task.id}.json`, JSON.stringify(lastReport.report, null, 2), "application/json");
 
 // ---------- location (country + optional exact place) ----------
 

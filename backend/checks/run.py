@@ -20,6 +20,7 @@ JOBS = [  # (name, module, extra env)
     ("replay_sv1", "checks.replay", {"STRUCTURED_VIEW": "1"}),
     ("replay_sv0", "checks.replay", {"STRUCTURED_VIEW": "0"}),
 ]
+ASSERT_JOBS = [("llm_report", "checks.llm_report_check")]  # must exit 0; no golden file
 
 
 def main():
@@ -53,6 +54,14 @@ def main():
         print(f"✗ {name}: {sum(1 for d in diff if d[:1] in '+-') - 2} changed lines")
         for line in diff[:40]:
             print("   " + (line if len(line) < 400 else line[:400] + " …"))
+    for name, module in ASSERT_JOBS:
+        env = {**os.environ, "DATABASE_URL": "sqlite://", "GROQ_API_KEY": os.environ.get("GROQ_API_KEY", "x")}
+        proc = subprocess.run([sys.executable, "-m", module], cwd=BACKEND, env=env, capture_output=True, text=True)
+        if proc.returncode:
+            print(f"✗ {name}: exit {proc.returncode}\n{(proc.stdout + proc.stderr)[-3000:]}")
+            failed = True
+        else:
+            print(f"✓ {name}: {len(proc.stdout.splitlines())} assertions groups passed")
     sys.exit(1 if failed or static.returncode else 0)
 
 

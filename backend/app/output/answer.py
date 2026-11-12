@@ -4,6 +4,7 @@ import logging
 import re
 
 from app import history
+from app.llm import report
 from app.verification.facts import unexplained_numbers, unverified_phrases
 
 log = logging.getLogger("krify")
@@ -34,11 +35,16 @@ class OutputMixin:
             steps = "\n".join(f"{i}. {t}" for i, t in enumerate(self.trace, 1))
             text = f"{text}\n\n🔍 Debug trace:\n{steps}"
         if kind == "done":
-            text = f"{text}\n· used {self.tokens / 1000:.1f}k tokens"
+            detail = ""
+            if self.task_id and (t := report.totals(self.task_id))[0]:
+                detail = f" ({t[1] / 1000:.1f}k sent / {t[2] / 1000:.1f}k received, {t[0]} LLM calls)"
+            text = f"{text}\n· used {self.tokens / 1000:.1f}k tokens{detail}"
         await self.ui(kind, text)
 
     def end_task(self, status, summary):
         """Save how the task ended (done / ask / stopped / error) in the history."""
         self.last_status = status
         if self.task_id:
-            history.finish_task(self.task_id, status, summary, self.tokens, self.model)
+            calls, sent, received = report.totals(self.task_id)
+            history.finish_task(self.task_id, status, summary, self.tokens, self.model, calls, sent, received)
+            report.prune()

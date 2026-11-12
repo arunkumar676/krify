@@ -8,7 +8,7 @@ import datetime
 from sqlalchemy import update
 from sqlmodel import delete, select
 
-from app.db import Step, Task, session
+from app.db import LlmCall, Step, Task, session
 
 MAX_LISTED = 50
 
@@ -27,7 +27,7 @@ def add_step(task_id, kind, text):
         s.commit()
 
 
-def finish_task(task_id, status, summary, tokens, model=None):
+def finish_task(task_id, status, summary, tokens, model=None, calls=0, prompt_tokens=0, completion_tokens=0):
     with session() as s:
         task = s.get(Task, task_id)
         if not task:
@@ -35,6 +35,7 @@ def finish_task(task_id, status, summary, tokens, model=None):
         task.status = status
         task.summary = summary[:500]
         task.tokens = tokens
+        task.calls, task.prompt_tokens, task.completion_tokens = calls, prompt_tokens, completion_tokens
         if model:
             task.model = model
         task.finished_at = datetime.datetime.now(datetime.timezone.utc)
@@ -61,10 +62,14 @@ def recent(client):
         seen.add(key)
         items.append(
             {
+                "id": t.id,
                 "text": t.text,
                 "status": t.status,
                 "summary": t.summary,
                 "tokens": t.tokens,
+                "calls": t.calls,
+                "prompt_tokens": t.prompt_tokens,
+                "completion_tokens": t.completion_tokens,
                 "created_at": t.created_at.replace(tzinfo=datetime.timezone.utc).isoformat(),
             }
         )
@@ -76,6 +81,7 @@ def recent(client):
 def _delete_tasks(s, ids):
     if ids:
         s.exec(delete(Step).where(Step.task_id.in_(ids)))
+        s.exec(delete(LlmCall).where(LlmCall.task_id.in_(ids)))
         s.exec(delete(Task).where(Task.id.in_(ids)))
         s.commit()
 

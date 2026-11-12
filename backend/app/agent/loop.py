@@ -24,6 +24,7 @@ from app.guardrails.progress import (
     scrolled,
     start_trail,
 )
+from app.llm import report
 from app.llm.client import ask_ai, skip_model
 from app.memory.transcript import MemoryMixin
 from app.output.answer import OutputMixin, preview
@@ -113,6 +114,7 @@ class Agent(ToolsMixin, GuardrailsMixin, ContextMixin, MemoryMixin, OutputMixin)
         self.trace = []
         self.model = model
         self.task_id = history.start_task(task, model, self.client)
+        report.set_task(self.task_id)
         self.notes_at_last_read = 0
         nudged = False
         empty_replies = 0
@@ -124,6 +126,7 @@ class Agent(ToolsMixin, GuardrailsMixin, ContextMixin, MemoryMixin, OutputMixin)
         self.add_with_page({"role": "user"}, task, page)
 
         for step in range(MAX_STEPS):
+            report.set_step(step + 1)
             if MAX_STEPS - step == WRAP_UP_AT:
                 await self.ui("step", "⏰ Few steps left – asking Krify to wrap up")
                 self.messages.append({"role": "user", "content": WRAP_UP})

@@ -3,6 +3,7 @@
 Tables:
   task   – every task you gave Krify (text, result, summary, model, tokens)
   step   – every step of every task (actions, notes, safety questions) – useful for debugging
+  llmcall – every request sent to an AI model (what was sent, what came back, tokens) – the LLM report
   usage  – tokens and requests per model per day
   limit  – daily limits learned from providers' "limit reached" messages
 
@@ -31,6 +32,9 @@ class Task(SQLModel, table=True):
     status: str = "running"  # running | done | ask | stopped | error
     summary: str = ""
     tokens: int = 0
+    prompt_tokens: int = 0  # of the tokens above: what was sent to the models
+    completion_tokens: int = 0  # ... and what they sent back
+    calls: int = 0  # requests made to AI models (retries and model switches count)
     created_at: datetime.datetime = Field(default_factory=_now, index=True)
     finished_at: datetime.datetime | None = None
 
@@ -41,6 +45,33 @@ class Step(SQLModel, table=True):
     kind: str  # step | confirm | done | ask | stopped | error
     text: str
     created_at: datetime.datetime = Field(default_factory=_now)
+
+
+class LlmCall(SQLModel, table=True):
+    """One request to an AI model (a retry or a switch to another model is its own row)."""
+
+    id: int | None = Field(default=None, primary_key=True)
+    task_id: int | None = Field(default=None, foreign_key="task.id", index=True)
+    seq: int = 0  # 1.. within the task
+    step: int | None = None  # agent loop step (None = the planner)
+    purpose: str = "agent_step"  # planner | agent_step
+    created_at: datetime.datetime = Field(default_factory=_now)
+    duration_ms: int = 0
+    model: str = ""
+    provider: str = ""
+    attempt: int = 0  # in-place retry number on this model (0-2)
+    boost: bool = False
+    need_vision: bool = False
+    status: str = "ok"  # ok | rate_limit | broken_reply | rejected | unavailable | error
+    error: str = ""
+    prompt_tokens: int | None = None  # None = the provider didn't say
+    completion_tokens: int | None = None
+    total_tokens: int | None = None
+    reasoning_tokens: int | None = None
+    message_count: int = 0
+    request_chars: int = 0
+    request_json: str = ""  # messages + tools + extra settings, screenshots redacted
+    response_json: str = ""  # text, tool calls, finish reason
 
 
 class Usage(SQLModel, table=True):
@@ -70,6 +101,9 @@ def _add_missing_columns():
         if "client" not in columns:
             conn.exec_driver_sql("ALTER TABLE task ADD COLUMN client VARCHAR NOT NULL DEFAULT ''")
             conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_task_client ON task (client)")
+        for name in ("prompt_tokens", "completion_tokens", "calls"):
+            if name not in columns:
+                conn.exec_driver_sql(f"ALTER TABLE task ADD COLUMN {name} INTEGER NOT NULL DEFAULT 0")
 
 
 _add_missing_columns()
