@@ -222,7 +222,25 @@ def _states(states):
     return out
 
 
-def _element_line(el):
+_ALWAYS_SAY = ("call ", "email ", "downloads ", "WhatsApp", "jumps ")
+_URL_WORDS = {"www", "com", "html", "htm", "php", "aspx", "page", "the", "and", "new", "tab"}
+
+
+def _destination(text, go):
+    """Where a link goes ('→ call +1 212…', '→ linkedin.com', '→ /services/') – only when its label
+    doesn't already say it ("Blog" → /blog/ needs nothing; "call-us" → a phone number does)."""
+    if not go:
+        return ""
+    if go.startswith(_ALWAYS_SAY):
+        return go
+    label = re.sub(r"[^a-z0-9]+", " ", _label(text).lower())
+    if go.startswith("home page"):
+        return "" if "home" in label.split() else go
+    words = [w for w in re.split(r"[^a-z0-9]+", go.lower()) if len(w) > 2 and w not in _URL_WORDS]
+    return "" if words and all(w in label for w in words) else go
+
+
+def _element_line(el, in_card=False):
     text, extra = _tidy(el["text"])
     states = []
     for s in extra + _states(el.get("states")):
@@ -235,9 +253,13 @@ def _element_line(el):
     elif text.startswith("link ") and ({"open", "closed"} & set(states)):
         # A menu link that also opens a sub-menu ("Our Services ▾"): say so, not "closed".
         states = ["submenu open" if s == "open" else "submenu▸" if s == "closed" else s for s in states]
+    if el.get("of") and not in_card:  # a card's ▸ line already says what its buttons belong to
+        states.append(f"of: {el['of']}")
     line = f"[{el['id']}] {text}"
     if states:
         line += f" ({', '.join(states)})"
+    if go := _destination(text, el.get("go")):
+        line += f" → {go}"
     if el.get("col"):
         line += f' · column "{el["col"]}"'
     if el.get("hint"):
@@ -324,8 +346,9 @@ def _ambiguity(entries, shown):
     groups = {}
     for e in entries:
         if e.order in shown and '"' in e.el["text"]:
-            groups.setdefault((e.el["text"], tuple(e.el.get("states") or ()), e.card), []).append(e.el["id"])
-    dupes = [(text.split('"')[1], ids) for (text, _, _), ids in groups.items() if len(ids) > 1]
+            key = (e.el["text"], tuple(e.el.get("states") or ()), e.card, e.el.get("of"), e.el.get("go"))
+            groups.setdefault(key, []).append(e.el["id"])
+    dupes = [(key[0].split('"')[1], ids) for key, ids in groups.items() if len(ids) > 1]
     return dupes_warning(dupes) if dupes else ""
 
 
@@ -454,19 +477,31 @@ def _section_lines(sec, group, shown, cards, sub, texts=()):
             return
         lines.append(("  " if t["card"] else "") + t["t"])
 
-    texts = sorted(texts, key=lambda t: (t["y"], t["x"]))
-    i = 0
-    for e in visible:
-        if (y := e.el.get("y")) is not None:  # the page's text above this element comes first
-            while i < len(texts) and (texts[i]["y"], texts[i]["x"]) < (y, e.el.get("x", 0)):
-                say(texts[i])
-                i += 1
+    def show(e):
         enter(e.card, e.el.get("pos", 0))
-        if e.card in rows and e is rows[e.card]:
-            continue
-        lines.append(("  " if e.card else "") + _element_line(e.el))
-    for t in texts[i:]:
-        say(t)
+        if not (e.card in rows and e is rows[e.card]):
+            lines.append(("  " if e.card else "") + _element_line(e.el, bool(e.card)))
+
+    if texts and all(t.get("k") for t in texts) and all(e.el.get("k") for e in visible):
+        # Box by box: side-by-side boxes (columns, stat boxes, cards in a row) one at a time, each
+        # top to bottom – so "20+" stays next to "years of experience", not next to "1500+".
+        items = [(t["k"], 1, n, t) for n, t in enumerate(texts)] + [(e.el["k"], 0, n, e) for n, e in enumerate(visible)]
+        for _, is_text, _, item in sorted(items, key=lambda it: (it[0], it[1], it[2])):
+            if is_text:
+                say(item)
+            else:
+                show(item)
+    else:
+        texts = sorted(texts, key=lambda t: (t["y"], t["x"]))
+        i = 0
+        for e in visible:
+            if (y := e.el.get("y")) is not None:  # the page's text above this element comes first
+                while i < len(texts) and (texts[i]["y"], texts[i]["x"]) < (y, e.el.get("x", 0)):
+                    say(texts[i])
+                    i += 1
+            show(e)
+        for t in texts[i:]:
+            say(t)
     if hidden:
         how = "use find_elements" if all(e.el.get("pos", 0) == 0 for e in hidden) else "scroll there or use find_elements"
         lines.append(f"(+{len(hidden)} more here: {_counts(hidden)} – {how})")

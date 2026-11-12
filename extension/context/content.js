@@ -1522,11 +1522,16 @@ if (!window.__krify) {
       box[3] = Math.max(box[3], r.bottom + scrollY);
       const pos = inView(n.el) ? 0 : r.bottom < 0 ? -1 : r.top > innerHeight ? 1 : 2;
       const field = fieldInfo(n.el);
+      const go = destinationOf(n.el);
+      const of = ownerOf(n.el, labelOf(n.el));
       elements.push({
         id: n.id, text: n.text, states: statesOf(n.el, field), hint: hintOf(n.el, field),
         col: columnOf(n.el), pos, s, c,
         y: Math.round(r.top + scrollY), x: Math.round(r.left + scrollX), // page order, to place text between elements
+        ...(full ? { k: readingKey(n.el) } : {}),
         ...(floating(n.el) ? { float: true } : {}),
+        ...(go ? { go } : {}),
+        ...(of ? { of } : {}),
       });
     }
     // Full mode: the page's own text, as blocks placed among the elements (see pageTextBlocks).
@@ -1648,10 +1653,121 @@ if (!window.__krify) {
       const pos = entry.top + 2 < 0 ? -1 : entry.top > innerHeight ? 1 : 0;
       out.push({
         t: entry.parts.join(" ").replace(/\s+/g, " ").trim(), s: placeOf(chain, entry.top), c, pos,
-        y: Math.round(entry.top + scrollY), x: Math.round(entry.left + scrollX),
+        y: Math.round(entry.top + scrollY), x: Math.round(entry.left + scrollX), k: readingKey(block),
       });
     }
     return out;
+  }
+
+  // ---------- reading order: box by box, not line by line across the page ----------
+  // Boxes side by side (columns, stat boxes "20+ years | 1500+ clients", cards in a row) are read
+  // one at a time – each top to bottom before the next one to its right – so a number stays next to
+  // its own label. readingKey(node) = for every side-by-side box around the node, outermost first,
+  // [top of its row, its left edge], then the node's own [top, left]; pageview.py sorts by it.
+  const rowTops = new Map(); // element → top of the row of side-by-side boxes it's one of, or null
+  function rowTopOf(box) {
+    if (rowTops.has(box)) return rowTops.get(box);
+    let top = null;
+    const parent = box.parentElement;
+    if (parent && parent.children.length >= 2 && parent.children.length <= 40) {
+      const r = box.getBoundingClientRect();
+      if (r.width > 0 && r.height > 0) {
+        for (const other of parent.children) {
+          if (other === box) continue;
+          const q = other.getBoundingClientRect();
+          if (q.width <= 0 || q.height <= 0) continue;
+          const apart = q.right <= r.left + 2 || q.left >= r.right - 2;
+          const overlap = Math.min(r.bottom, q.bottom) - Math.max(r.top, q.top);
+          if (apart && overlap > Math.min(r.height, q.height) * 0.5) top = Math.min(top ?? r.top, q.top, r.top);
+        }
+      }
+    }
+    rowTops.set(box, top === null ? null : Math.round(top + scrollY));
+    return rowTops.get(box);
+  }
+  function readingKey(node) {
+    const key = [];
+    for (let box = node, i = 0; box && box !== document.body && i < 15; box = box.parentElement, i++) {
+      const top = rowTopOf(box);
+      if (top !== null) key.unshift([top, Math.round(box.getBoundingClientRect().left + scrollX)]);
+    }
+    const r = node.getBoundingClientRect();
+    key.push([Math.round(r.top + scrollY), Math.round(r.left + scrollX)]);
+    return key;
+  }
+
+  // ---------- what a link does ----------
+  // Where a link goes, in a few words, when the browser can tell: "call +1 212 380 1160",
+  // "email info@krify.co", "WhatsApp chat", "linkedin.com (new tab)", "home page", "/services/",
+  // "jumps to "Contact us"", "downloads brochure.pdf". "" when it isn't a real link.
+  function destinationOf(el) {
+    const a = el.closest?.("a[href]");
+    if (!a) return "";
+    const raw = (a.getAttribute("href") || "").trim();
+    if (!raw || raw === "#" || /^javascript:/i.test(raw)) return "";
+    const decode = (s) => {
+      try {
+        return decodeURIComponent(s);
+      } catch {
+        return s;
+      }
+    };
+    if (/^tel:/i.test(raw)) return "call " + decode(raw.slice(4)).replace(/\s+/g, " ").trim();
+    if (/^mailto:/i.test(raw)) return "email " + decode(raw.slice(7)).split("?")[0];
+    let url;
+    try {
+      url = new URL(raw, location.href);
+    } catch {
+      return "";
+    }
+    if (url.protocol === "whatsapp:" || /(^|\.)(wa\.me|whatsapp\.com)$/i.test(url.hostname)) return "WhatsApp chat";
+    if (!/^https?:$/.test(url.protocol)) return "";
+    const newTab = a.target === "_blank" ? " (new tab)" : "";
+    if (a.hasAttribute("download") || /\.(pdf|docx?|xlsx?|pptx?|zip|csv)$/i.test(url.pathname)) {
+      return "downloads " + keep(decode(url.pathname.split("/").pop() || "file"), 40);
+    }
+    if (url.origin !== location.origin) return url.hostname.replace(/^www\./, "") + newTab;
+    if (url.pathname === location.pathname && url.hash) {
+      const target = document.getElementById(decode(url.hash.slice(1)));
+      const name = target ? keep(target.getAttribute("aria-label") || target.querySelector(HEADING_SELECTOR)?.innerText || "", 40) : "";
+      return name ? `jumps to "${name}"` : "jumps on this page";
+    }
+    if (url.pathname === "/") return "home page" + newTab;
+    return keep(decode(url.pathname), 50) + newTab;
+  }
+
+  // ---------- what a vague button belongs to ----------
+  // "Close", "Play Video", "Next", "✕"… only make sense next to what they sit in. ownerOf() names that:
+  // 'chat "Talk to Sofi Live"', 'slider', 'testimonial "Priya K"' – from the box's own label or
+  // heading, its first line of text, and its kind (from class names). "" for clear labels.
+  const VAGUE = /^(close|dismiss|[×✕✖x]|play( video)?|pause|stop|mute|unmute|next|previous|prev|back|forward|more|more (options|actions)|options|edit|delete|remove|view|view (more|all|details)|read more|show more|learn more|see more|details|open|expand|collapse|share|like|copy|download|ok|cancel|\d+|[<>‹›«»←→]|.*\barrow\b.*)$/i;
+  const WIDGETS = [
+    [/chat|messenger|livechat|intercom|tawk|crisp|drift|zendesk|sofi/i, "chat"],
+    [/carousel|slider|swiper|slick|splide|glide/i, "slider"],
+    [/testimonial|review/i, "testimonial"],
+    [/cookie|consent|gdpr/i, "cookie banner"],
+    [/modal|dialog|popup|pop-up|lightbox/i, "pop-up"],
+    [/video|player|youtube|vimeo/i, "video"],
+  ];
+  function ownerOf(el, label) {
+    label = (label || "").trim();
+    if (!VAGUE.test(label)) return "";
+    let kind = "";
+    for (let box = parentOf(el), level = 1; box && box !== document.body && level <= 6; box = parentOf(box), level++) {
+      if (box.nodeType !== 1) continue;
+      const names = `${box.id} ${typeof box.className === "string" ? box.className : ""}`;
+      kind = kind || (WIDGETS.find(([re]) => re.test(names)) || [])[1] || "";
+      const text = box.innerText || "";
+      if (text.length > 2000) break; // a whole page part, not the button's own widget
+      let name = box.getAttribute("aria-label") || textOfIds(box, "aria-labelledby") ||
+        box.querySelector(HEADING_SELECTOR)?.innerText || "";
+      if (!name && level >= 2) {
+        name = text.split("\n").map((line) => line.trim()).find((line) => line && line.toLowerCase() !== label.toLowerCase()) || "";
+      }
+      name = keep(name, 40);
+      if (name && name.toLowerCase() !== label.toLowerCase()) return kind ? `${kind} "${name}"` : `"${name}"`;
+    }
+    return kind;
   }
 
   // ---------- inspect(): accessibility-tree view ----------
