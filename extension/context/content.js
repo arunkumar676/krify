@@ -14,6 +14,7 @@ if (!window.__krify) {
   const MODEL_MAX = 600;
   const COLLECT_MS = 400;
   const MAX_CARD_SUMMARIES = 80;
+  const MAX_OPTIONS = 15; // a dropdown's options listed in its line (Unrestricted too)
 
 
   // inspect(): implicit roles for non-interactive structural context (headings, regions, text).
@@ -64,10 +65,20 @@ if (!window.__krify) {
     }
     const style = getComputedStyle(el);
     if (style.visibility === "hidden" || style.display === "none" || Number(style.opacity) <= 0.05) return false;
+    return visibleAt(el, rect);
+  }
+
+  // The ONE rule for "could a person see this", used for elements (isRendered) and for the page's
+  // text (pageTextBlocks) alike – so the view can never show a piece of text whose element it
+  // calls hidden, or the other way round. `rect`: the element's box, or a text node's.
+  const VISIBILITY = { opacityProperty: true, visibilityProperty: true, contentVisibilityAuto: true, checkOpacity: true, checkVisibilityCSS: true };
+  function visibleAt(el, rect) {
+    // Parked outside the page, where no scrolling reaches (a screen-reader-only "Skip to main
+    // content" link, Amazon's hidden keyboard-shortcut menu at left: -9999px).
+    if (rect.right + scrollX < 0 || rect.bottom + scrollY < 0) return false;
     // Ancestors too: opacity 0 / visibility / content-visibility on a parent hides this element.
-    const opts = { opacityProperty: true, visibilityProperty: true, contentVisibilityAuto: true, checkOpacity: true, checkVisibilityCSS: true };
-    if (el.checkVisibility && !el.checkVisibility(opts)) return false;
-    if (el.closest('[inert], [aria-hidden="true"]')) return false;
+    if (el.checkVisibility && !el.checkVisibility(VISIBILITY)) return false;
+    if (closestDeep(el, '[inert], [aria-hidden="true"]')) return false; // background of a modal, decoration
     return !clippedAway(el, rect);
   }
 
@@ -78,7 +89,7 @@ if (!window.__krify) {
     let s = styleCache.get(node);
     if (!s) {
       const cs = getComputedStyle(node);
-      s = { position: cs.position, overflowX: cs.overflowX, overflowY: cs.overflowY, transform: cs.transform };
+      s = { position: cs.position, overflowX: cs.overflowX, overflowY: cs.overflowY, transform: cs.transform, display: cs.display };
       styleCache.set(node, s);
     }
     return s;
@@ -103,6 +114,10 @@ if (!window.__krify) {
         const h = clipsY ? Math.min(rect.bottom, b.bottom) - Math.max(rect.top, b.top) : rect.height;
         if (w < 2 || h < 2) return true;
       }
+      // A scrolling box (a sidebar menu longer than the screen): what's inside can be scrolled into
+      // its view, so from here up only the box itself has to be visible – an overflow:hidden frame
+      // around it doesn't make the lower menu items "clipped away".
+      if (/auto|scroll/.test(s.overflowX) || /auto|scroll/.test(s.overflowY)) rect = p.getBoundingClientRect();
       if (s.position === "fixed") return false;
       if (s.position === "absolute") needPositioned = true;
     }
@@ -166,7 +181,8 @@ if (!window.__krify) {
         tally.set(key, [...(tally.get(key) || []), kid]);
       }
       const items = [...tally.values()].sort((a, b) => b.length - a.length)[0];
-      if (items && items.length >= min) groups.push({ items, table: tableBody });
+      const clickable = tableBody || items?.[0]?.querySelector?.("a[href], button, [role=button], [data-krify-id]");
+      if (items && items.length >= min && clickable) groups.push({ items, table: tableBody });
     }
     const kept = groups.filter((g) => !groups.some((h) => h !== g && h.items.length >= g.items.length &&
       h.items.some((item) => item.contains(g.items[0]))));
@@ -175,7 +191,7 @@ if (!window.__krify) {
       .sort((a, b) => b.table - a.table || b.items.length - a.items.length)
       .slice(0, upTo(4))
       .map(({ items, table }) => `${items.length} ${table ? "table " : ""}row${items.length === 1 ? "" : "s"} like ` +
-        `"${keep(items[0].innerText || items[0].textContent, 60)}"`);
+        `"${clean(items[0].innerText || items[0].textContent, 60)}"`);
   }
 
   // The parent, stepping out of a shadow root to the component that holds it.
@@ -378,10 +394,19 @@ if (!window.__krify) {
   // A scrollable box's own name – never its text: labelOf() falls back to innerText, which for a
   // scrolling <main> is the whole page (and uncut in Unrestricted mode), repeating every label in one
   // line. A name, not page data, so it's short in both modes.
+  // The first heading in a box that a person can actually see (not one in a hidden mega-menu), and
+  // the first line of a text (a heading with a badge and subtitle inside it: just its title).
+  function visibleHeading(box) {
+    return [...box.querySelectorAll(HEADING_SELECTOR)].find((h) => !h.closest("a[href]") && isRendered(h)) || null;
+  }
+  const firstTextLine = (text) => (text || "").split(String.fromCharCode(10)).map((line) => line.trim()).find(Boolean) || "";
+
   function boxName(box) {
-    const heading = box.querySelector("h1, h2, h3, [role=heading]");
+    const heading = visibleHeading(box);
     const name = box.getAttribute("aria-label") || textOfIds(box, "aria-labelledby") || box.getAttribute("title") ||
-      (heading && heading.innerText) || (box.matches("main, [role=main]") ? "main content" : "");
+      (heading && heading.innerText) || (box.matches("main, [role=main]") ? "main content" : "") ||
+      // An unnamed scrolling menu: say what it is ("menu"), not "".
+      (closestDeep(box, "nav, aside, [role=navigation], [role=complementary]") ? "menu" : "");
     return clean(name, 40);
   }
 
@@ -498,6 +523,9 @@ if (!window.__krify) {
       const box = list.parentElement;
       if (!box || box === document.body || box === document.documentElement || !shown(list)) continue;
       const r = list.getBoundingClientRect();
+      // Really open = on screen now: a site's hover sub-menus sit in the page all the time, parked off
+      // to the side until the mouse is over their menu item – they aren't open dropdown lists.
+      if (r.bottom <= 0 || r.top >= innerHeight || r.right <= 0 || r.left >= innerWidth) continue;
       if (r.width * r.height > innerWidth * innerHeight * 0.5) continue; // a drawer or page overlay, not a list
       const b = box.getBoundingClientRect();
       if (r.bottom <= b.bottom + 2 && r.top >= b.top - 2) continue; // stays inside its box: layout, not a pop-out
@@ -736,6 +764,12 @@ if (!window.__krify) {
       if (fields.length >= upTo(MAX_FORM_FIELDS)) break;
     }
     if (fields.length < 2) return null; // a lone search box isn't a form to fill
+    // Nor is a search box with a category dropdown next to it (Amazon's "All Categories" + query).
+    const textFields = fields.filter((f) => f.kind === "text").length;
+    const searchy = root.matches?.("[role=search], [role=search] *") || closestDeep(root, "[role=search], header, [role=banner]") ||
+      /search|\/s(\/|$)/i.test(root.getAttribute?.("action") || "") ||
+      root.querySelector?.("input[type=search], input[name=q], input[name=k], input[name*=search i], input[name=field-keywords]");
+    if (textFields <= 1 && searchy) return null;
     lastFormRoot = root;
     // Its submit button: real type=submit buttons, else the LAST save/add-like button (the footer's
     // "Save", not a "+ Add" for a list inside the form).
@@ -811,9 +845,12 @@ if (!window.__krify) {
     const label = labelOf(el);
     if (tag === "select") {
       const current = el.options[el.selectedIndex]?.text || "";
-      const all = window.__krify?.unrestricted ? [...el.options] : [...el.options].slice(0, 12);
+      // At most MAX_OPTIONS even in Unrestricted mode: a 45-category list costs ~250 tokens every step,
+      // and select_option finds any option by its name anyway.
+      const all = [...el.options].slice(0, window.__krify?.unrestricted ? MAX_OPTIONS : 12);
+      const more = el.options.length > all.length ? `, +${el.options.length - all.length} more` : "";
       const options = all.map((o) => keep(o.text, 30)).join(", ");
-      return `select "${label}" = "${keep(current, 40)}" (options: ${options})`;
+      return `select "${label}" = "${keep(current, 40)}" (options: ${options}${more})`;
     }
     if (tag === "input" || tag === "textarea") {
       const type = tag === "textarea" ? "textarea" : `input ${el.type || "text"}`;
@@ -836,7 +873,7 @@ if (!window.__krify) {
       const known = reactOptions(el);
       const names = known?.names || seenOptions.get(el) || [];
       if (!names.length) return `dropdown "${label}"`;
-      const shown = names.slice(0, upTo(12));
+      const shown = names.slice(0, window.__krify?.unrestricted ? MAX_OPTIONS : 12);
       const total = Math.max(known?.total || 0, names.length);
       const more = total > shown.length ? `, +${total - shown.length} more` : "";
       return `dropdown "${label}" (options: ${shown.map((t) => keep(t, 30)).join(", ")}${more})`;
@@ -1063,6 +1100,13 @@ if (!window.__krify) {
     const nested = () => node.parentElement?.closest("article, section, main, aside, [role=main], [role=article]");
     if (role === "banner" || (tag === "HEADER" && !role && !nested())) return { kind: "header" };
     if (role === "contentinfo" || (tag === "FOOTER" && !role && !nested())) return { kind: "footer" };
+    // Old-style pages build them from plain boxes: known ids/classes, page-wide, not inside the content.
+    if (!role && /^(DIV|SECTION|NAV)$/.test(tag) && !nested()) {
+      const names = `${node.id} ${typeof node.className === "string" ? node.className : ""}`;
+      const wide = node.getBoundingClientRect().width >= innerWidth * 0.6;
+      if (wide && /(^|\s)(nav-?footer|site-footer|page-footer|global-footer|footer)(\s|$)/i.test(names)) return { kind: "footer" };
+      if (wide && /(^|\s)(navbar|nav-?belt|masthead|site-header|page-header|global-header|header)(\s|$)/i.test(names)) return { kind: "header" };
+    }
     if (role === "navigation" || tag === "NAV") return { kind: "nav" };
     if (role === "search" || tag === "SEARCH") return { kind: "search" };
     if (role === "main" || tag === "MAIN") return { kind: "main" };
@@ -1083,9 +1127,8 @@ if (!window.__krify) {
     if (trigger) return keep(fieldInfo(trigger).label || labelOf(trigger), 50); // "Channel"
     const label = textOfIds(node, "aria-labelledby") || node.getAttribute("aria-label");
     if (label) return keep(label, 50);
-    if (kind === "main") return "";
-    const head = node.querySelector(HEADING_SELECTOR);
-    return head ? keep(head.innerText, 50) : "";
+    if (kind === "main" || kind === "aside") return "";
+    return keep(firstTextLine(visibleHeading(node)?.innerText), 50);
   }
 
   // Sibling signature, as in listCounts(): same tag + classes = "looks alike". Semantic list
@@ -1156,8 +1199,10 @@ if (!window.__krify) {
       title = keep([...card.cells].map((cell) => keep(cell.innerText, 40)).filter(Boolean).join(" | "), 80);
     }
     if (!title) {
-      const links = els.map((e) => labelOf(e.el)).filter(Boolean).sort((a, b) => b.length - a.length);
-      title = links[0] ? keep(links[0], 80) : keep(text, 80);
+      const longest = (list) => list.map((e) => labelOf(e.el)).filter(Boolean).sort((a, b) => b.length - a.length)[0];
+      const link = longest(els.filter((e) => e.el.closest?.("a[href]")));
+      const any = longest(els);
+      title = link ? keep(link, 80) : any ? keep(any, 80) : keep(text, 80);
     }
     const badges = [...new Set((text.match(BADGES) || []).map((b) => b.replace(/\s+/g, " ")))].slice(0, upTo(3));
     return { title, price: pricesOf(card), rating: ratingOf(card, text), badges };
@@ -1318,7 +1363,12 @@ if (!window.__krify) {
     if (field.label && !own.toLowerCase().includes(field.label.toLowerCase())) parts.push(`field: ${field.label}`);
     if (field.error) parts.push(`error: ${field.error}`);
     if (!field.error) {
-      const described = keep(textOfIds(el, "aria-describedby"), 60);
+      // Only a description a person can see: hidden hover pop-ups ("Compare PlansRequest Demo") and
+      // screen-reader instructions ("use your keyboard's up or down arrows") are noise for the AI.
+      const root = el.getRootNode();
+      const seen = (el.getAttribute("aria-describedby") || "").split(/\s+/).filter(Boolean)
+        .map((id) => root.getElementById?.(id) || document.getElementById(id)).filter((d) => d && isRendered(d));
+      const described = keep(seen.map((d) => d.innerText || "").join(" ").trim(), 60);
       const placeholder = keep(el.getAttribute("placeholder") || "", 40);
       if (described) parts.push(described);
       else if (placeholder && !own.includes(placeholder) && /^(INPUT|TEXTAREA)$/.test(el.tagName)) parts.push(placeholder);
@@ -1454,10 +1504,52 @@ if (!window.__krify) {
     });
     const holds = new Map();
     for (const n of info) for (const c of n.candidates) holds.set(c, (holds.get(c) || 0) + 1);
+    // Menus aren't lists of items: the groups of a sidebar menu ("Relationships", "Marketing"…) repeat
+    // like product cards, but a ▸ card line with a made-up title would only confuse.
+    const MENU_KINDS = new Set(["nav", "aside", "menubar", "toolbar", "header", "footer"]);
     for (const n of info) {
+      if (n.chain.some((node) => MENU_KINDS.has(kindOf(node).kind))) {
+        n.card = null;
+        continue;
+      }
       // Table rows always count (a "View" link per order row needs its row to say which order).
       n.card = n.candidates.find((c) => (holds.get(c) >= 2 || priced(c) || c.tagName === "TR") &&
         (c.textContent || "").length < 3000) || null;
+    }
+    // A card is the WHOLE list item: grow each card out to the largest repeated box around it that
+    // holds no other card – so a video's channel link and view count stay with its title (YouTube).
+    const firstCards = [...new Set(info.map((n) => n.card).filter(Boolean))];
+    const grown = new Map();
+    for (const card of firstCards) {
+      let top = card;
+      for (let p = parentOf(card), i = 0; p && p.nodeType === 1 && p !== document.body && i < 6; p = parentOf(p), i++) {
+        if ((p.textContent || "").length >= 3000) break;
+        if (firstCards.some((other) => other !== card && containsDeep(p, other))) break;
+        if (repeated(p)) top = p;
+      }
+      grown.set(card, top);
+    }
+    const grownCards = new Set(grown.values());
+    for (const n of info) {
+      if (n.card) {
+        n.card = grown.get(n.card);
+        continue;
+      }
+      if (n.chain.some((node) => MENU_KINDS.has(kindOf(node).kind))) continue;
+      for (let p = parentOf(n.el), i = 0; p && p !== n.section && i < 12; p = parentOf(p), i++) {
+        if (grownCards.has(p)) {
+          n.card = p;
+          break;
+        }
+      }
+    }
+    // A row of tabs or filter chips is a control, not a list of items.
+    const byCard = new Map();
+    for (const n of info) if (n.card) byCard.set(n.card, [...(byCard.get(n.card) || []), n]);
+    for (const els of byCard.values()) {
+      const controls = els.every((n) => /^(tab|option|menuitem\w*|radio) /.test(n.text) ||
+        /^(tab|option|menuitem)/.test(n.el.getAttribute("role") || ""));
+      if (controls) for (const n of els) n.card = null;
     }
     const cardNodes = new Set(info.map((n) => n.card).filter(Boolean));
 
@@ -1465,8 +1557,10 @@ if (!window.__krify) {
     // but not headings inside cards (each product's own title would make a group per product).
     // (Also headings in any repeated block, even one past the collection cap that holds no
     // collected element – otherwise a far-off product's title would name the group.)
+    // (From the heading's parent up: headings that are siblings of each other – a flat page with
+    // several <h2>s straight in <main> – are section titles, not repeated item titles.)
     const insideCard = (node) => {
-      for (let p = node, i = 0; p && i < 15; p = parentOf(p), i++) {
+      for (let p = parentOf(node), i = 1; p && i < 15; p = parentOf(p), i++) {
         if (cardNodes.has(p) || (i < 6 && p.nodeType === 1 && repeated(p))) return true;
       }
       return false;
@@ -1478,15 +1572,27 @@ if (!window.__krify) {
       })
       .map((h) => {
         const chain = chainOf(h);
-        return { y: h.getBoundingClientRect().top, section: chain[chain.length - 1] || null, text: keep(h.innerText, 50) };
+        return { node: h, y: h.getBoundingClientRect().top, section: chain[chain.length - 1] || null, text: keep(firstTextLine(h.innerText), 50) };
       })
-      .filter((h) => h.text)
+      // A heading inside one of several side-by-side boxes (a process step, a footer column) only
+      // titles its own box: it mustn't split the whole area at its height (in full mode it's shown as
+      // a ### line in its box instead).
+      // (Nor a heading inside a link: a search result's <a><h3>title</h3></a> is the link's own label,
+      // and splitting there would push each result's link to the end of the previous result.)
+      .filter((h) => h.text && !closestDeep(h.node, "a[href]") && !inNarrowColumn(h.node, h.section))
       .sort((a, b) => a.y - b.y);
 
     const cards = [];
     const cardIds = new Map();
     const elements = [];
     const full = window.__krify.unrestricted;
+    const fieldLabels = new Set(); // visible labels of numbered fields: not repeated as text
+    // Labels used by more than one element: each of those gets an owner (what it belongs to).
+    const labelCount = new Map();
+    for (const n of info) {
+      const label = labelOf(n.el).trim().toLowerCase();
+      if (label) labelCount.set(label, (labelCount.get(label) || 0) + 1);
+    }
     // The section a node at screen height `top` belongs to: its landmark chain, and inside main (or
     // a page with no landmarks) the heading above it. Used for elements and, in full mode, text.
     const placeOf = (chain, top) => {
@@ -1500,6 +1606,14 @@ if (!window.__krify) {
         }
       }
       return sectionFor(chain, heading);
+    };
+    // Where a section sits on the page (page coordinates), grown from its elements and text.
+    const growBox = (s, r) => {
+      const box = sections[s].box || (sections[s].box = [Infinity, Infinity, -Infinity, -Infinity]);
+      box[0] = Math.min(box[0], r.left + scrollX);
+      box[1] = Math.min(box[1], r.top + scrollY);
+      box[2] = Math.max(box[2], r.right + scrollX);
+      box[3] = Math.max(box[3], r.bottom + scrollY);
     };
     for (const n of info) {
       const s = placeOf(n.chain, n.rect.top);
@@ -1515,15 +1629,13 @@ if (!window.__krify) {
       const r = n.rect;
       // Where the section sits on the page (page coordinates, grown from its elements): pageview.py
       // shows the sections in the order a person sees them – top bar, left sidebar, main, right column.
-      const box = sections[s].box || (sections[s].box = [Infinity, Infinity, -Infinity, -Infinity]);
-      box[0] = Math.min(box[0], r.left + scrollX);
-      box[1] = Math.min(box[1], r.top + scrollY);
-      box[2] = Math.max(box[2], r.right + scrollX);
-      box[3] = Math.max(box[3], r.bottom + scrollY);
+      growBox(s, r);
       const pos = inView(n.el) ? 0 : r.bottom < 0 ? -1 : r.top > innerHeight ? 1 : 2;
       const field = fieldInfo(n.el);
       const go = destinationOf(n.el);
-      const of = ownerOf(n.el, labelOf(n.el));
+      // (Inside a card the ▸ line already says what it belongs to.)
+      const of = n.card ? "" : ownerOf(n.el, labelOf(n.el), (labelCount.get(labelOf(n.el).trim().toLowerCase()) || 0) > 1);
+      if (field.label) fieldLabels.add(field.label.toLowerCase());
       elements.push({
         id: n.id, text: n.text, states: statesOf(n.el, field), hint: hintOf(n.el, field),
         col: columnOf(n.el), pos, s, c,
@@ -1535,7 +1647,7 @@ if (!window.__krify) {
       });
     }
     // Full mode: the page's own text, as blocks placed among the elements (see pageTextBlocks).
-    const texts = full ? pageTextBlocks(placeOf, chainOf, cardIds) : [];
+    const texts = full ? pageTextBlocks(placeOf, chainOf, cardIds, fieldLabels, growBox) : [];
     // Card summaries cost a few DOM reads each: on-screen cards always, all of them in full mode.
     let summaries = 0;
     const cardList = cards.map((card, i) => {
@@ -1582,6 +1694,8 @@ if (!window.__krify) {
         scrollY: Math.round(scrollY),
         scrollMax: Math.max(0, doc.scrollHeight - innerHeight),
         width: Math.round(innerWidth), // to tell a left sidebar / right column from the main area
+        summary: window === top ? pageSummary() : "",
+        facts: window === top ? seoFacts(pageType(mainCards || cards.length, numbered, results)) : [],
       },
       status: statusSignals(),
       form: formSummary(numbered),
@@ -1610,11 +1724,15 @@ if (!window.__krify) {
   }
 
   const LONG_LABEL = 100; // a numbered element with more text than this (a clickable card) keeps its text as a text block
+  const SHORT_SAID = 60; // a link/button text up to this long is "said" even when it isn't numbered ("Read More »")
   // Full mode: the page's own text, one block per paragraph / heading / list item / cell (the
   // nearest non-inline box around it), in page order, each placed in its section (and card) like
-  // the elements, so pageview.py can show text and elements together. Left out: text that is only
-  // a numbered element's label (its element line already says it), hidden or screen-reader-only text.
-  function pageTextBlocks(placeOf, chainOf, cardIds) {
+  // the elements, so pageview.py can show text and elements together. Headings are marked (h), and
+  // named images ("Client: Tata") come along as `image "…"` lines. Left out: text that is only an
+  // element's label (its element line already says it – also links the numbering skipped as
+  // repeats, like "Read More »"), a field's visible label (its field line says it), hidden or
+  // screen-reader-only text.
+  function pageTextBlocks(placeOf, chainOf, cardIds, fieldLabels, growBox) {
     const blocks = new Map(); // block element → { parts, own, top, left }
     const range = document.createRange();
     const blockOf = (node) => {
@@ -1629,34 +1747,137 @@ if (!window.__krify) {
       range.selectNodeContents(node);
       const r = range.getBoundingClientRect();
       if (r.width <= 1 || r.height <= 1) continue; // not laid out, or a screen-reader-only 1px box
-      if (parent.checkVisibility && !parent.checkVisibility({ opacityProperty: true, visibilityProperty: true })) continue;
-      if (closestDeep(parent, '[aria-hidden="true"]')) continue; // decoration (animated digits, icons)
+      if (!visibleAt(parent, r)) continue; // the same rule as for elements: hidden, decoration, clipped away
       const numbered = closestDeep(parent, "[data-krify-id]");
-      const said = numbered && (numbered.innerText || "").length <= LONG_LABEL; // its element line has this text
-      const block = blockOf(parent);
+      const control = numbered || closestDeep(parent, "a[href], button, [role=button]");
+      const said = control && (control.innerText || "").length <= (numbered ? LONG_LABEL : SHORT_SAID);
+      // A link or chip that flows inside a sentence ("…through the LinkedIn website or app") keeps
+      // its words in that sentence's block, so the sentence isn't left with holes.
+      const inline = said && /^inline/.test(cachedStyle(control).display);
+      const block = inline ? blockOf(parentOf(control) || control) : blockOf(parent);
       let entry = blocks.get(block);
-      if (!entry) blocks.set(block, (entry = { parts: [], own: 0, top: r.top, left: r.left }));
+      if (!entry) blocks.set(block, (entry = { parts: [], ownParts: [], own: 0, top: r.top, left: r.left, ownTop: null, ownLeft: null }));
       entry.parts.push(text);
-      if (!said) entry.own += text.length;
+      if (!said) {
+        entry.own += text.length;
+        entry.ownParts.push(text);
+        if (entry.ownTop === null) [entry.ownTop, entry.ownLeft] = [r.top, r.left];
+      }
     }
     const out = [];
-    for (const [block, entry] of blocks) {
-      if (!entry.own) continue; // only element labels: nothing new
-      const chain = chainOf(block);
+    const place = (node, top, left, t, extra = {}) => {
       let c = -1;
-      for (let p = block, i = 0; p && i < 15; p = parentOf(p), i++) {
+      for (let p = node, i = 0; p && i < 15; p = parentOf(p), i++) {
         if (cardIds.has(p)) {
           c = cardIds.get(p);
           break;
         }
       }
-      const pos = entry.top + 2 < 0 ? -1 : entry.top > innerHeight ? 1 : 0;
+      const pos = top + 2 < 0 ? -1 : top > innerHeight ? 1 : 0;
+      const s = placeOf(chainOf(node), top);
+      growBox(s, node.getBoundingClientRect()); // a part with only text still gets its place on the page
       out.push({
-        t: entry.parts.join(" ").replace(/\s+/g, " ").trim(), s: placeOf(chain, entry.top), c, pos,
-        y: Math.round(entry.top + scrollY), x: Math.round(entry.left + scrollX), k: readingKey(block),
+        t, s, c, pos,
+        y: Math.round(top + scrollY), x: Math.round(left + scrollX), k: readingKey(node), ...extra,
       });
+    };
+    for (const [block, entry] of blocks) {
+      if (!entry.own) continue; // only element labels: nothing new
+      const countOnly = entry.own <= 12 && entry.parts.length > entry.ownParts.length;
+      if (countOnly) [entry.top, entry.left] = [entry.ownTop, entry.ownLeft];
+      const t = (countOnly ? entry.ownParts : entry.parts).join(" ").replace(/\s+/g, " ").trim();
+      if (fieldLabels.has(t.replace(/\s*[*:]\s*$/, "").toLowerCase())) continue; // a field's label: on its field line
+      const heading = closestDeep(block, "h1, h2, h3, h4, h5, h6, [role=heading]");
+      place(block, entry.top, entry.left, t, heading ? { h: 1 } : {});
+    }
+    // Named images (logos, project shots): their alt text is often the only place a name is written.
+    const named = new Set([...listed.values()].map((el) => labelOf(el).trim().toLowerCase())); // already said by an element
+    for (const img of deepAll("img[alt], [role=img][aria-label]")) {
+      const alt = keep(img.getAttribute("alt") || img.getAttribute("aria-label") || "", 80);
+      if (alt.length <= 3 || named.has(alt.toLowerCase()) || closestDeep(img, '[data-krify-id], [aria-hidden="true"]')) continue;
+      const r = img.getBoundingClientRect();
+      if (r.width < 24 || r.height < 16 || !isRendered(img)) continue; // icons, spacers
+      if (!/\s/.test(alt) && /[-_\d]/.test(alt)) continue; // a file name: "slider1", "hero-banner_2", "…-PhotoRoom"
+      const plain = alt.replace(/[\s_-]+/g, " ").replace(/\d+$/, "").trim().toLowerCase();
+      if (/^(image|img|logo|icon|banner|photo|picture|placeholder|avatar|thumbnail|slider|slide|course image|product image|default|all)$/.test(plain)) continue;
+      named.add(alt.toLowerCase());
+      place(img, r.top, r.left, `image "${alt}"`);
     }
     return out;
+  }
+
+  // A node inside one of several side-by-side boxes that are each at most half as wide as its
+  // section (process steps, footer columns, stat boxes) – not a main column next to a sidebar.
+  function inNarrowColumn(node, section) {
+    const limit = (section || document.body).getBoundingClientRect().width * 0.5;
+    for (let box = node.parentElement, i = 0; box && box !== section && box !== document.body && i < 12; box = box.parentElement, i++) {
+      if (rowTopOf(box) !== null && box.getBoundingClientRect().width <= limit) return true;
+    }
+    return false;
+  }
+
+  // ---------- what the site tells search engines ----------
+  // The page's own one-line summary (meta description) and exact facts from its schema.org data
+  // (JSON-LD): organisation contacts and rating, product price/stock/rating, article author/date,
+  // breadcrumbs. Written for Google, so short and exact – cheaper and more reliable than reading them
+  // off the screen.
+  function pageSummary() {
+    const meta = document.querySelector('meta[name="description" i], meta[property="og:description" i]');
+    return keep(meta?.getAttribute("content") || "", 200);
+  }
+  const MAX_FACTS = 6;
+  function seoFacts(type = "") {
+    // A "Product" with a price and rating on a home or company page is an SEO trick (krify.co claims
+    // "Product, USD 20, 4.8/575" while its own footer says 4.7/492): only trusted on product/list pages.
+    const productPage = /product|search results|checkout/.test(type);
+    const facts = [];
+    const plain = (v) => (typeof v === "string" ? v : v?.name || v?.["@id"] || "");
+    const typeOf = (o) => [].concat(o["@type"] || []).join(" ");
+    const rating = (o) => {
+      const r = o.aggregateRating;
+      if (!r?.ratingValue) return "";
+      const count = r.reviewCount || r.ratingCount;
+      return `rated ${r.ratingValue}${r.bestRating ? "/" + r.bestRating : ""}${count ? ` (${count} reviews)` : ""}`;
+    };
+    const visit = (o, depth = 0) => {
+      if (!o || typeof o !== "object" || depth > 4 || facts.length >= MAX_FACTS) return;
+      if (Array.isArray(o)) return o.forEach((x) => visit(x, depth + 1));
+      if (o["@graph"]) visit(o["@graph"], depth + 1);
+      const type = typeOf(o);
+      const parts = [];
+      if (/Product/.test(type) && productPage) {
+        const offer = [].concat(o.offers || [])[0] || {};
+        const price = offer.price || offer.lowPrice;
+        parts.push(`Product "${plain(o.name)}"`, price ? `${offer.priceCurrency || ""} ${price}`.trim() : "",
+          (offer.availability || "").replace(/^https?:\/\/schema\.org\//, ""), plain(o.brand) && `brand ${plain(o.brand)}`, rating(o));
+      } else if (/Article|BlogPosting|NewsArticle/.test(type)) {
+        parts.push(`Article "${plain(o.headline || o.name)}"`, plain([].concat(o.author || [])[0]) && `by ${plain([].concat(o.author)[0])}`,
+          o.datePublished && `published ${String(o.datePublished).slice(0, 10)}`);
+      } else if (/BreadcrumbList/.test(type)) {
+        const names = [].concat(o.itemListElement || []).map((item) => item.name || plain(item.item)).filter(Boolean);
+        if (names.length >= 2) parts.push("Breadcrumb: " + names.join(" › ")); // "Home" alone says nothing
+      } else if (/Organization|LocalBusiness|Corporation|Store|Restaurant|Hotel/.test(type)) {
+        const address = o.address && typeof o.address === "object"
+          ? [o.address.streetAddress, o.address.addressLocality, o.address.addressCountry?.name || o.address.addressCountry].filter(Boolean).join(", ")
+          : plain(o.address);
+        parts.push(`${type.split(" ")[0]} "${plain(o.name)}"`, o.telephone && `phone ${o.telephone}`, o.email && `email ${o.email}`,
+          address && `address ${address}`, rating(o), o.foundingDate && `founded ${o.foundingDate}`);
+      } else if (/Event/.test(type)) {
+        parts.push(`Event "${plain(o.name)}"`, o.startDate && `starts ${o.startDate}`, plain(o.location) && `at ${plain(o.location)}`);
+      }
+      const fact = parts.filter((p) => p && !/""/.test(p)).join(" · ");
+      // (a lone 'Organization "X"' says nothing; a breadcrumb is a fact on its own)
+      if (fact && (fact.includes(" · ") || fact.startsWith("Breadcrumb")) && !facts.includes(fact)) facts.push(keep(fact, 160));
+      for (const key of ["mainEntity", "itemReviewed", "publisher"]) if (o[key]) visit(o[key], depth + 1);
+    };
+    for (const script of document.querySelectorAll('script[type="application/ld+json"]')) {
+      try {
+        visit(JSON.parse(script.textContent));
+      } catch {
+        // a broken JSON-LD block: skip it
+      }
+    }
+    return facts.slice(0, MAX_FACTS);
   }
 
   // ---------- reading order: box by box, not line by line across the page ----------
@@ -1712,7 +1933,11 @@ if (!window.__krify) {
         return s;
       }
     };
-    if (/^tel:/i.test(raw)) return "call " + decode(raw.slice(4)).replace(/\s+/g, " ").trim();
+    if (/^tel:/i.test(raw)) {
+      // The number as the page writes it ("+1 212 380 1160"), else as the link has it.
+      const shown = (a.innerText || "").match(/\+?\d[\d\s().-]{5,}\d/);
+      return "call " + (shown ? shown[0] : decode(raw.slice(4))).replace(/\s+/g, " ").trim();
+    }
     if (/^mailto:/i.test(raw)) return "email " + decode(raw.slice(7)).split("?")[0];
     let url;
     try {
@@ -1726,7 +1951,8 @@ if (!window.__krify) {
     if (a.hasAttribute("download") || /\.(pdf|docx?|xlsx?|pptx?|zip|csv)$/i.test(url.pathname)) {
       return "downloads " + keep(decode(url.pathname.split("/").pop() || "file"), 40);
     }
-    if (url.origin !== location.origin) return url.hostname.replace(/^www\./, "") + newTab;
+    const site = (host) => host.replace(/^www\./, "");
+    if (site(url.hostname) !== site(location.hostname)) return site(url.hostname) + newTab;
     if (url.pathname === location.pathname && url.hash) {
       const target = document.getElementById(decode(url.hash.slice(1)));
       const name = target ? keep(target.getAttribute("aria-label") || target.querySelector(HEADING_SELECTOR)?.innerText || "", 40) : "";
@@ -1741,34 +1967,77 @@ if (!window.__krify) {
   // 'chat "Talk to Sofi Live"', 'slider', 'testimonial "Priya K"' – from the box's own label or
   // heading, its first line of text, and its kind (from class names). "" for clear labels.
   const VAGUE = /^(close|dismiss|[×✕✖x]|play( video)?|pause|stop|mute|unmute|next|previous|prev|back|forward|more|more (options|actions)|options|edit|delete|remove|view|view (more|all|details)|read more|show more|learn more|see more|details|open|expand|collapse|share|like|copy|download|ok|cancel|\d+|[<>‹›«»←→]|.*\barrow\b.*)$/i;
-  const WIDGETS = [
-    [/chat|messenger|livechat|intercom|tawk|crisp|drift|zendesk|sofi/i, "chat"],
-    [/carousel|slider|swiper|slick|splide|glide/i, "slider"],
+  const WIDGETS = [ // most telling first: a chat with a video avatar is a chat, a testimonial slider is testimonials
+    [/chat|messenger|livechat|intercom|tawk|crisp|drift|zendesk|sofi|talk|assistant|chatbot|\bbot\b|helpdesk|support-widget/i, "chat"],
     [/testimonial|review/i, "testimonial"],
+    [/carousel|slider|swiper|slick|splide|glide/i, "slider"],
     [/cookie|consent|gdpr/i, "cookie banner"],
     [/modal|dialog|popup|pop-up|lightbox/i, "pop-up"],
     [/video|player|youtube|vimeo/i, "video"],
   ];
-  function ownerOf(el, label) {
+  function ownerOf(el, label, duplicated = false) {
     label = (label || "").trim();
-    if (!VAGUE.test(label)) return "";
+    const bare = label.replace(/\s*\(icon\)\s*$/i, "").trim(); // "next (icon)" is a vague "next"
+    if (!duplicated && !VAGUE.test(bare)) return "";
+    // A look-alike whose hidden description names its item ("About this result" → the result's title).
+    const described = keep(textOfIds(el, "aria-describedby"), 40);
+    if (duplicated && described && described.toLowerCase() !== label.toLowerCase()) return `"${described}"`;
+    const own = new Set([label, el.innerText || "", el.textContent || ""].map((t) => t.trim().toLowerCase()));
+    const sameLabel = (box) => [...box.querySelectorAll("[data-krify-id]")]
+      .filter((other) => labelOf(other).trim().toLowerCase() === label.toLowerCase());
+    const lookAlike = (box) => sameLabel(box).some((other) => other !== el);
+    // A box's other controls aren't its name ("All" is a filter chip next to the "Next" arrow).
+    const controlsIn = (box) => new Set([...box.querySelectorAll("[data-krify-id]")].map((x) => labelOf(x).trim().toLowerCase()));
+    // The widget kind: the most telling one around it (a chat with a video avatar is a chat).
     let kind = "";
+    let rank = WIDGETS.length;
+    let name = "";
+    let slot = ""; // "2 of 3": which of several look-alike boxes (slides) it's in, when nothing names it
     for (let box = parentOf(el), level = 1; box && box !== document.body && level <= 6; box = parentOf(box), level++) {
       if (box.nodeType !== 1) continue;
       const names = `${box.id} ${typeof box.className === "string" ? box.className : ""}`;
-      kind = kind || (WIDGETS.find(([re]) => re.test(names)) || [])[1] || "";
+      const found = WIDGETS.findIndex(([re]) => re.test(names));
+      if (found >= 0 && found < rank) {
+        rank = found;
+        kind = WIDGETS[found][1];
+      }
       const text = box.innerText || "";
       if (text.length > 2000) break; // a whole page part, not the button's own widget
-      let name = box.getAttribute("aria-label") || textOfIds(box, "aria-labelledby") ||
-        box.querySelector(HEADING_SELECTOR)?.innerText || "";
-      if (!name && level >= 2) {
-        name = text.split("\n").map((line) => line.trim()).find((line) => line && line.toLowerCase() !== label.toLowerCase()) || "";
+      if (!slot && box.parentElement && box.parentElement.children.length >= 2) {
+        const key = itemKeys(box)[0];
+        const same = [...box.parentElement.children].filter((kid) => itemKeys(kid)[0] === key);
+        if (same.length >= 2) slot = `${same.indexOf(box) + 1} of ${same.length}`;
       }
-      name = keep(name, 40);
-      if (name && name.toLowerCase() !== label.toLowerCase()) return kind ? `${kind} "${name}"` : `"${name}"`;
+      // A box that also holds a look-alike (the other "Play Video") is the list, not this item: its
+      // name or heading would be the same for both, so naming stops here – with "1 of 2" (which
+      // look-alike it is) when nothing smaller told them apart.
+      if (lookAlike(box)) {
+        if (!name && !slot) {
+          const same = sameLabel(box);
+          slot = `${same.indexOf(el) + 1} of ${same.length}`;
+        }
+        break;
+      }
+      if (!name) {
+        const controls = controlsIn(box);
+        const busy = controls.size >= 3;
+        const usable = (t) => t && !own.has(t.toLowerCase()) && !(busy && controls.has(t.toLowerCase())) &&
+          !(label.length >= 3 && t.toLowerCase().includes(label.toLowerCase()));
+        // The box's own label or (visible) heading, even for a big box; its first line of text only
+        // for a small one.
+        name = [box.getAttribute("aria-label"), textOfIds(box, "aria-labelledby"), firstTextLine(visibleHeading(box)?.innerText)]
+          .map((t) => (t || "").trim()).find(usable) || "";
+        if (!name && level >= 2 && text.length <= 300) {
+          name = text.split(String.fromCharCode(10)).map((line) => line.trim()).find(usable) || "";
+        }
+        name = keep(name, 40);
+      }
     }
+    if (name) return kind ? `${kind} "${name}"` : `"${name}"`;
+    if (slot) return `${kind || "item"} ${slot}`;
     return kind;
   }
+
 
   // ---------- inspect(): accessibility-tree view ----------
 

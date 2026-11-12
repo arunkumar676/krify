@@ -151,8 +151,9 @@ KEEP_AS_IS = ("scrollable box ", "this embedded page")  # Krify's own lines: the
 _DESCRIPTION = re.compile(r'^(?P<head>[^"\n]*?)\s*"(?P<label>[^"\n]*)"(?P<rest>.*)$', re.S)
 _VALUE = re.compile(r'^\(value: "(?P<value>.*)"\)(?P<rest>.*)$', re.S)
 HOVER = " (shows on hover)"
-LONG_LABEL = 100  # a label longer than this (a clickable card's whole text) is cut to SHORT_LABEL –
-SHORT_LABEL = 80  # in Unrestricted mode its full text is shown as a text block next to it (content.js)
+LONG_LABEL = 100  # a label longer than this (a clickable card's whole text) is cut to its first words –
+SHORT_LABEL = 60  # in Unrestricted mode its full text is shown as a text block next to it (content.js)
+SHORT_WORDS = 8
 
 
 def _tidy(text):
@@ -193,7 +194,7 @@ def _tidy(text):
             if word == "(checked)":
                 extra.append("checked")
     if len(label) > LONG_LABEL:
-        label = label[:SHORT_LABEL].rstrip() + "…"
+        label = " ".join(label.split()[:SHORT_WORDS])[:SHORT_LABEL].rstrip() + "…"
     line = f'{role} "{label}"'
     if value:
         line += f' = "{value}"'
@@ -223,6 +224,7 @@ def _states(states):
 
 
 _ALWAYS_SAY = ("call ", "email ", "downloads ", "WhatsApp", "jumps ")
+_AD_LINK = re.compile(r"googleadservices|doubleclick|googlesyndication|adservice|/aclk")
 _URL_WORDS = {"www", "com", "html", "htm", "php", "aspx", "page", "the", "and", "new", "tab"}
 
 
@@ -255,6 +257,8 @@ def _element_line(el, in_card=False):
         states = ["submenu open" if s == "open" else "submenu▸" if s == "closed" else s for s in states]
     if el.get("of") and not in_card:  # a card's ▸ line already says what its buttons belong to
         states.append(f"of: {el['of']}")
+    if el.get("go") and _AD_LINK.search(el["go"]):
+        states.append("ad")  # an advert, not a result: don't open it for "the first video/result"
     line = f"[{el['id']}] {text}"
     if states:
         line += f" ({', '.join(states)})"
@@ -262,8 +266,10 @@ def _element_line(el, in_card=False):
         line += f" → {go}"
     if el.get("col"):
         line += f' · column "{el["col"]}"'
-    if el.get("hint"):
-        line += f' · hint: "{el["hint"]}"'
+    hint = el.get("hint") or ""
+    # (Not a hint that only repeats the label, or the owner it already names.)
+    if hint and hint.lower() not in _label(text).lower() and hint.lower() not in (el.get("of") or "").lower():
+        line += f' · hint: "{hint}"'
     return line
 
 
@@ -348,7 +354,8 @@ def _ambiguity(entries, shown):
         if e.order in shown and '"' in e.el["text"]:
             key = (e.el["text"], tuple(e.el.get("states") or ()), e.card, e.el.get("of"), e.el.get("go"))
             groups.setdefault(key, []).append(e.el["id"])
-    dupes = [(key[0].split('"')[1], ids) for key, ids in groups.items() if len(ids) > 1]
+    # (Look-alikes that all go to the same page aren't a problem: any of them does the same.)
+    dupes = [(key[0].split('"')[1], ids) for key, ids in groups.items() if len(ids) > 1 and not key[4]]
     return dupes_warning(dupes) if dupes else ""
 
 
@@ -388,8 +395,8 @@ def _region(sec, page_index, width):
         if box and box[3] <= TOP_BAR_Y and outer != "aside":
             return "TOP BAR"
         return "SIDEBAR" if outer == "aside" else "NAV"
-    if outer == "search" and box and box[3] <= TOP_BAR_Y:
-        return "TOP BAR"
+    if outer in ("search", "page") and box and box[3] <= TOP_BAR_Y:
+        return "TOP BAR"  # (Google's account/apps buttons: top of the page, no header tag)
     return "MAIN"
 
 
@@ -401,8 +408,10 @@ def _sub_name(name):
         if part.startswith('Embedded page "') or part in LANDMARKS:
             continue
         word, _, rest = part.partition(' "')
-        parts.append(rest if rest and word in LANDMARKS else part)
-    return " › ".join(parts).replace('"', "")
+        part = (rest if rest and word in LANDMARKS else part).replace('"', "")
+        if not parts or parts[-1].lower() != part.lower():
+            parts.append(part)
+    return " › ".join(parts)
 
 
 def _counts(hidden):
@@ -416,22 +425,113 @@ def _counts(hidden):
 # Text that says nothing new: screen-reader helpers, a strip of small numbers (slider dots "1 2 3 4",
 # animated counters), or a line made only of element labels ("Facebook Linkedin-in X-twitter").
 _NUMBERS_ONLY = re.compile(r"^(\d{1,2}\s+){2,}\d{1,2}$")
+_SUFFIX = re.compile(r"^\(?[\d.,]+[kKmM+]?\)?$")  # "(72)", "1.2K": a count next to its link
 
 
-def _only_labels(text, labels):
-    """True if `text` (lower case) is nothing but element labels (longest first) and punctuation."""
-    rest = text
+def _only_labels(text, labels, at_least=1):
+    """True if `text` (lower case) is nothing but element labels (longest first) and punctuation –
+    `at_least` of them ("Facebook Linkedin-in X-twitter" is 3)."""
+    rest, found = text, 0
     for label in labels:
         if label in rest:
             rest = rest.replace(label, " ")
-    return not re.search(r"\w", rest)
+            found += 1
+    return found >= at_least and not re.search(r"\w", rest)
 
 
-def _junk(text, said, labels):
+_SPACE_BEFORE_MARK = re.compile(r"\s+([.,!?;:])")
+_LEADING_MARKS = re.compile(r"^[|•·*,–—-]+\s*")
+_EMPTY_QUOTES = re.compile(r"[“\"]\s*[”\"]")
+
+
+def _tidy_text(text):
+    """'| Save 25% on…' → 'Save 25% on…' (a separator the layout put in front)."""
+    text = _LEADING_MARKS.sub("", text.strip()).strip()
+    return _SPACE_BEFORE_MARK.sub(r"\1", text)  # "the mobile app ." → "the mobile app."
+
+
+def _junk(text, said, labels, at_least=1):
     plain = text.strip()
     low = plain.lower()
-    return (not plain or low in said or bool(_SCREEN_READER.match(plain)) or bool(_NUMBERS_ONLY.match(plain))
-            or _only_labels(low, labels))
+    return (not plain or (not re.search(r"\w", plain) and plain not in ("+", "%", "+%"))  # "•", "| | |", "-"
+            or low in said or bool(_SCREEN_READER.match(plain)) or bool(_NUMBERS_ONLY.match(plain))
+            or bool(_EMPTY_QUOTES.search(plain))  # a template with nothing filled in: 'Because you viewed “ ”'
+            or _only_labels(low, labels, at_least))
+
+
+# A value and its label on separate lines ("20" / "years of experience", "Mobile Apps" / "95%") are
+# joined into one ("20+ years of experience", "Mobile Apps: 95%"), and runs of such pairs share a line.
+_VALUE_TEXT = re.compile(r"^[₹$€£]?\d[\d,.]*\s*(\+|%|k|K|M|L|Cr)?\+?$")
+_NOT_TEXT = ("[", "▸", "#", "--", "(", "image ")
+MAX_PAIRS = 6
+
+
+def _is_text(line):
+    return bool(line.strip()) and not line.strip().startswith(_NOT_TEXT)
+
+
+def _is_label(text):
+    return 1 < len(text) <= 40 and bool(re.search(r"[A-Za-z]", text)) and not _VALUE_TEXT.match(text)
+
+
+def _join_values(lines):
+    # A lone "+" or "%" belongs to the number before it ("20" "+" → "20+").
+    merged = []
+    for line in lines:
+        if _is_text(line) and line.strip() in ("+", "%", "+%") and merged and _VALUE_TEXT.match(merged[-1].strip() + line.strip()):
+            merged[-1] = merged[-1].rstrip() + line.strip()
+        else:
+            merged.append(line)
+    lines = merged
+    joined = []  # (line, is a value/label pair)
+    i = 0
+    while i < len(lines):
+        a = lines[i]
+        b = lines[i + 1] if i + 1 < len(lines) else ""
+        indent = a[:len(a) - len(a.lstrip())]
+        if b and _is_text(a) and _is_text(b) and b.startswith(indent) and not b[len(indent):].startswith(" "):
+            x, y = a.strip(), b.strip()
+            if _VALUE_TEXT.match(x) and _is_label(y):
+                joined.append((f"{indent}{x.replace(' +', '+')} {y}", True))
+                i += 2
+                continue
+            # Label then value only for a percentage, or when no label follows the value (else the
+            # value is the NEXT label's: "20+" "years…" "1500+" "Happy Clients" pairs number → label).
+            after = lines[i + 2].strip() if i + 2 < len(lines) and _is_text(lines[i + 2]) else ""
+            if _is_label(x) and _VALUE_TEXT.match(y) and (y.endswith("%") or not _is_label(after)):
+                joined.append((f"{indent}{x}: {y.replace(' +', '+')}", True))
+                i += 2
+                continue
+        joined.append((a, False))
+        i += 1
+    out = []
+    for line, pair in joined:
+        prev_pair = out and out[-1][1] and out[-1][2] < MAX_PAIRS
+        if pair and prev_pair and line[:len(line) - len(line.lstrip())] == out[-1][0][:len(out[-1][0]) - len(out[-1][0].lstrip())]:
+            out[-1] = (f"{out[-1][0]} · {line.strip()}", True, out[-1][2] + 1)
+        else:
+            out.append((line, pair, 1))
+    return [line for line, _, _ in out]
+
+
+def _same_line(texts):
+    """Short pieces of text side by side in the same box (a headline built from separate words, like
+    a rotating "Transforming Challenges into Innovations") read as one line, left to right."""
+    groups = []  # runs of pieces on the same line, in the same box
+    for t in sorted(texts, key=lambda t: (t["y"], t["x"])):
+        last = groups[-1][-1] if groups else None
+        if (last and not t.get("h") and not last.get("h") and t["card"] == last["card"]
+                and abs(t["y"] - groups[-1][0]["y"]) <= 8 and len(t["t"]) <= 40 and len(last["t"]) <= 40
+                and (t.get("k") or [])[:-1] == (last.get("k") or [])[:-1]):
+            groups[-1].append(t)
+        else:
+            groups.append([t])
+    out = []
+    for group in groups:
+        group.sort(key=lambda t: t["x"])  # left to right
+        first = min(group, key=lambda t: (t["y"], t["x"]))
+        out.append({**first, "t": " ".join(t["t"] for t in group)} if len(group) > 1 else group[0])
+    return out
 
 
 def _section_lines(sec, group, shown, cards, sub, texts=()):
@@ -440,15 +540,19 @@ def _section_lines(sec, group, shown, cards, sub, texts=()):
     note when nothing of it is shown."""
     visible = [e for e in group if e.order in shown]
     hidden = [e for e in group if e.order not in shown]
+    if not group and not texts:  # only a heading ("Get a Free Consultation" above a form)
+        return [f"## {sub}"] if sub and not _EMPTY_QUOTES.search(sub) else []
     if not visible and not texts:
         where = _counts(hidden)
         how = "find_elements" if all(e.el.get("pos", 0) == 0 for e in hidden) else "scroll there or use find_elements"
         return [f"## {sub} ({where} – {how})" if sub else f"({where} – {how})"]
+    if sub and _EMPTY_QUOTES.search(sub):
+        sub = ""  # an empty template: 'Because you viewed “ ”'
     lines = []
-    header = f"## {sub}" if sub else ""
+    header = f"## {sub}" if sub else ""  # (no nameless "## (4 items)")
     items = len({e.card for e in group if e.card})
-    if items >= 3:
-        header = f"{header or '##'} ({items} items)"
+    if header and items >= 3:
+        header += f" ({items} items)"
     if header:
         lines.append(header)
     state = {"card": None, "pos": 0, "card_line": ""}
@@ -456,9 +560,33 @@ def _section_lines(sec, group, shown, cards, sub, texts=()):
     # buttons/links indented under it (a card summary would repeat the same cells).
     row_ids = {cards[e.card]["row"] for e in visible if e.card and cards.get(e.card, {}).get("row")}
     rows = {e.card: e for e in visible if e.el["id"] in row_ids}
+    texts = [{**t, "t": _tidy_text(t["t"])} for t in _same_line(texts)]
+    # A card with one link that already says its title ("▸ "Starting ₹99" + link "Starting ₹99 Budget
+    # Store"): no ▸ line, the link alone.
+    per_card = {}
+    for e in visible:
+        if e.card:
+            per_card.setdefault(e.card, []).append(e)
+    solo = {card for card, els in per_card.items() if len(els) == 1 and card not in rows
+            and not any(t["card"] == card for t in texts)
+            and (cards.get(card) or {}).get("title", "").lower() in _label(els[0].el["text"]).lower()}
+    # Short text right after an element on the same line belongs to it: '[30] link "November 2026" (72)'.
+    suffix = {}
+    for t in list(texts):
+        if t.get("h") or "y" not in t or not _SUFFIX.match(t["t"]):
+            continue
+        left = [e for e in visible if e.el.get("y") is not None and e.card == t["card"]
+                and abs(e.el["y"] - t["y"]) <= 8 and e.el.get("x", 0) < t["x"]]
+        if left:
+            owner = max(left, key=lambda e: e.el.get("x", 0))
+            suffix.setdefault(owner.order, []).append(t["t"])
+            texts.remove(t)
+    paging = any(re.match(r'link "Page \d+"', e.el["text"]) for e in visible)
 
     def enter(card, pos):
-        if pos != state["pos"]:
+        card = None if card in solo else card
+        # (Inside one card the screen position isn't repeated per element: once per card.)
+        if pos != state["pos"] and not (card and card == state["card"]):
             lines.append(f"-- {POSITION.get(pos, 'on screen')} --")
             state["pos"] = pos
         if card != state["card"]:
@@ -473,20 +601,40 @@ def _section_lines(sec, group, shown, cards, sub, texts=()):
 
     def say(t):
         enter(t["card"], t.get("pos", 0))
-        if t["t"].lower() in state["card_line"].lower():  # the ▸ line already has it (title, price)
+        text = t["t"]
+        card_line = state["card_line"].lower()
+        if text.lower() in card_line:  # the ▸ line already has it (title, price)
             return
-        lines.append(("  " if t["card"] else "") + t["t"])
+        # "Current price ₹479.00", "Rating: 4.6 out of 5": every number already on the ▸ line.
+        numbers = re.findall(r"\d[\d,.]*\d|\d", re.sub(r"out of \d+|/\s*\d+\b", "", text))
+        if card_line and numbers and len(text) <= 60 and all(n in card_line for n in numbers):
+            return
+        if paging and re.fullmatch(r"\d{1,3}", text):
+            text = f"Page {text} (current)"  # the page you're on, between "Page N" links
+        indent = "  " if state["card"] else ""
+        lines.append(indent + (f"### {text}" if t.get("h") else text))
 
     def show(e):
         enter(e.card, e.el.get("pos", 0))
         if not (e.card in rows and e is rows[e.card]):
-            lines.append(("  " if e.card else "") + _element_line(e.el, bool(e.card)))
+            line = _element_line(e.el, bool(state["card"]))
+            if e.order in suffix:
+                line += " " + " ".join(suffix[e.order])
+            lines.append(("  " if state["card"] else "") + line)
 
     if texts and all(t.get("k") for t in texts) and all(e.el.get("k") for e in visible):
         # Box by box: side-by-side boxes (columns, stat boxes, cards in a row) one at a time, each
         # top to bottom – so "20+" stays next to "years of experience", not next to "1500+".
         items = [(t["k"], 1, n, t) for n, t in enumerate(texts)] + [(e.el["k"], 0, n, e) for n, e in enumerate(visible)]
-        for _, is_text, _, item in sorted(items, key=lambda it: (it[0], it[1], it[2])):
+        # A card stays in one piece: all its elements and text at the card's first position (a video
+        # grid read box by box would otherwise give thumbnail row, title row, channel row…).
+        first = {}
+        for key, _, _, item in items:
+            card = item["card"] if isinstance(item, dict) else item.card
+            if card and (card not in first or key < first[card]):
+                first[card] = key
+        anchor = lambda it: first.get(it[3]["card"] if isinstance(it[3], dict) else it[3].card, it[0])  # noqa: E731
+        for _, is_text, _, item in sorted(items, key=lambda it: (anchor(it), it[0], it[1], it[2])):
             if is_text:
                 say(item)
             else:
@@ -502,6 +650,10 @@ def _section_lines(sec, group, shown, cards, sub, texts=()):
             show(e)
         for t in texts[i:]:
             say(t)
+    lines = _join_values(lines)
+    # A ### heading with nothing under it (its content was only pictures, now left out).
+    lines = [line for n, line in enumerate(lines)
+             if not (line.lstrip().startswith("### ") and (n + 1 == len(lines) or lines[n + 1].lstrip().startswith(("### ", "## "))))]
     if hidden:
         how = "use find_elements" if all(e.el.get("pos", 0) == 0 for e in hidden) else "scroll there or use find_elements"
         lines.append(f"(+{len(hidden)} more here: {_counts(hidden)} – {how})")
@@ -546,6 +698,10 @@ def render(model):
     if focused:
         head.append("keyboard in " + " ".join(f"[{i}]" for i in sorted(focused)))
     lines = ["PAGE  " + " · ".join(head)]
+    if info.get("summary"):  # the site's own one-line description of the page (meta description)
+        lines.append(f"SUMMARY  {info['summary']}")
+    if info.get("facts"):  # exact facts from the page's schema.org data (written for search engines)
+        lines.append("FACTS  " + " | ".join(info["facts"]))
     statuses = [page["status"] for page in pages if page.get("status")]
     if statuses:  # one line at the top, so the AI sees at once whether its last action worked
         alerts = [a for status in statuses for a in status.split(" | ") if a]
@@ -559,14 +715,34 @@ def render(model):
     # (A label longer than LONG_LABEL is cut in its element line, so its full text still counts as new.)
     labels = sorted({lab for e in entries if 1 < len(lab := _label(e.el["text"]).strip().lower()) <= LONG_LABEL},
                     key=len, reverse=True)
-    said = set(labels) | {_sub_name(sec["name"]).lower() for sec in sections.values()} | {info.get("h1", "").lower()}
+    # (Not the element labels one by one: text INSIDE an element never gets here (content.js leaves it
+    # out), so a text equal to one label is a title of its own – the "Reports" group above its single
+    # "Reports" link. Only a line made of several labels is a repeat.)
+    said = {_sub_name(sec["name"]).lower() for sec in sections.values()} | {info.get("h1", "").lower()}
     said |= {a.lower() for status in statuses for a in status.split(" | ")}
+    said |= {m.group(1).strip().lower() for e in entries if (m := re.search(r"field: ([^;]+)", e.el.get("hint") or ""))}
+    # A form field's name is its visible label ("Full Name" above its box): already on the field's line.
+    said |= {_label(e.el["text"]).strip().lower() for e in entries
+             if e.el["text"].startswith(("input", "textarea", "select", "dropdown"))}
     texts_by_section = {}
+    titled = {}  # section → y of its own heading: shown as a ## line even with nothing else in it
     for p, page in enumerate(pages):
         for t in page.get("texts") or []:
-            if not _junk(t.get("t", ""), said, labels):
+            if not _junk(t.get("t", ""), said, labels, at_least=2):
                 card = (p, t["c"]) if t.get("c", -1) >= 0 else None
                 texts_by_section.setdefault((p, t["s"]), []).append({**t, "card": card})
+            elif (p, t["s"]) in sections and t.get("t", "").strip().lower() == _sub_name(sections[(p, t["s"])]["name"]).lower():
+                titled.setdefault((p, t["s"]), t.get("y", 0))
+
+    # A hint shown on many elements ("To move between items, use your keyboard's up or down arrows.")
+    # says nothing about any of them.
+    hint_count = {}
+    for e in entries:
+        if e.el.get("hint"):
+            hint_count[e.el["hint"]] = hint_count.get(e.el["hint"], 0) + 1
+    for e in entries:
+        if hint_count.get(e.el.get("hint"), 0) >= 3:
+            e.el = {**e.el, "hint": ""}
 
     by_section, floating = {}, []
     for e in entries:
@@ -578,12 +754,13 @@ def render(model):
     def top_of(key):
         ys = [e.el["y"] for e in by_section.get(key, []) if e.el.get("y") is not None]
         ys += [t["y"] for t in texts_by_section.get(key, [])]
+        ys += [titled[key]] if key in titled else []
         return (key[0], not ys, min(ys) if ys else 0, key[1])
 
     # An open dropdown list goes first: its options are numbered after everything else (so opening
     # it doesn't shift the form's numbers) but they're what the AI should pick from next. The rest:
     # in page order (top to bottom), from where their elements and text sit.
-    keys = sorted(set(by_section) | set(texts_by_section), key=lambda k: (not sections[k].get("list"), top_of(k)))
+    keys = sorted(set(by_section) | set(texts_by_section) | set(titled), key=lambda k: (not sections[k].get("list"), top_of(k)))
     ordered = [(key, by_section.get(key, [])) for key in keys]
     open_list = next(((sections[key]["name"], [_label(e.el["text"]) for e in group  # options, not its search box
                                                 if not e.el["text"].startswith(("input", "textarea"))])
@@ -602,6 +779,18 @@ def render(model):
                 (key, group))
     if floating:
         regions[(REGION_ORDER.index("FLOATING"), 0, "FLOATING")] = [(None, floating)]
+    # Look-alikes still unnamed (same label, no owner, different parts of the page – Amazon's
+    # "Expand to Change Language or Country" in the top bar and the footer): the part is the owner.
+    region_of = {e.order: region for (_, _, region), members in regions.items() for _, group in members for e in group}
+    alike = {}
+    for e in entries:
+        if e.order in shown and not e.el.get("of") and not e.card:
+            alike.setdefault((e.el["text"], e.el.get("go")), []).append(e)
+    for (_, go), group in alike.items():
+        if len(group) > 1 and not go and len({region_of.get(e.order) for e in group}) > 1:
+            for e in group:
+                if region_of.get(e.order):
+                    e.el = {**e.el, "of": region_of[e.order].lower()}
     modal = any(sections[key].get("modal") for key, _ in popups)
 
     behind = set()  # elements shown in no detail: behind a pop-up that blocks the page
@@ -641,10 +830,12 @@ def render(model):
             lines.append("┌ FLOATING (buttons that stay on screen while you scroll)")
             lines += _section_lines({}, floating, shown, cards, "")
             continue
-        lines.append(f"┌ {name}")
+        body = []
         for key, group in members:
-            lines += _section_lines(sections[key], group, shown, cards, _sub_name(sections[key]["name"]),
-                                    texts_by_section.get(key, ()))
+            body += _section_lines(sections[key], group, shown, cards, _sub_name(sections[key]["name"]),
+                                   texts_by_section.get(key, ()))
+        if body:  # (a part whose only text was already said elsewhere: no empty ┌ line)
+            lines += [f"┌ {name}", *body]
     if full and (counts := _row_counts(pages[0])):
         lines.append(counts)
     if any(page.get("partial") for page in pages):
