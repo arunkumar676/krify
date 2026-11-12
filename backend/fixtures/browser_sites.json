@@ -1,0 +1,2532 @@
+{
+ "_note": "Real content.js output (headless Chrome, Unrestricted) for a test page that copies the problems found on krify.co, udemy.com, fitgirl-repacks.site, amazon.in, youtube.com and google.com search.",
+ "full": true,
+ "pages": [
+  {
+   "frame": "",
+   "page": {
+    "type": "list",
+    "h1": "",
+    "results": "",
+    "scrollY": 0,
+    "scrollMax": 686,
+    "width": 1184,
+    "summary": "Test page that copies the problems found on six live sites.",
+    "facts": [
+     "Organization \"Krify\" · phone +91 7901322222 · founded 2005"
+    ]
+   },
+   "status": "",
+   "form": null,
+   "focused": null,
+   "popup": false,
+   "partial": false,
+   "sections": [
+    {
+     "name": "Header › Search",
+     "kind": "search",
+     "kinds": [
+      "header",
+      "search"
+     ],
+     "modal": false,
+     "list": false,
+     "box": [
+      0,
+      0,
+      338,
+      21
+     ]
+    },
+    {
+     "name": "Header › Nav",
+     "kind": "nav",
+     "kinds": [
+      "header",
+      "nav"
+     ],
+     "modal": false,
+     "list": false,
+     "box": [
+      40,
+      36,
+      248,
+      53
+     ]
+    },
+    {
+     "name": "Main › \"Recommended for you\"",
+     "kind": "main",
+     "kinds": [
+      "main"
+     ],
+     "modal": false,
+     "list": false,
+     "box": [
+      0,
+      288,
+      1200,
+      470
+     ]
+    },
+    {
+     "name": "Main › \"Based on your recent searches\"",
+     "kind": "main",
+     "kinds": [
+      "main"
+     ],
+     "modal": false,
+     "list": false,
+     "box": [
+      0,
+      488,
+      1200,
+      602
+     ]
+    },
+    {
+     "name": "Main › \"Deals\"",
+     "kind": "main",
+     "kinds": [
+      "main"
+     ],
+     "modal": false,
+     "list": false,
+     "box": [
+      0,
+      621,
+      1200,
+      689
+     ]
+    },
+    {
+     "name": "Page",
+     "kind": "page",
+     "kinds": [],
+     "modal": false,
+     "list": false,
+     "box": [
+      939,
+      690,
+      1048,
+      732
+     ]
+    },
+    {
+     "name": "Main › \"Videos\"",
+     "kind": "main",
+     "kinds": [
+      "main"
+     ],
+     "modal": false,
+     "list": false,
+     "box": [
+      0,
+      715,
+      1200,
+      868
+     ]
+    },
+    {
+     "name": "Main › \"Search Results\"",
+     "kind": "main",
+     "kinds": [
+      "main"
+     ],
+     "modal": false,
+     "list": false,
+     "box": [
+      0,
+      886,
+      1200,
+      1136
+     ]
+    },
+    {
+     "name": "Main › \"Because you viewed “ ”\"",
+     "kind": "main",
+     "kinds": [
+      "main"
+     ],
+     "modal": false,
+     "list": false,
+     "box": [
+      0,
+      1153,
+      1200,
+      1213
+     ]
+    },
+    {
+     "name": "Sidebar › Section \"Support the Cause\"",
+     "kind": "region",
+     "kinds": [
+      "aside",
+      "region"
+     ],
+     "modal": false,
+     "list": false,
+     "box": [
+      0,
+      1232,
+      300,
+      1288
+     ]
+    },
+    {
+     "name": "Sidebar",
+     "kind": "aside",
+     "kinds": [
+      "aside"
+     ],
+     "modal": false,
+     "list": false,
+     "box": [
+      0,
+      1306,
+      300,
+      1395
+     ]
+    },
+    {
+     "name": "Footer",
+     "kind": "footer",
+     "kinds": [
+      "footer"
+     ],
+     "modal": false,
+     "list": false,
+     "box": [
+      0,
+      1410,
+      1200,
+      1476
+     ]
+    },
+    {
+     "name": "Main › \"OUR CLIENTS\"",
+     "kind": "main",
+     "kinds": [
+      "main"
+     ],
+     "modal": false,
+     "list": false,
+     "box": [
+      0,
+      72,
+      1200,
+      150
+     ]
+    },
+    {
+     "name": "Main › \"Our Core Competency\"",
+     "kind": "main",
+     "kinds": [
+      "main"
+     ],
+     "modal": false,
+     "list": false,
+     "box": [
+      0,
+      168,
+      1200,
+      189
+     ]
+    }
+   ],
+   "cards": [
+    {
+     "title": "AI-103 Azure AI Apps",
+     "price": "₹479.00 (also ₹799.00)",
+     "rating": "★4.6",
+     "badges": [],
+     "summarised": true
+    },
+    {
+     "title": "AI-102 Exam Prep",
+     "price": "₹509.00 (also ₹3,289.00)",
+     "rating": "★4.7",
+     "badges": [],
+     "summarised": true
+    },
+    {
+     "title": "Java Training",
+     "price": "₹559.00 (also ₹799.00)",
+     "rating": "★4.4",
+     "badges": [],
+     "summarised": true
+    },
+    {
+     "title": "Selenium",
+     "price": "₹549.00",
+     "rating": "",
+     "badges": [],
+     "summarised": true
+    },
+    {
+     "title": "Java Bootcamp",
+     "price": "₹689.00",
+     "rating": "",
+     "badges": [],
+     "summarised": true
+    },
+    {
+     "title": "Java Course",
+     "price": "₹719.00",
+     "rating": "",
+     "badges": [],
+     "summarised": true
+    },
+    {
+     "title": "Starting ₹99 Budget Store",
+     "price": "₹99",
+     "rating": "",
+     "badges": [],
+     "summarised": true
+    },
+    {
+     "title": "Under ₹499 Trendy sneakers",
+     "price": "₹499",
+     "rating": "",
+     "badges": [],
+     "summarised": true
+    },
+    {
+     "title": "Starting ₹199 Laundry",
+     "price": "₹199",
+     "rating": "",
+     "badges": [],
+     "summarised": true
+    },
+    {
+     "title": "KSI Reacts 57 minutes",
+     "price": "",
+     "rating": "",
+     "badges": [],
+     "summarised": true
+    },
+    {
+     "title": "Claude makes Clash of Clans",
+     "price": "",
+     "rating": "",
+     "badges": [],
+     "summarised": true
+    },
+    {
+     "title": "Family Guy Italy",
+     "price": "",
+     "rating": "",
+     "badges": [],
+     "summarised": true
+    }
+   ],
+   "elements": [
+    {
+     "id": 1,
+     "text": "input text \"Search Amazon.in\" (empty)",
+     "states": [],
+     "hint": "",
+     "col": "",
+     "pos": 0,
+     "s": 0,
+     "c": -1,
+     "y": 0,
+     "x": 127,
+     "k": [
+      [
+       0,
+       0
+      ],
+      [
+       0,
+       127
+      ],
+      [
+       0,
+       127
+      ]
+     ]
+    },
+    {
+     "id": 2,
+     "text": "button submit \"Go\"",
+     "states": [],
+     "hint": "",
+     "col": "",
+     "pos": 0,
+     "s": 0,
+     "c": -1,
+     "y": 0,
+     "x": 304,
+     "k": [
+      [
+       0,
+       0
+      ],
+      [
+       0,
+       304
+      ],
+      [
+       0,
+       304
+      ]
+     ]
+    },
+    {
+     "id": 3,
+     "text": "select \"Search in\" = \"All Categories\" (options: All Categories, Alexa Skills, Amazon Devices, Fashion, Fresh, Pharmacy, Appliances, Apps, Audible, Baby, Beauty, Books, Car, Clothing, Collectibles, +5 more)",
+     "states": [],
+     "hint": "",
+     "col": "",
+     "pos": 0,
+     "s": 0,
+     "c": -1,
+     "y": 1,
+     "x": 0,
+     "k": [
+      [
+       0,
+       0
+      ],
+      [
+       0,
+       0
+      ],
+      [
+       1,
+       0
+      ]
+     ]
+    },
+    {
+     "id": 4,
+     "text": "link \"POPULAR\"",
+     "states": [],
+     "hint": "",
+     "col": "",
+     "pos": 0,
+     "s": 1,
+     "c": -1,
+     "y": 36,
+     "x": 40,
+     "k": [
+      [
+       0,
+       0
+      ],
+      [
+       36,
+       40
+      ],
+      [
+       36,
+       40
+      ]
+     ],
+     "go": "/popular"
+    },
+    {
+     "id": 5,
+     "text": "link \"Teach on Udemy\"",
+     "states": [],
+     "hint": "",
+     "col": "",
+     "pos": 0,
+     "s": 1,
+     "c": -1,
+     "y": 36,
+     "x": 136,
+     "k": [
+      [
+       0,
+       0
+      ],
+      [
+       36,
+       136
+      ],
+      [
+       36,
+       136
+      ]
+     ],
+     "go": "/teaching/"
+    },
+    {
+     "id": 6,
+     "text": "button \"next (icon)\"",
+     "states": [],
+     "hint": "",
+     "col": "",
+     "pos": 0,
+     "s": 2,
+     "c": -1,
+     "y": 333,
+     "x": 1152,
+     "k": [
+      [
+       333,
+       1152
+      ],
+      [
+       333,
+       1152
+      ]
+     ],
+     "of": "slider 1 of 2"
+    },
+    {
+     "id": 7,
+     "text": "link \"AI-103 Azure AI Apps\"",
+     "states": [],
+     "hint": "",
+     "col": "",
+     "pos": 0,
+     "s": 2,
+     "c": 0,
+     "y": 340,
+     "x": 7,
+     "k": [
+      [
+       333,
+       0
+      ],
+      [
+       340,
+       7
+      ]
+     ],
+     "go": "/course/ai-103/"
+    },
+    {
+     "id": 8,
+     "text": "link \"AI-102 Exam Prep\"",
+     "states": [],
+     "hint": "",
+     "col": "",
+     "pos": 0,
+     "s": 2,
+     "c": 1,
+     "y": 340,
+     "x": 391,
+     "k": [
+      [
+       333,
+       384
+      ],
+      [
+       340,
+       391
+      ]
+     ],
+     "go": "/course/ai-102/"
+    },
+    {
+     "id": 9,
+     "text": "link \"Java Training\"",
+     "states": [],
+     "hint": "",
+     "col": "",
+     "pos": 0,
+     "s": 2,
+     "c": 2,
+     "y": 340,
+     "x": 775,
+     "k": [
+      [
+       333,
+       768
+      ],
+      [
+       340,
+       775
+      ]
+     ],
+     "go": "/course/java/"
+    },
+    {
+     "id": 10,
+     "text": "button \"Add to cart\"",
+     "states": [],
+     "hint": "",
+     "col": "",
+     "pos": 0,
+     "s": 2,
+     "c": 0,
+     "y": 442,
+     "x": 7,
+     "k": [
+      [
+       333,
+       0
+      ],
+      [
+       442,
+       7
+      ]
+     ]
+    },
+    {
+     "id": 11,
+     "text": "button \"Add to cart\"",
+     "states": [],
+     "hint": "",
+     "col": "",
+     "pos": 0,
+     "s": 2,
+     "c": 1,
+     "y": 442,
+     "x": 391,
+     "k": [
+      [
+       333,
+       384
+      ],
+      [
+       442,
+       391
+      ]
+     ]
+    },
+    {
+     "id": 12,
+     "text": "button \"Add to cart\"",
+     "states": [],
+     "hint": "",
+     "col": "",
+     "pos": 0,
+     "s": 2,
+     "c": 2,
+     "y": 442,
+     "x": 775,
+     "k": [
+      [
+       333,
+       768
+      ],
+      [
+       442,
+       775
+      ]
+     ]
+    },
+    {
+     "id": 13,
+     "text": "button \"next (icon)\"",
+     "states": [],
+     "hint": "",
+     "col": "",
+     "pos": 0,
+     "s": 3,
+     "c": -1,
+     "y": 533,
+     "x": 1152,
+     "k": [
+      [
+       533,
+       1152
+      ],
+      [
+       533,
+       1152
+      ]
+     ],
+     "of": "slider 2 of 2"
+    },
+    {
+     "id": 14,
+     "text": "link \"Selenium\"",
+     "states": [],
+     "hint": "",
+     "col": "",
+     "pos": 0,
+     "s": 3,
+     "c": 3,
+     "y": 540,
+     "x": 7,
+     "k": [
+      [
+       533,
+       0
+      ],
+      [
+       540,
+       7
+      ]
+     ],
+     "go": "/course/selenium/"
+    },
+    {
+     "id": 15,
+     "text": "link \"Java Bootcamp\"",
+     "states": [],
+     "hint": "",
+     "col": "",
+     "pos": 0,
+     "s": 3,
+     "c": 4,
+     "y": 540,
+     "x": 391,
+     "k": [
+      [
+       533,
+       384
+      ],
+      [
+       540,
+       391
+      ]
+     ],
+     "go": "/course/java2/"
+    },
+    {
+     "id": 16,
+     "text": "link \"Java Course\"",
+     "states": [],
+     "hint": "",
+     "col": "",
+     "pos": 0,
+     "s": 3,
+     "c": 5,
+     "y": 540,
+     "x": 775,
+     "k": [
+      [
+       533,
+       768
+      ],
+      [
+       540,
+       775
+      ]
+     ],
+     "go": "/course/java3/"
+    },
+    {
+     "id": 17,
+     "text": "button \"Add to cart\"",
+     "states": [],
+     "hint": "",
+     "col": "",
+     "pos": 0,
+     "s": 3,
+     "c": 3,
+     "y": 574,
+     "x": 7,
+     "k": [
+      [
+       533,
+       0
+      ],
+      [
+       574,
+       7
+      ]
+     ]
+    },
+    {
+     "id": 18,
+     "text": "button \"Add to cart\"",
+     "states": [],
+     "hint": "",
+     "col": "",
+     "pos": 0,
+     "s": 3,
+     "c": 4,
+     "y": 574,
+     "x": 391,
+     "k": [
+      [
+       533,
+       384
+      ],
+      [
+       574,
+       391
+      ]
+     ]
+    },
+    {
+     "id": 19,
+     "text": "button \"Add to cart\"",
+     "states": [],
+     "hint": "",
+     "col": "",
+     "pos": 0,
+     "s": 3,
+     "c": 5,
+     "y": 574,
+     "x": 775,
+     "k": [
+      [
+       533,
+       768
+      ],
+      [
+       574,
+       775
+      ]
+     ]
+    },
+    {
+     "id": 20,
+     "text": "link \"Starting ₹99 Budget Store\"",
+     "states": [],
+     "hint": "",
+     "col": "",
+     "pos": 0,
+     "s": 4,
+     "c": 6,
+     "y": 672,
+     "x": 7,
+     "k": [
+      [
+       665,
+       0
+      ],
+      [
+       672,
+       7
+      ]
+     ],
+     "go": "/s/1"
+    },
+    {
+     "id": 21,
+     "text": "link \"Under ₹499 Trendy sneakers\"",
+     "states": [],
+     "hint": "",
+     "col": "",
+     "pos": 0,
+     "s": 4,
+     "c": 7,
+     "y": 672,
+     "x": 391,
+     "k": [
+      [
+       665,
+       384
+      ],
+      [
+       672,
+       391
+      ]
+     ],
+     "go": "/s/2"
+    },
+    {
+     "id": 22,
+     "text": "link \"Starting ₹199 Laundry\"",
+     "states": [],
+     "hint": "",
+     "col": "",
+     "pos": 0,
+     "s": 4,
+     "c": 8,
+     "y": 672,
+     "x": 775,
+     "k": [
+      [
+       665,
+       768
+      ],
+      [
+       672,
+       775
+      ]
+     ],
+     "go": "/s/3"
+    },
+    {
+     "id": 23,
+     "text": "button \"Close\"",
+     "states": [],
+     "hint": "",
+     "col": "",
+     "pos": 0,
+     "s": 5,
+     "c": -1,
+     "y": 690,
+     "x": 939,
+     "k": [
+      [
+       690,
+       939
+      ]
+     ],
+     "float": true,
+     "of": "chat \"Talk to Sofi Live\""
+    },
+    {
+     "id": 24,
+     "text": "button \"Talk to Sofi Live\"",
+     "states": [],
+     "hint": "",
+     "col": "",
+     "pos": 0,
+     "s": 5,
+     "c": -1,
+     "y": 711,
+     "x": 939,
+     "k": [
+      [
+       711,
+       939
+      ]
+     ],
+     "float": true
+    },
+    {
+     "id": 25,
+     "text": "tab \"All\"",
+     "states": [
+      "selected"
+     ],
+     "hint": "",
+     "col": "",
+     "pos": 0,
+     "s": 6,
+     "c": -1,
+     "y": 760,
+     "x": 0,
+     "k": [
+      [
+       760,
+       0
+      ],
+      [
+       760,
+       0
+      ]
+     ]
+    },
+    {
+     "id": 26,
+     "text": "tab \"Gaming\"",
+     "states": [],
+     "hint": "",
+     "col": "",
+     "pos": 0,
+     "s": 6,
+     "c": -1,
+     "y": 760,
+     "x": 31,
+     "k": [
+      [
+       760,
+       31
+      ],
+      [
+       760,
+       31
+      ]
+     ]
+    },
+    {
+     "id": 27,
+     "text": "tab \"Music\"",
+     "states": [],
+     "hint": "",
+     "col": "",
+     "pos": 0,
+     "s": 6,
+     "c": -1,
+     "y": 760,
+     "x": 94,
+     "k": [
+      [
+       760,
+       94
+      ],
+      [
+       760,
+       94
+      ]
+     ]
+    },
+    {
+     "id": 28,
+     "text": "button \"Next\"",
+     "states": [],
+     "hint": "",
+     "col": "",
+     "pos": 0,
+     "s": 6,
+     "c": -1,
+     "y": 760,
+     "x": 144,
+     "k": [
+      [
+       760,
+       144
+      ],
+      [
+       760,
+       144
+      ]
+     ],
+     "of": "item 1 of 2"
+    },
+    {
+     "id": 29,
+     "text": "link \"KSI Reacts 57 minutes\"",
+     "states": [],
+     "hint": "",
+     "col": "",
+     "pos": 0,
+     "s": 6,
+     "c": 9,
+     "y": 788,
+     "x": 7,
+     "k": [
+      [
+       781,
+       0
+      ],
+      [
+       788,
+       7
+      ]
+     ],
+     "go": "/watch"
+    },
+    {
+     "id": 30,
+     "text": "link \"Claude makes Clash of Clans\"",
+     "states": [],
+     "hint": "",
+     "col": "",
+     "pos": 0,
+     "s": 6,
+     "c": 10,
+     "y": 788,
+     "x": 391,
+     "k": [
+      [
+       781,
+       384
+      ],
+      [
+       788,
+       391
+      ]
+     ],
+     "go": "/watch"
+    },
+    {
+     "id": 31,
+     "text": "link \"Family Guy Italy\"",
+     "states": [],
+     "hint": "",
+     "col": "",
+     "pos": 0,
+     "s": 6,
+     "c": 11,
+     "y": 788,
+     "x": 775,
+     "k": [
+      [
+       781,
+       768
+      ],
+      [
+       788,
+       775
+      ]
+     ],
+     "go": "/watch"
+    },
+    {
+     "id": 32,
+     "text": "button \"More actions\"",
+     "states": [],
+     "hint": "",
+     "col": "",
+     "pos": 0,
+     "s": 6,
+     "c": 9,
+     "y": 805,
+     "x": 7,
+     "k": [
+      [
+       781,
+       0
+      ],
+      [
+       805,
+       7
+      ],
+      [
+       805,
+       7
+      ]
+     ]
+    },
+    {
+     "id": 33,
+     "text": "button \"More actions\"",
+     "states": [],
+     "hint": "",
+     "col": "",
+     "pos": 0,
+     "s": 6,
+     "c": 10,
+     "y": 805,
+     "x": 391,
+     "k": [
+      [
+       781,
+       384
+      ],
+      [
+       805,
+       391
+      ],
+      [
+       805,
+       391
+      ]
+     ]
+    },
+    {
+     "id": 34,
+     "text": "button \"More actions\"",
+     "states": [],
+     "hint": "",
+     "col": "",
+     "pos": 0,
+     "s": 6,
+     "c": 11,
+     "y": 805,
+     "x": 775,
+     "k": [
+      [
+       781,
+       768
+      ],
+      [
+       805,
+       775
+      ],
+      [
+       805,
+       775
+      ]
+     ]
+    },
+    {
+     "id": 35,
+     "text": "link \"KSIClips\"",
+     "states": [],
+     "hint": "",
+     "col": "",
+     "pos": 1,
+     "s": 6,
+     "c": 9,
+     "y": 806,
+     "x": 27,
+     "k": [
+      [
+       781,
+       0
+      ],
+      [
+       805,
+       27
+      ],
+      [
+       806,
+       27
+      ]
+     ],
+     "go": "/@KSIClips"
+    },
+    {
+     "id": 36,
+     "text": "link \"Edophobia\"",
+     "states": [],
+     "hint": "",
+     "col": "",
+     "pos": 1,
+     "s": 6,
+     "c": 10,
+     "y": 806,
+     "x": 411,
+     "k": [
+      [
+       781,
+       384
+      ],
+      [
+       805,
+       411
+      ],
+      [
+       806,
+       411
+      ]
+     ],
+     "go": "/@Edophobia"
+    },
+    {
+     "id": 37,
+     "text": "link \"Family Guy\"",
+     "states": [],
+     "hint": "",
+     "col": "",
+     "pos": 1,
+     "s": 6,
+     "c": 11,
+     "y": 806,
+     "x": 795,
+     "k": [
+      [
+       781,
+       768
+      ],
+      [
+       805,
+       795
+      ],
+      [
+       806,
+       795
+      ]
+     ],
+     "go": "/@FamilyGuy"
+    },
+    {
+     "id": 38,
+     "text": "link \"Watch\"",
+     "states": [],
+     "hint": "",
+     "col": "",
+     "pos": 1,
+     "s": 6,
+     "c": -1,
+     "y": 851,
+     "x": 0,
+     "k": [
+      [
+       851,
+       0
+      ],
+      [
+       851,
+       0
+      ]
+     ],
+     "go": "googleadservices.com"
+    },
+    {
+     "id": 39,
+     "text": "link \"LinkedIn India: Log In or Sign Up https://in.linkedin.com\"",
+     "states": [],
+     "hint": "",
+     "col": "",
+     "pos": 1,
+     "s": 7,
+     "c": -1,
+     "y": 931,
+     "x": 0,
+     "k": [
+      [
+       931,
+       0
+      ]
+     ],
+     "go": "in.linkedin.com"
+    },
+    {
+     "id": 40,
+     "text": "button \"About this result\"",
+     "states": [],
+     "hint": "LinkedIn India: Log In or Sign Up",
+     "col": "",
+     "pos": 1,
+     "s": 7,
+     "c": -1,
+     "y": 970,
+     "x": 144,
+     "k": [
+      [
+       970,
+       144
+      ]
+     ],
+     "of": "\"LinkedIn India: Log In or Sign Up\""
+    },
+    {
+     "id": 41,
+     "text": "link \"LinkedIn Login, Sign in https://www.linkedin.com › login\"",
+     "states": [],
+     "hint": "",
+     "col": "",
+     "pos": 1,
+     "s": 7,
+     "c": -1,
+     "y": 1026,
+     "x": 0,
+     "k": [
+      [
+       1026,
+       0
+      ]
+     ],
+     "go": "linkedin.com"
+    },
+    {
+     "id": 42,
+     "text": "button \"About this result\"",
+     "states": [],
+     "hint": "LinkedIn Login, Sign in",
+     "col": "",
+     "pos": 1,
+     "s": 7,
+     "c": -1,
+     "y": 1065,
+     "x": 209,
+     "k": [
+      [
+       1065,
+       209
+      ]
+     ],
+     "of": "\"LinkedIn Login, Sign in\""
+    },
+    {
+     "id": 43,
+     "text": "link \"LinkedIn website\"",
+     "states": [],
+     "hint": "",
+     "col": "",
+     "pos": 1,
+     "s": 7,
+     "c": -1,
+     "y": 1119,
+     "x": 279,
+     "k": [
+      [
+       1119,
+       279
+      ],
+      [
+       1119,
+       279
+      ]
+     ],
+     "go": "/web"
+    },
+    {
+     "id": 44,
+     "text": "link \"mobile app\"",
+     "states": [],
+     "hint": "",
+     "col": "",
+     "pos": 1,
+     "s": 7,
+     "c": -1,
+     "y": 1119,
+     "x": 437,
+     "k": [
+      [
+       1119,
+       437
+      ],
+      [
+       1119,
+       437
+      ]
+     ],
+     "go": "/app"
+    },
+    {
+     "id": 45,
+     "text": "link \"Page 2\"",
+     "states": [],
+     "hint": "",
+     "col": "",
+     "pos": 1,
+     "s": 8,
+     "c": -1,
+     "y": 1195,
+     "x": 15,
+     "k": [
+      [
+       1194,
+       14
+      ],
+      [
+       1195,
+       15
+      ]
+     ],
+     "go": "/p2"
+    },
+    {
+     "id": 46,
+     "text": "link \"Page 3\"",
+     "states": [],
+     "hint": "",
+     "col": "",
+     "pos": 1,
+     "s": 8,
+     "c": -1,
+     "y": 1195,
+     "x": 67,
+     "k": [
+      [
+       1194,
+       66
+      ],
+      [
+       1195,
+       67
+      ]
+     ],
+     "go": "/p3"
+    },
+    {
+     "id": 47,
+     "text": "link \"Next\"",
+     "states": [],
+     "hint": "",
+     "col": "",
+     "pos": 1,
+     "s": 8,
+     "c": -1,
+     "y": 1195,
+     "x": 118,
+     "k": [
+      [
+       1194,
+       117
+      ],
+      [
+       1195,
+       118
+      ]
+     ],
+     "go": "/next",
+     "of": "item 4 of 4"
+    },
+    {
+     "id": 48,
+     "text": "link \"Donate\"",
+     "states": [],
+     "hint": "",
+     "col": "",
+     "pos": 1,
+     "s": 9,
+     "c": -1,
+     "y": 1271,
+     "x": 0,
+     "k": [
+      [
+       1271,
+       0
+      ]
+     ],
+     "go": "/donate"
+    },
+    {
+     "id": 49,
+     "text": "link \"November 2026\"",
+     "states": [],
+     "hint": "",
+     "col": "",
+     "pos": 1,
+     "s": 10,
+     "c": -1,
+     "y": 1344,
+     "x": 40,
+     "k": [
+      [
+       1344,
+       40
+      ]
+     ],
+     "go": "/2026/11"
+    },
+    {
+     "id": 50,
+     "text": "link \"October 2026\"",
+     "states": [],
+     "hint": "",
+     "col": "",
+     "pos": 1,
+     "s": 10,
+     "c": -1,
+     "y": 1361,
+     "x": 40,
+     "k": [
+      [
+       1361,
+       40
+      ]
+     ],
+     "go": "/2026/10"
+    },
+    {
+     "id": 51,
+     "text": "link \"September 2026\"",
+     "states": [],
+     "hint": "",
+     "col": "",
+     "pos": 1,
+     "s": 10,
+     "c": -1,
+     "y": 1378,
+     "x": 40,
+     "k": [
+      [
+       1378,
+       40
+      ]
+     ],
+     "go": "/2026/09"
+    },
+    {
+     "id": 52,
+     "text": "link \"About Amazon\"",
+     "states": [],
+     "hint": "",
+     "col": "",
+     "pos": 1,
+     "s": 11,
+     "c": -1,
+     "y": 1427,
+     "x": 0,
+     "k": [
+      [
+       1410,
+       0
+      ],
+      [
+       1427,
+       0
+      ],
+      [
+       1427,
+       0
+      ]
+     ],
+     "go": "/about"
+    },
+    {
+     "id": 53,
+     "text": "link \"Careers\"",
+     "states": [],
+     "hint": "",
+     "col": "",
+     "pos": 1,
+     "s": 11,
+     "c": -1,
+     "y": 1427,
+     "x": 98,
+     "k": [
+      [
+       1410,
+       0
+      ],
+      [
+       1427,
+       98
+      ],
+      [
+       1427,
+       98
+      ]
+     ],
+     "go": "/careers"
+    },
+    {
+     "id": 54,
+     "text": "link \"Sell on Amazon\"",
+     "states": [],
+     "hint": "",
+     "col": "",
+     "pos": 1,
+     "s": 11,
+     "c": -1,
+     "y": 1427,
+     "x": 370,
+     "k": [
+      [
+       1410,
+       370
+      ],
+      [
+       1427,
+       370
+      ],
+      [
+       1427,
+       370
+      ]
+     ],
+     "go": "/sell"
+    },
+    {
+     "id": 55,
+     "text": "link \"Your Account\"",
+     "states": [],
+     "hint": "",
+     "col": "",
+     "pos": 1,
+     "s": 11,
+     "c": -1,
+     "y": 1427,
+     "x": 740,
+     "k": [
+      [
+       1410,
+       740
+      ],
+      [
+       1427,
+       740
+      ],
+      [
+       1427,
+       740
+      ]
+     ],
+     "go": "/account"
+    },
+    {
+     "id": 56,
+     "text": "link \"Help\"",
+     "states": [],
+     "hint": "",
+     "col": "",
+     "pos": 1,
+     "s": 11,
+     "c": -1,
+     "y": 1427,
+     "x": 828,
+     "k": [
+      [
+       1410,
+       740
+      ],
+      [
+       1427,
+       828
+      ],
+      [
+       1427,
+       828
+      ]
+     ],
+     "go": "/help"
+    }
+   ],
+   "texts": [
+    {
+     "t": "OUR CLIENTS",
+     "s": 12,
+     "c": -1,
+     "pos": 0,
+     "y": 72,
+     "x": 0,
+     "k": [
+      [
+       72,
+       0
+      ]
+     ],
+     "h": 1
+    },
+    {
+     "t": "20",
+     "s": 12,
+     "c": -1,
+     "pos": 0,
+     "y": 116,
+     "x": 0,
+     "k": [
+      [
+       116,
+       0
+      ],
+      [
+       116,
+       0
+      ],
+      [
+       116,
+       0
+      ]
+     ]
+    },
+    {
+     "t": "+",
+     "s": 12,
+     "c": -1,
+     "pos": 0,
+     "y": 116,
+     "x": 17,
+     "k": [
+      [
+       116,
+       0
+      ],
+      [
+       116,
+       17
+      ],
+      [
+       116,
+       17
+      ]
+     ]
+    },
+    {
+     "t": "years of experience",
+     "s": 12,
+     "c": -1,
+     "pos": 0,
+     "y": 133,
+     "x": 0,
+     "k": [
+      [
+       116,
+       0
+      ],
+      [
+       133,
+       0
+      ]
+     ]
+    },
+    {
+     "t": "1500",
+     "s": 12,
+     "c": -1,
+     "pos": 0,
+     "y": 116,
+     "x": 370,
+     "k": [
+      [
+       116,
+       370
+      ],
+      [
+       116,
+       370
+      ],
+      [
+       116,
+       370
+      ]
+     ]
+    },
+    {
+     "t": "+",
+     "s": 12,
+     "c": -1,
+     "pos": 0,
+     "y": 116,
+     "x": 403,
+     "k": [
+      [
+       116,
+       370
+      ],
+      [
+       116,
+       403
+      ],
+      [
+       116,
+       403
+      ]
+     ]
+    },
+    {
+     "t": "Happy Clients",
+     "s": 12,
+     "c": -1,
+     "pos": 0,
+     "y": 133,
+     "x": 370,
+     "k": [
+      [
+       116,
+       370
+      ],
+      [
+       133,
+       370
+      ]
+     ]
+    },
+    {
+     "t": "2000",
+     "s": 12,
+     "c": -1,
+     "pos": 0,
+     "y": 116,
+     "x": 740,
+     "k": [
+      [
+       116,
+       740
+      ],
+      [
+       116,
+       740
+      ],
+      [
+       116,
+       740
+      ]
+     ]
+    },
+    {
+     "t": "+",
+     "s": 12,
+     "c": -1,
+     "pos": 0,
+     "y": 116,
+     "x": 773,
+     "k": [
+      [
+       116,
+       740
+      ],
+      [
+       116,
+       773
+      ],
+      [
+       116,
+       773
+      ]
+     ]
+    },
+    {
+     "t": "Projects",
+     "s": 12,
+     "c": -1,
+     "pos": 0,
+     "y": 133,
+     "x": 740,
+     "k": [
+      [
+       116,
+       740
+      ],
+      [
+       133,
+       740
+      ]
+     ]
+    },
+    {
+     "t": "Our Core Competency",
+     "s": 13,
+     "c": -1,
+     "pos": 0,
+     "y": 168,
+     "x": 0,
+     "k": [
+      [
+       168,
+       0
+      ]
+     ],
+     "h": 1
+    },
+    {
+     "t": "Recommended for you",
+     "s": 2,
+     "c": -1,
+     "pos": 0,
+     "y": 288,
+     "x": 0,
+     "k": [
+      [
+       288,
+       0
+      ]
+     ],
+     "h": 1
+    },
+    {
+     "t": "Instructor: Sandeep Soni",
+     "s": 2,
+     "c": 0,
+     "pos": 0,
+     "y": 357,
+     "x": 7,
+     "k": [
+      [
+       333,
+       0
+      ],
+      [
+       357,
+       7
+      ]
+     ]
+    },
+    {
+     "t": "Rating: 4.6 out of 5",
+     "s": 2,
+     "c": 0,
+     "pos": 0,
+     "y": 374,
+     "x": 7,
+     "k": [
+      [
+       333,
+       0
+      ],
+      [
+       374,
+       7
+      ]
+     ]
+    },
+    {
+     "t": "152 ratings",
+     "s": 2,
+     "c": 0,
+     "pos": 0,
+     "y": 391,
+     "x": 7,
+     "k": [
+      [
+       333,
+       0
+      ],
+      [
+       391,
+       7
+      ]
+     ]
+    },
+    {
+     "t": "Current price ₹479.00",
+     "s": 2,
+     "c": 0,
+     "pos": 0,
+     "y": 408,
+     "x": 7,
+     "k": [
+      [
+       333,
+       0
+      ],
+      [
+       408,
+       7
+      ]
+     ]
+    },
+    {
+     "t": "Original Price ₹799.00",
+     "s": 2,
+     "c": 0,
+     "pos": 0,
+     "y": 425,
+     "x": 7,
+     "k": [
+      [
+       333,
+       0
+      ],
+      [
+       425,
+       7
+      ]
+     ]
+    },
+    {
+     "t": "Instructor: Scott Duffy",
+     "s": 2,
+     "c": 1,
+     "pos": 0,
+     "y": 357,
+     "x": 391,
+     "k": [
+      [
+       333,
+       384
+      ],
+      [
+       357,
+       391
+      ]
+     ]
+    },
+    {
+     "t": "Rating: 4.7 out of 5",
+     "s": 2,
+     "c": 1,
+     "pos": 0,
+     "y": 374,
+     "x": 391,
+     "k": [
+      [
+       333,
+       384
+      ],
+      [
+       374,
+       391
+      ]
+     ]
+    },
+    {
+     "t": "5,983 ratings",
+     "s": 2,
+     "c": 1,
+     "pos": 0,
+     "y": 391,
+     "x": 391,
+     "k": [
+      [
+       333,
+       384
+      ],
+      [
+       391,
+       391
+      ]
+     ]
+    },
+    {
+     "t": "Current price ₹509.00",
+     "s": 2,
+     "c": 1,
+     "pos": 0,
+     "y": 408,
+     "x": 391,
+     "k": [
+      [
+       333,
+       384
+      ],
+      [
+       408,
+       391
+      ]
+     ]
+    },
+    {
+     "t": "Original Price ₹3,289.00",
+     "s": 2,
+     "c": 1,
+     "pos": 0,
+     "y": 425,
+     "x": 391,
+     "k": [
+      [
+       333,
+       384
+      ],
+      [
+       425,
+       391
+      ]
+     ]
+    },
+    {
+     "t": "Instructor: Imran Afzal",
+     "s": 2,
+     "c": 2,
+     "pos": 0,
+     "y": 357,
+     "x": 775,
+     "k": [
+      [
+       333,
+       768
+      ],
+      [
+       357,
+       775
+      ]
+     ]
+    },
+    {
+     "t": "Rating: 4.4 out of 5",
+     "s": 2,
+     "c": 2,
+     "pos": 0,
+     "y": 374,
+     "x": 775,
+     "k": [
+      [
+       333,
+       768
+      ],
+      [
+       374,
+       775
+      ]
+     ]
+    },
+    {
+     "t": "565 ratings",
+     "s": 2,
+     "c": 2,
+     "pos": 0,
+     "y": 391,
+     "x": 775,
+     "k": [
+      [
+       333,
+       768
+      ],
+      [
+       391,
+       775
+      ]
+     ]
+    },
+    {
+     "t": "Current price ₹559.00",
+     "s": 2,
+     "c": 2,
+     "pos": 0,
+     "y": 408,
+     "x": 775,
+     "k": [
+      [
+       333,
+       768
+      ],
+      [
+       408,
+       775
+      ]
+     ]
+    },
+    {
+     "t": "Original Price ₹799.00",
+     "s": 2,
+     "c": 2,
+     "pos": 0,
+     "y": 425,
+     "x": 775,
+     "k": [
+      [
+       333,
+       768
+      ],
+      [
+       425,
+       775
+      ]
+     ]
+    },
+    {
+     "t": "Based on your recent searches",
+     "s": 3,
+     "c": -1,
+     "pos": 0,
+     "y": 488,
+     "x": 0,
+     "k": [
+      [
+       488,
+       0
+      ]
+     ],
+     "h": 1
+    },
+    {
+     "t": "₹549.00",
+     "s": 3,
+     "c": 3,
+     "pos": 0,
+     "y": 557,
+     "x": 7,
+     "k": [
+      [
+       533,
+       0
+      ],
+      [
+       557,
+       7
+      ]
+     ]
+    },
+    {
+     "t": "₹689.00",
+     "s": 3,
+     "c": 4,
+     "pos": 0,
+     "y": 557,
+     "x": 391,
+     "k": [
+      [
+       533,
+       384
+      ],
+      [
+       557,
+       391
+      ]
+     ]
+    },
+    {
+     "t": "₹719.00",
+     "s": 3,
+     "c": 5,
+     "pos": 0,
+     "y": 557,
+     "x": 775,
+     "k": [
+      [
+       533,
+       768
+      ],
+      [
+       557,
+       775
+      ]
+     ]
+    },
+    {
+     "t": "Deals",
+     "s": 4,
+     "c": -1,
+     "pos": 0,
+     "y": 621,
+     "x": 0,
+     "k": [
+      [
+       621,
+       0
+      ]
+     ],
+     "h": 1
+    },
+    {
+     "t": "Videos",
+     "s": 6,
+     "c": -1,
+     "pos": 0,
+     "y": 715,
+     "x": 0,
+     "k": [
+      [
+       715,
+       0
+      ]
+     ],
+     "h": 1
+    },
+    {
+     "t": "244K 12d ago",
+     "s": 6,
+     "c": 9,
+     "pos": 1,
+     "y": 827,
+     "x": 7,
+     "k": [
+      [
+       781,
+       0
+      ],
+      [
+       827,
+       7
+      ]
+     ]
+    },
+    {
+     "t": "51K 13d ago",
+     "s": 6,
+     "c": 10,
+     "pos": 1,
+     "y": 827,
+     "x": 391,
+     "k": [
+      [
+       781,
+       384
+      ],
+      [
+       827,
+       391
+      ]
+     ]
+    },
+    {
+     "t": "721K 2d ago",
+     "s": 6,
+     "c": 11,
+     "pos": 1,
+     "y": 827,
+     "x": 775,
+     "k": [
+      [
+       781,
+       768
+      ],
+      [
+       827,
+       775
+      ]
+     ]
+    },
+    {
+     "t": "Sponsored",
+     "s": 6,
+     "c": -1,
+     "pos": 1,
+     "y": 851,
+     "x": 46,
+     "k": [
+      [
+       851,
+       0
+      ]
+     ]
+    },
+    {
+     "t": "Search Results",
+     "s": 7,
+     "c": -1,
+     "pos": 1,
+     "y": 886,
+     "x": 0,
+     "k": [
+      [
+       886,
+       0
+      ]
+     ],
+     "h": 1
+    },
+    {
+     "t": "1 billion members | Manage your professional identity.",
+     "s": 7,
+     "c": -1,
+     "pos": 1,
+     "y": 992,
+     "x": 0,
+     "k": [
+      [
+       992,
+       0
+      ]
+     ]
+    },
+    {
+     "t": "Login to LinkedIn to keep in touch with people you know.",
+     "s": 7,
+     "c": -1,
+     "pos": 1,
+     "y": 1087,
+     "x": 0,
+     "k": [
+      [
+       1087,
+       0
+      ]
+     ]
+    },
+    {
+     "t": "You can access your account through the LinkedIn website or the mobile app .",
+     "s": 7,
+     "c": -1,
+     "pos": 1,
+     "y": 1119,
+     "x": 0,
+     "k": [
+      [
+       1119,
+       0
+      ]
+     ]
+    },
+    {
+     "t": "Because you viewed “ ”",
+     "s": 8,
+     "c": -1,
+     "pos": 1,
+     "y": 1153,
+     "x": 0,
+     "k": [
+      [
+       1153,
+       0
+      ]
+     ],
+     "h": 1
+    },
+    {
+     "t": "1",
+     "s": 8,
+     "c": -1,
+     "pos": 1,
+     "y": 1195,
+     "x": 3,
+     "k": [
+      [
+       1194,
+       2
+      ],
+      [
+       1194,
+       2
+      ]
+     ]
+    },
+    {
+     "t": "Support the Cause",
+     "s": 9,
+     "c": -1,
+     "pos": 1,
+     "y": 1232,
+     "x": 0,
+     "k": [
+      [
+       1232,
+       0
+      ]
+     ],
+     "h": 1
+    },
+    {
+     "t": "Monthly Archives",
+     "s": 10,
+     "c": -1,
+     "pos": 1,
+     "y": 1306,
+     "x": 0,
+     "k": [
+      [
+       1306,
+       0
+      ]
+     ],
+     "h": 1
+    },
+    {
+     "t": "(72)",
+     "s": 10,
+     "c": -1,
+     "pos": 1,
+     "y": 1344,
+     "x": 147,
+     "k": [
+      [
+       1344,
+       40
+      ]
+     ]
+    },
+    {
+     "t": "(167)",
+     "s": 10,
+     "c": -1,
+     "pos": 1,
+     "y": 1361,
+     "x": 131,
+     "k": [
+      [
+       1361,
+       40
+      ]
+     ]
+    },
+    {
+     "t": "(155)",
+     "s": 10,
+     "c": -1,
+     "pos": 1,
+     "y": 1378,
+     "x": 151,
+     "k": [
+      [
+       1378,
+       40
+      ]
+     ]
+    },
+    {
+     "t": "Get to Know Us",
+     "s": 11,
+     "c": -1,
+     "pos": 1,
+     "y": 1410,
+     "x": 0,
+     "k": [
+      [
+       1410,
+       0
+      ],
+      [
+       1410,
+       0
+      ]
+     ]
+    },
+    {
+     "t": "Make Money with Us",
+     "s": 11,
+     "c": -1,
+     "pos": 1,
+     "y": 1410,
+     "x": 370,
+     "k": [
+      [
+       1410,
+       370
+      ],
+      [
+       1410,
+       370
+      ]
+     ]
+    },
+    {
+     "t": "Let Us Help You",
+     "s": 11,
+     "c": -1,
+     "pos": 1,
+     "y": 1410,
+     "x": 740,
+     "k": [
+      [
+       1410,
+       740
+      ],
+      [
+       1410,
+       740
+      ]
+     ]
+    },
+    {
+     "t": "| | |",
+     "s": 11,
+     "c": -1,
+     "pos": 1,
+     "y": 1459,
+     "x": 0,
+     "k": [
+      [
+       1459,
+       0
+      ]
+     ]
+    }
+   ],
+   "counts": [
+    "1 table row like \"1 Page 2 Page 3 Next\""
+   ],
+   "count": 56
+  }
+ ]
+}

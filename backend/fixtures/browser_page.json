@@ -1,0 +1,966 @@
+{
+ "_note": "Real content.js output (headless Chrome, Unrestricted) for a hand-made test page with krify.co-like parts: tel/mailto links, side-by-side stat and process columns, skill bars, testimonial video buttons, a chat widget, a labelled form, JSON-LD and a meta description.",
+ "full": true,
+ "pages": [
+  {
+   "frame": "",
+   "page": {
+    "type": "page",
+    "h1": "",
+    "results": "",
+    "scrollY": 0,
+    "scrollMax": 73,
+    "width": 1184,
+    "summary": "Krify is a top AI, web and mobile app development company in India.",
+    "facts": [
+     "Organization \"Krify\" · phone +91 7901322222 · email info@krify.co · rated 4.7/5 (492 reviews)",
+     "Breadcrumb: Home › Services"
+    ]
+   },
+   "status": "",
+   "form": {
+    "name": "",
+    "marks": false,
+    "fields": [
+     {
+      "id": 12,
+      "label": "Full Name",
+      "required": false,
+      "optional": false,
+      "filled": false,
+      "value": "",
+      "disabled": false,
+      "error": "",
+      "kind": "text"
+     },
+     {
+      "id": 13,
+      "label": "Email Address",
+      "required": false,
+      "optional": false,
+      "filled": false,
+      "value": "",
+      "disabled": false,
+      "error": "",
+      "kind": "text"
+     }
+    ],
+    "submits": [
+     14
+    ]
+   },
+   "focused": null,
+   "popup": false,
+   "partial": false,
+   "sections": [
+    {
+     "name": "Header",
+     "kind": "header",
+     "kinds": [
+      "header"
+     ],
+     "modal": false,
+     "list": false,
+     "box": [
+      0,
+      26,
+      545,
+      43
+     ]
+    },
+    {
+     "name": "Header › Nav",
+     "kind": "nav",
+     "kinds": [
+      "header",
+      "nav"
+     ],
+     "modal": false,
+     "list": false,
+     "box": [
+      0,
+      44,
+      129,
+      61
+     ]
+    },
+    {
+     "name": "Main › \"Testimonials\"",
+     "kind": "main",
+     "kinds": [
+      "main"
+     ],
+     "modal": false,
+     "list": false,
+     "box": [
+      0,
+      653,
+      80,
+      695
+     ]
+    },
+    {
+     "name": "Page",
+     "kind": "page",
+     "kinds": [],
+     "modal": false,
+     "list": false,
+     "box": [
+      939,
+      690,
+      1048,
+      732
+     ]
+    },
+    {
+     "name": "Main › Form",
+     "kind": "form",
+     "kinds": [
+      "main",
+      "form"
+     ],
+     "modal": false,
+     "list": false,
+     "box": [
+      73,
+      763,
+      596,
+      784
+     ]
+    },
+    {
+     "name": "Footer \"Recent Posts\"",
+     "kind": "footer",
+     "kinds": [
+      "footer"
+     ],
+     "modal": false,
+     "list": false,
+     "box": [
+      0,
+      844,
+      301,
+      861
+     ]
+    },
+    {
+     "name": "Main › \"OUR CLIENTS\"",
+     "kind": "main",
+     "kinds": [
+      "main"
+     ],
+     "modal": false,
+     "list": false
+    },
+    {
+     "name": "Main › \"PROCESS\"",
+     "kind": "main",
+     "kinds": [
+      "main"
+     ],
+     "modal": false,
+     "list": false
+    },
+    {
+     "name": "Main › \"SKILLS\"",
+     "kind": "main",
+     "kinds": [
+      "main"
+     ],
+     "modal": false,
+     "list": false
+    },
+    {
+     "name": "Main › \"Get a Free Consultation\"",
+     "kind": "main",
+     "kinds": [
+      "main"
+     ],
+     "modal": false,
+     "list": false
+    }
+   ],
+   "cards": [],
+   "elements": [
+    {
+     "id": 1,
+     "text": "link \"call-us\"",
+     "states": [],
+     "hint": "",
+     "col": "",
+     "pos": 0,
+     "s": 0,
+     "c": -1,
+     "y": 26,
+     "x": 0,
+     "k": [
+      [
+       0,
+       0
+      ],
+      [
+       26,
+       0
+      ],
+      [
+       26,
+       0
+      ]
+     ],
+     "go": "call +1 212 380 1160"
+    },
+    {
+     "id": 2,
+     "text": "link \"call-us\"",
+     "states": [],
+     "hint": "",
+     "col": "",
+     "pos": 0,
+     "s": 0,
+     "c": -1,
+     "y": 26,
+     "x": 161,
+     "k": [
+      [
+       0,
+       0
+      ],
+      [
+       26,
+       161
+      ],
+      [
+       26,
+       161
+      ]
+     ],
+     "go": "call +44 20 3006 2580"
+    },
+    {
+     "id": 3,
+     "text": "link \"mail-us\"",
+     "states": [],
+     "hint": "",
+     "col": "",
+     "pos": 0,
+     "s": 0,
+     "c": -1,
+     "y": 26,
+     "x": 332,
+     "k": [
+      [
+       0,
+       0
+      ],
+      [
+       26,
+       332
+      ],
+      [
+       26,
+       332
+      ]
+     ],
+     "go": "email info@krify.co"
+    },
+    {
+     "id": 4,
+     "text": "link \"Linkedin-in\"",
+     "states": [],
+     "hint": "",
+     "col": "",
+     "pos": 0,
+     "s": 0,
+     "c": -1,
+     "y": 26,
+     "x": 428,
+     "k": [
+      [
+       0,
+       0
+      ],
+      [
+       26,
+       428
+      ],
+      [
+       26,
+       428
+      ]
+     ],
+     "go": "linkedin.com (new tab)"
+    },
+    {
+     "id": 5,
+     "text": "link \"view-about-krify-company\"",
+     "states": [],
+     "hint": "",
+     "col": "",
+     "pos": 0,
+     "s": 0,
+     "c": -1,
+     "y": 26,
+     "x": 445,
+     "k": [
+      [
+       0,
+       0
+      ],
+      [
+       26,
+       445
+      ],
+      [
+       26,
+       445
+      ]
+     ],
+     "go": "home page"
+    },
+    {
+     "id": 6,
+     "text": "link \"Our Services\"",
+     "states": [
+      "collapsed"
+     ],
+     "hint": "",
+     "col": "",
+     "pos": 0,
+     "s": 1,
+     "c": -1,
+     "y": 44,
+     "x": 0,
+     "k": [
+      [
+       0,
+       0
+      ],
+      [
+       44,
+       0
+      ],
+      [
+       44,
+       0
+      ]
+     ],
+     "go": "/services/"
+    },
+    {
+     "id": 7,
+     "text": "link \"Blog\"",
+     "states": [],
+     "hint": "",
+     "col": "",
+     "pos": 0,
+     "s": 1,
+     "c": -1,
+     "y": 44,
+     "x": 97,
+     "k": [
+      [
+       0,
+       0
+      ],
+      [
+       44,
+       97
+      ],
+      [
+       44,
+       97
+      ]
+     ],
+     "go": "/blog/"
+    },
+    {
+     "id": 8,
+     "text": "button \"Play Video\"",
+     "states": [],
+     "hint": "",
+     "col": "",
+     "pos": 0,
+     "s": 2,
+     "c": -1,
+     "y": 653,
+     "x": 0,
+     "k": [
+      [
+       653,
+       0
+      ]
+     ],
+     "of": "testimonial 1 of 2"
+    },
+    {
+     "id": 9,
+     "text": "button \"Play Video\"",
+     "states": [],
+     "hint": "",
+     "col": "",
+     "pos": 0,
+     "s": 2,
+     "c": -1,
+     "y": 674,
+     "x": 0,
+     "k": [
+      [
+       674,
+       0
+      ]
+     ],
+     "of": "testimonial 2 of 2"
+    },
+    {
+     "id": 10,
+     "text": "button \"Close\"",
+     "states": [],
+     "hint": "",
+     "col": "",
+     "pos": 0,
+     "s": 3,
+     "c": -1,
+     "y": 690,
+     "x": 939,
+     "k": [
+      [
+       690,
+       939
+      ]
+     ],
+     "float": true,
+     "of": "chat \"Talk to Sofi Live\""
+    },
+    {
+     "id": 11,
+     "text": "button \"Talk to Sofi Live\"",
+     "states": [],
+     "hint": "",
+     "col": "",
+     "pos": 0,
+     "s": 3,
+     "c": -1,
+     "y": 711,
+     "x": 939,
+     "k": [
+      [
+       711,
+       939
+      ]
+     ],
+     "float": true
+    },
+    {
+     "id": 12,
+     "text": "input text \"Full Name\" (empty)",
+     "states": [],
+     "hint": "Enter Full Name",
+     "col": "",
+     "pos": 0,
+     "s": 4,
+     "c": -1,
+     "y": 763,
+     "x": 73,
+     "k": [
+      [
+       763,
+       73
+      ],
+      [
+       763,
+       73
+      ]
+     ]
+    },
+    {
+     "id": 13,
+     "text": "input email \"Email Address\" (empty)",
+     "states": [],
+     "hint": "Enter Email",
+     "col": "",
+     "pos": 0,
+     "s": 4,
+     "c": -1,
+     "y": 763,
+     "x": 357,
+     "k": [
+      [
+       763,
+       357
+      ],
+      [
+       763,
+       357
+      ]
+     ]
+    },
+    {
+     "id": 14,
+     "text": "button submit \"Submit\"",
+     "states": [],
+     "hint": "",
+     "col": "",
+     "pos": 0,
+     "s": 4,
+     "c": -1,
+     "y": 763,
+     "x": 538,
+     "k": [
+      [
+       763,
+       538
+      ],
+      [
+       763,
+       538
+      ]
+     ]
+    },
+    {
+     "id": 15,
+     "text": "link \"Native Mobile App Development Company\"",
+     "states": [],
+     "hint": "",
+     "col": "",
+     "pos": 1,
+     "s": 5,
+     "c": -1,
+     "y": 844,
+     "x": 0,
+     "k": [
+      [
+       844,
+       0
+      ],
+      [
+       844,
+       0
+      ]
+     ],
+     "go": "/blog/native-app/"
+    }
+   ],
+   "texts": [
+    {
+     "t": "OUR CLIENTS",
+     "s": 6,
+     "c": -1,
+     "pos": 0,
+     "y": 82,
+     "x": 0,
+     "k": [
+      [
+       82,
+       0
+      ]
+     ],
+     "h": 1
+    },
+    {
+     "t": "20 +",
+     "s": 6,
+     "c": -1,
+     "pos": 0,
+     "y": 130,
+     "x": 0,
+     "k": [
+      [
+       130,
+       0
+      ],
+      [
+       130,
+       0
+      ]
+     ]
+    },
+    {
+     "t": "years of experience",
+     "s": 6,
+     "c": -1,
+     "pos": 0,
+     "y": 148,
+     "x": 0,
+     "k": [
+      [
+       130,
+       0
+      ],
+      [
+       148,
+       0
+      ]
+     ]
+    },
+    {
+     "t": "1500 +",
+     "s": 6,
+     "c": -1,
+     "pos": 0,
+     "y": 130,
+     "x": 360,
+     "k": [
+      [
+       130,
+       360
+      ],
+      [
+       130,
+       360
+      ]
+     ]
+    },
+    {
+     "t": "Happy Clients",
+     "s": 6,
+     "c": -1,
+     "pos": 0,
+     "y": 148,
+     "x": 360,
+     "k": [
+      [
+       130,
+       360
+      ],
+      [
+       148,
+       360
+      ]
+     ]
+    },
+    {
+     "t": "2000 +",
+     "s": 6,
+     "c": -1,
+     "pos": 0,
+     "y": 130,
+     "x": 720,
+     "k": [
+      [
+       130,
+       720
+      ],
+      [
+       130,
+       720
+      ]
+     ]
+    },
+    {
+     "t": "Projects",
+     "s": 6,
+     "c": -1,
+     "pos": 0,
+     "y": 148,
+     "x": 720,
+     "k": [
+      [
+       130,
+       720
+      ],
+      [
+       148,
+       720
+      ]
+     ]
+    },
+    {
+     "t": "PROCESS",
+     "s": 7,
+     "c": -1,
+     "pos": 0,
+     "y": 304,
+     "x": 0,
+     "k": [
+      [
+       304,
+       0
+      ]
+     ],
+     "h": 1
+    },
+    {
+     "t": "YOUR IDEA",
+     "s": 7,
+     "c": -1,
+     "pos": 0,
+     "y": 370,
+     "x": 0,
+     "k": [
+      [
+       352,
+       0
+      ],
+      [
+       370,
+       0
+      ]
+     ],
+     "h": 1
+    },
+    {
+     "t": "Krify values your views and approach.",
+     "s": 7,
+     "c": -1,
+     "pos": 0,
+     "y": 411,
+     "x": 0,
+     "k": [
+      [
+       352,
+       0
+      ],
+      [
+       411,
+       0
+      ]
+     ]
+    },
+    {
+     "t": "REQUIREMENTS GATHERING",
+     "s": 7,
+     "c": -1,
+     "pos": 0,
+     "y": 370,
+     "x": 360,
+     "k": [
+      [
+       352,
+       360
+      ],
+      [
+       370,
+       360
+      ]
+     ],
+     "h": 1
+    },
+    {
+     "t": "Initially, we analyse and gather the requirements.",
+     "s": 7,
+     "c": -1,
+     "pos": 0,
+     "y": 411,
+     "x": 360,
+     "k": [
+      [
+       352,
+       360
+      ],
+      [
+       411,
+       360
+      ]
+     ]
+    },
+    {
+     "t": "DESIGN & DEVELOPMENT",
+     "s": 7,
+     "c": -1,
+     "pos": 0,
+     "y": 370,
+     "x": 720,
+     "k": [
+      [
+       352,
+       720
+      ],
+      [
+       370,
+       720
+      ]
+     ],
+     "h": 1
+    },
+    {
+     "t": "We do the designing reciprocating your ideas.",
+     "s": 7,
+     "c": -1,
+     "pos": 0,
+     "y": 411,
+     "x": 720,
+     "k": [
+      [
+       352,
+       720
+      ],
+      [
+       411,
+       720
+      ]
+     ]
+    },
+    {
+     "t": "SKILLS",
+     "s": 8,
+     "c": -1,
+     "pos": 0,
+     "y": 465,
+     "x": 0,
+     "k": [
+      [
+       465,
+       0
+      ]
+     ],
+     "h": 1
+    },
+    {
+     "t": "Mobile Apps",
+     "s": 8,
+     "c": -1,
+     "pos": 0,
+     "y": 513,
+     "x": 0,
+     "k": [
+      [
+       513,
+       0
+      ]
+     ]
+    },
+    {
+     "t": "95%",
+     "s": 8,
+     "c": -1,
+     "pos": 0,
+     "y": 531,
+     "x": 0,
+     "k": [
+      [
+       531,
+       0
+      ]
+     ]
+    },
+    {
+     "t": "Web Services",
+     "s": 8,
+     "c": -1,
+     "pos": 0,
+     "y": 549,
+     "x": 0,
+     "k": [
+      [
+       549,
+       0
+      ]
+     ]
+    },
+    {
+     "t": "90%",
+     "s": 8,
+     "c": -1,
+     "pos": 0,
+     "y": 567,
+     "x": 0,
+     "k": [
+      [
+       567,
+       0
+      ]
+     ]
+    },
+    {
+     "t": "Testimonials",
+     "s": 2,
+     "c": -1,
+     "pos": 0,
+     "y": 605,
+     "x": 0,
+     "k": [
+      [
+       605,
+       0
+      ]
+     ],
+     "h": 1
+    },
+    {
+     "t": "Get a Free Consultation",
+     "s": 9,
+     "c": -1,
+     "pos": 0,
+     "y": 715,
+     "x": 0,
+     "k": [
+      [
+       715,
+       0
+      ]
+     ],
+     "h": 1
+    },
+    {
+     "t": "Full Name",
+     "s": 4,
+     "c": -1,
+     "pos": 0,
+     "y": 764,
+     "x": 0,
+     "k": [
+      [
+       763,
+       0
+      ],
+      [
+       764,
+       0
+      ]
+     ]
+    },
+    {
+     "t": "Email Address",
+     "s": 4,
+     "c": -1,
+     "pos": 0,
+     "y": 764,
+     "x": 254,
+     "k": [
+      [
+       763,
+       254
+      ],
+      [
+       764,
+       254
+      ]
+     ]
+    },
+    {
+     "t": "Recent Posts",
+     "s": 5,
+     "c": -1,
+     "pos": 0,
+     "y": 805,
+     "x": 0,
+     "k": [
+      [
+       805,
+       0
+      ]
+     ],
+     "h": 1
+    },
+    {
+     "t": "image \"Client: Tata Motors\"",
+     "s": 6,
+     "c": -1,
+     "pos": 0,
+     "y": 166,
+     "x": 0,
+     "k": [
+      [
+       166,
+       0
+      ]
+     ]
+    }
+   ],
+   "counts": [
+    "5 rows like \"OUR CLIENTS\""
+   ],
+   "count": 15
+  }
+ ]
+}
