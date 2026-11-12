@@ -1,612 +1,66 @@
 """The agent loop: ask the AI → run the operation in the browser → show it the new page → repeat."""
 
-import ast
-import base64
 import json
 import logging
-import os
 import re
-from urllib.parse import urlparse
 
-from app import history, sheets
-from app.agent import pageview, safety
-from app.agent.changes import click_result, opened_what_asked
-from app.agent.prompt import system_prompt, where_line
-from app.agent.tools import TOOLS
-from app.agent.understand import understand
-from app.config import MAX_STEPS, STRUCTURED_VIEW
-from app.llm.client import ask_ai, has_vision_model, skip_model
+from app import history
+from app.agent.state import TaskState
+from app.config import MAX_STEPS
+from app.context.element_list import element_label, layout, merge_elements
+from app.context.prompt import system_prompt, where_line
+from app.context.sites import is_sheet
+from app.context.view import ContextMixin
+from app.guardrails import safety
+from app.guardrails.forms import form_not_sent
+from app.guardrails.permission import PLAN_NOT_APPROVED, GuardrailsMixin
+from app.guardrails.progress import (
+    SAME_READ,
+    WRAP_UP,
+    WRAP_UP_AT,
+    check_loop,
+    check_progress,
+    check_repeat,
+    scrolled,
+    start_trail,
+)
+from app.llm.client import ask_ai, skip_model
+from app.memory.transcript import MemoryMixin
+from app.output.answer import OutputMixin, preview
+from app.output.text_reply import clean_text_reply
+from app.tools.actions import ToolsMixin
+from app.tools.describe import describe
+from app.tools.ops import (
+    ACTION_OPS,
+    BATCH_LIMIT,
+    BATCH_REFUSED,
+    MAX_BATCH,
+    PAGE_MOVED,
+    READ_OPS,
+    SHEET_ONLY_TOOLS,
+    SHEET_OPS,
+    STEP_FAILED,
+    _args_of,
+    uses_element,
+)
+from app.tools.schemas import TOOLS
+from app.verification.changes import click_result, opened_what_asked
+from app.verification.claims import check_claims, check_handoff
+from app.verification.facts import WRONG_PAGE, WRONG_PRODUCT, check_facts, missing_models, missing_words
+from app.verification.filters import FILTER_HINT, check_filters, filter_dropdowns
+from app.verification.ui_state import check_ui_state
 
 log = logging.getLogger("krify")
 
-READ_OPS = {"get_page_info", "get_elements", "find_elements", "find_text", "read_text", "sheet_query", "read_cells", "inspect"}
-SHEET_OPS = {"sheet_query", "read_cells"}
-SHEET_ONLY_TOOLS = SHEET_OPS | {"go_to_cell"}  # left out of the tool list until a Sheet is open (saves tokens)
-OLD_PAGE = "\n[older page view removed to save space]"
-OLD_SCREEN = "[older screen text removed to save space – use your notes]"
-MAX_READ_SITES = 3  # newest page text is kept for this many sites
-SHEET_HINT = "[Google Sheet] Call read_text first to see the columns, then sheet_query with SQL."
-# Unrestricted mode: the whole page's text rides along with every page view (it's trimmed with it).
-PAGE_TEXT = ("\n[Page text] Unrestricted mode: all text on the page, top to bottom (paragraphs, tables, "
-             "details) – no need to call read_text for this page.\n{}")
-
-
-# Batches: actions the AI may send several of in one reply.
-ACTION_OPS = {"open_url", "go_back", "reload", "new_tab", "switch_tab", "close_tab", "click", "hover", "type",
-              "type_here", "go_to_cell", "press_key", "scroll", "select_option", "wait", "click_at", "drag"}
-MAX_BATCH = 5
-BATCH_LIMIT = "Skipped: at most 5 steps at once. Look at the page and continue."
-PAGE_MOVED = ("Skipped: the page changed after an earlier step, so element numbers may be different. "
-              "Look at the new page and decide again.")
-STEP_FAILED = "Skipped: an earlier step in this batch failed. Look at the page and decide again."
-OVERWRITE_BLOCKED = (
-    "NOT typed: those cells already have data ({}). The user blocked overwriting them. To add a new "
-    "row, go_to_cell the first EMPTY row: {}."
-)
-BLOCKED = ("BLOCKED by the user – this action was NOT done. "
-           "Don't try it again. Tell the user what's left, or call ask_user.")
 DONE_TOO_EARLY ="Not sent: check the page after your steps first, then call done."
-PLAN_NOT_APPROVED = ("Skipped: waiting for the user to approve your plan. If they asked for changes, "
-                     "revise it and call plan again.")
-# "[12] input text "Email"" – an element's number, type and label, without its value/ticks/states.
-_ELEMENT_KEY = re.compile(r'\[\d+\] [^"\n]*"[^"\n]*"')
-# A submit that didn't go through: the page shows inline field errors (content.js's "Form error" lines).
-SUBMIT_WORDS = re.compile(r"save|submit|add|create|update|send|continue|next|confirm|apply|register|sign ?up|book|"
-                          r"post|done|finish|place order|pay", re.I)
-FORM_ERROR = "Form error – "
-FORM_NOT_SENT = ("\nNOT saved – the form shows errors: {}. Fill those fields (a dropdown: select_option with the "
-                 "field and the option's text), then submit again.")
-# A batch step on an element that wasn't in the page view the AI sent the batch from (a dropdown's
-# options appear only once it's open – the AI guessed their numbers and hit a sidebar link instead).
-NOT_IN_VIEW = ("Skipped: [{}] wasn't in the page view you sent these steps from – it appeared only after an earlier "
-               "step (a dropdown's options exist only while it's open). Look at the page now; for a dropdown use "
-               "select_option with the field and the option's text.")
-CHANGED_IN_BATCH = ("Skipped: [{}] is now {}, but when you sent these steps it was {} – an earlier step changed the "
-                    "page. Look at the new page and decide again.")
-BATCH_REFUSED = "Skipped: an earlier step in this batch was not done. Look at the page and decide again."
-# The AI's label for [n] doesn't fit what [n] is now: it used a number from an older view.
-WRONG_ELEMENT = ('NOT done: [{id}] is {line}, not "{label}". Element numbers change with every page view – use the '
-                 'number shown next to "{label}" in the LATEST page view{hint}.')
-# A click that would navigate away from a form the AI has started filling.
-LEAVE_FORM = ("NOT done: {what} is outside the form{name} you are filling and would leave it – what you entered{filled} "
-              "isn't saved and would be lost. If you meant a field or option of this form, use its number from the "
-              "LATEST page view (dropdowns: select_option). Finish the form and save it{submit} first. Only if you "
-              "really must leave it unsaved, send this same step again (the user will be asked).")
-
-
-def image_size(data_url):
-    """(width, height) of a JPEG data URL, read from its header; None if unknown."""
-    try:
-        data = base64.b64decode(data_url.split(",", 1)[1])
-        i = 2
-        while i + 9 < len(data):
-            if data[i] != 0xFF:
-                i += 1
-                continue
-            if data[i + 1] in (0xC0, 0xC1, 0xC2):  # "start of frame": holds the size
-                return int.from_bytes(data[i + 7:i + 9], "big"), int.from_bytes(data[i + 5:i + 7], "big")
-            i += 2 + int.from_bytes(data[i + 2:i + 4], "big")
-    except Exception:
-        pass
-    return None
-
-
-ELEMENT_FIELDS = ("element", "from_element", "to_element")
-
-
-# "I have entered / clicked / …" in an answer or question: what kind of action must back it up.
-_CLAIMS = [
-    ("type", re.compile(r"\b(entered|typed|filled( in| out)?|input|keyed in|put in|written|wrote)\b", re.I)),
-    ("click", re.compile(r"\b(clicked|pressed|tapped|selected|chose|chosen|submitted|added|sent|posted|placed|saved|"
-                         r"signed (in|up|out)|logged (in|out)|opened|applied|confirmed|uploaded|deleted|removed)\b", re.I)),
-]
-# "I entered", "I have entered", "I've just entered", "I have now successfully entered" – the claim's subject.
-_FIRST_PERSON = re.compile(r"\bi('ve| have| had)?(\s+(now|already|successfully|just|also))*\s+$", re.I)
-_TYPE_OPS = {"type", "type_here", "go_to_cell"}
-_CLICK_OPS = {"click", "click_at", "press_key", "select_option", "type", "drag", "open_url", "new_tab", "go_back"}
-CLAIM_REJECTED = (
-    "REJECTED – not sent to the user: {}. Don't say you did something you didn't. Do it now with the right "
-    "tool (e.g. type the value into the field, then click its button) and check the page – or, if you can't, "
-    "say honestly what's still needed."
-)
-
-
-# A question that hands a browser step to the user ("Please sign in…", "click X", "go to the page")
-# or asks permission for something the Allow/Block prompt already covers.
-HANDOFF = re.compile(r"\b(please|kindly|could you|can you|you (need|have) to|you'll need to)\b[^.?!]{0,40}?\b"
-                     r"(sign ?in|log ?in|click|tap|go to|open|navigate|select|scroll)\b"
-                     r"|\b(do you approve|may i|shall i|should i|can i|is it ok(ay)?( if i| to)?|do i have your permission)\b"
-                     r"[^.?!]{0,40}?\b(sign ?in|log ?in|post|submit|continue|proceed|go ahead)\b", re.I)
-# Things only the user can give: a question about these is fine.
-USER_ONLY = re.compile(r"password|passcode|\botp\b|one[- ]time|verification code|captcha|security code|\bpin\b|"
-                       r"which (one|version|option|account)|choose|prefer", re.I)
-HANDOFF_REJECTED = (
-    "REJECTED – not sent to the user: you're asking them to do a browser step (or to approve one) that you can "
-    "do yourself. Do it now: risky steps like signing in get an Allow/Block prompt automatically.{} Ask the "
-    "user only for what you can't know (a password, an OTP, a choice)."
-)
-
-
-def unbacked_claims(text, actions):
-    """First-person claims ("I have entered the number 938…") with no matching action this task."""
-    problems = []
-    for sentence in re.split(r"(?<=[.!?])\s+", text or ""):
-        for kind, verbs in _CLAIMS:
-            for match in verbs.finditer(sentence):
-                if not _FIRST_PERSON.search(sentence[:match.start()][-40:]):
-                    continue  # not "I (have) …" – e.g. "Amazon has sent an OTP"
-                ops = _TYPE_OPS if kind == "type" else _CLICK_OPS
-                # Typing only counts as a click/submit when it pressed Enter too (type with submit=true).
-                done = [(op, args) for op, args, _ in actions
-                        if op in ops and (kind == "type" or op != "type" or args.get("submit"))]
-                verb = match.group(0)
-                if not done:
-                    what = "typing" if kind == "type" else "click or key"
-                    problems.append(f'you wrote "I {verb}", but no {what} action ran in this task')
-                elif kind == "type":
-                    # A value named in the claim (a long number, a quoted text) must be what was typed.
-                    values = [v for pair in re.findall(r"(\d{4,})|\"([^\"]{2,})\"", sentence) for v in pair if v]
-                    typed = " ".join(f"{args.get('text', '')} {args.get('cell', '')}" for _, args in done)
-                    missing = [v for v in values if v not in typed]
-                    if missing:
-                        problems.append(f'you wrote "I {verb}" {", ".join(missing)}, but that was never typed')
-    return list(dict.fromkeys(problems))
-
-
-def element_label(elements, element_id):
-    """The label of element [n] in the flat element list ("" if it isn't there)."""
-    try:
-        n = int(element_id)
-    except (TypeError, ValueError):
-        return ""
-    match = re.search(rf'^\s*\[{n}\] [^"\n]*"([^"\n]*)"', elements or "", re.M)
-    return match.group(1) if match else ""
-
-
-def form_not_sent(name, args, label, page_status):
-    """After a submit-like step: if the page now shows inline form errors, say plainly it wasn't saved."""
-    submitted = ((name == "click" and SUBMIT_WORDS.search(label or ""))
-                 or (name == "press_key" and str(args.get("key", "")).lower() == "enter")
-                 or (name == "type" and args.get("submit")))
-    if not submitted:
-        return ""
-    errors = [part[len(FORM_ERROR):] for part in (page_status or "").split(" | ") if part.startswith(FORM_ERROR)]
-    return FORM_NOT_SENT.format("; ".join(errors)) if errors else ""
-
-
-# Filter dropdowns on a list page ("My Activities") show only their current choice, and rows outside
-# the filter aren't on the page at all: a search that finds nothing may just be filtered out.
-FILTER_HINT = ("\nThis page has dropdowns that may be filtering what's listed: {}. If what you're looking for could be "
-               "hidden by one (\"My …\" = only yours), change it with select_option first (e.g. option = the person's "
-               "name), then look again.")
-FILTER_CHECK = ("REJECTED – not sent to the user: you're saying it isn't there, but this page's list may be filtered "
-                "by {} and you haven't changed any filter. Set the filter that matches the request with select_option "
-                "(e.g. option = the person's name or the type), read the list again, then answer.")
-NOT_FOUND = re.compile(r"\b(no|none|not found|couldn'?t find|could not find|nothing|zero|isn'?t any|aren'?t any|"
-                       r"there are no|didn'?t find|did not find)\b", re.I)
-_DROPDOWN_LINE = re.compile(r'^\[(\d+)\] (?:dropdown|select) "([^"]*)"', re.M)
-
-
-# Words that say what KIND of element it is, not which one: "Save button" is the "Save" element.
-_KIND_WORDS = {"the", "a", "an", "to", "of", "in", "on", "for", "and", "button", "link", "field", "box", "input",
-               "dropdown", "option", "icon", "menu", "tab", "text", "clickable", "select", "choose", "enter", "your",
-               "item", "list", "checkbox"}
-
-
-def _words_of(text):
-    """'Opportunity Titles' -> {'opportunity', 'title'}: lowercase words, a plural 's' dropped, kind words out."""
-    return {w[:-1] if len(w) > 3 and w.endswith("s") else w for w in re.findall(r"[a-z0-9]+", text.lower())} - _KIND_WORDS
-
-
-def _same_word(a, b):
-    """Same word, or the same stem ('opportunity' / 'opportunitie', 'create' / 'created')."""
-    if a == b:
-        return True
-    common = len(os.path.commonprefix([a, b]))
-    return common >= 4 and common >= min(len(a), len(b)) - 2
-
-
-def label_matches(label, names):
-    """Does the AI's label for an element fit what the element is now? names: its element line(s),
-    form-field label and value. Short labels must match every word ("Create Opportunity" is not the
-    "Opportunities" link); longer ones two thirds of their words."""
-    want = " ".join(str(label).lower().split()).strip(" \"'")
-    have = " ".join(" ".join(names).lower().split())
-    if not want or (len(want) >= 3 and want in have):
-        return True
-    words, have_words = _words_of(want), _words_of(have)
-    if not words:
-        return True
-    hits = sum(any(_same_word(w, h) for h in have_words) for w in words)
-    return hits == len(words) if len(words) <= 2 else hits / len(words) >= 2 / 3
-
-
-def _line_key(line):
-    """'input text "Email" (value: "x")' -> 'input text "Email"': what the element is, not its state."""
-    match = re.match(r'[^"\n]*"[^"\n]*"', line or "")
-    return match.group(0) if match else (line or "")
-
-
-def uses_element(args):
-    """Does this step point at an element number? Only those can hit the wrong thing when the page
-    changes; steps by cell (go_to_cell, type_here, click cell=) or keys can't."""
-    return any(args.get(f) is not None for f in ELEMENT_FIELDS)
-
-
-def _args_of(call):
-    try:
-        return json.loads(call.function.arguments or "{}")
-    except json.JSONDecodeError:
-        return {}
-
-
-def layout(page):
-    """Which number points at which element (number, type, label) – typed values, ticks, states,
-    the focus and status lines left out – to see if element numbers could have moved."""
-    return "\n".join(_ELEMENT_KEY.findall(page or ""))
-
-
-def site_of(url):
-    """'https://www.amazon.in/s?k=x' -> 'amazon.in' ('' for new tabs and browser pages)."""
-    try:
-        parsed = urlparse(url or "")
-    except ValueError:
-        return ""
-    if parsed.scheme not in ("http", "https"):
-        return ""
-    host = parsed.hostname or ""
-    return host[4:] if host.startswith("www.") else host
-
-
-def preview(text, limit=160):
-    """Short one-line preview of a read result, for the dev-mode debug trace."""
-    text = re.sub(r"\s+", " ", text or "").strip()
-    return text if len(text) <= limit else text[:limit] + "…"
-
-
-_ELEMENT_ID = re.compile(r"^\[(\d+)\] ", re.MULTILINE)
-_STATUS_LINE = re.compile(r"^\[Status\] (.*)$", re.MULTILINE)
-
-
-def merge_elements(elements, found):
-    """Fold find_elements matches into the stored element blob (by id), so safety.check's
-    element_line() can see elements discovered outside the shown window this turn. A match for an
-    id already there replaces its line: the page's own description of it now is what counts."""
-    new = {m.group(1): ln for ln in (found or "").splitlines() if (m := re.match(r"^\[(\d+)\] ", ln))}
-    if not new:
-        return elements
-    kept = [ln for ln in (elements or "").splitlines() if not ((m := re.match(r"^\[(\d+)\] ", ln)) and m.group(1) in new)]
-    return "\n".join(kept + list(new.values()))
-
-
-_ELEMENT_LINE = re.compile(r'^\[(\d+)\] (\S+) "([^"]+)"', re.MULTILINE)
-
-
-def ambiguity_hint(elements):
-    """Flag elements that share a role+label (e.g. three identical 'Add to cart' buttons): the
-    model is meant to call inspect ref=<id> first to tell them apart, but a low-effort model often
-    skips that unless nudged."""
-    groups = {}
-    for eid, role, label in _ELEMENT_LINE.findall(elements or ""):
-        groups.setdefault((role, label), []).append(eid)
-    dupes = [(label, ids) for (role, label), ids in groups.items() if len(ids) > 1]
-    return pageview.dupes_warning(dupes) if dupes else ""
-
-
-def is_sheet(url):
-    return "docs.google.com/spreadsheets/" in (url or "")
-
-# Stuck detector: these always count as progress; clicks/keys count only if the page changed.
-PROGRESS_OPS = {"read_text", "find_text", "sheet_query", "read_cells", "go_to_cell", "type_here", "note", "type", "select_option", "open_url", "new_tab"}
-OLD_SCREENSHOT = "[older screenshot removed to save space]"
-IDLE_LIMIT = 5
-# Scrolling: only scrolls that showed nothing new count against the page (a long list keeps showing
-# new rows), with a hard cap so an endless feed can't eat every step.
-MAX_IDLE_SCROLLS = 3
-MAX_SCROLLS_PER_PAGE = 12
-SCROLL_REFUSED = (
-    "NOT scrolled: {} Decide with what you've found: save it with note, or note that it's not on this "
-    "site, then continue with your plan (or finish with done). find_text can still jump to a phrase."
-)
-WRAP_UP_AT = 5  # steps left
-WRAP_UP = (
-    "⚠️ Only 5 steps left. Finish now: call done with what you found so far (from your notes), "
-    "and say clearly what you couldn't find."
-)
-REPEAT_NOTE = (
-    "\nWarning: you've done this same step 3 times and nothing changed. Don't do it again: try a "
-    "different way (another element, read_text, a fresh screenshot), or call ask_user."
-)
-LOOP_TRAIL = 8  # pages remembered (after each action) to spot going back and forth
-# Save/Submit while the [Form] checklist still shows required fields empty: refused once per form
-# and set of empty fields (the detection can be wrong – a second click goes through, and
-# form_not_sent then reports the site's own errors).
-REQUIRED_EMPTY = ("NOT clicked – required fields are still empty: {}. {} If you're sure they're already filled, "
-                  "click it again.")
-FILL_ANY = ("This is a dummy/test request: fill each with any real option (or short placeholder text), one field "
-            "at a time, then save. Dropdown: select_option with a likely option – if it isn't there, the reply lists "
-            "the real ones.")
-ASK_ONCE = ("Use values from the user's request. For any the request doesn't give, call ask_user ONCE listing all "
-            "of them with the options you saw (select_option with a guess lists a dropdown's real options), then fill "
-            "them and save.")
-DUMMY = re.compile(r"\b(dummy|test|testing|sample|fake|placeholder|example|random|any)\b", re.I)
-
-LOOP_NOTE = (
-    "\n⚠️ Going in circles: your last clicks keep switching between the same pages ({}). More clicking "
-    "won't help. Check the page open NOW: if it already does what the user asked (the page they named is "
-    "open, or its menu item shows (current)/(selected)), call done and say what's there – even if it's not "
-    "what you expected. Otherwise call plan with a corrected done_when, or ask_user."
-)
-LOOP_ASK = ("I kept going back and forth between {} without finishing. The page open now is \"{}\". "
-            "Is that what you wanted, or what should I do next?")
-NEW_SITE = ("\n[New site: {}] Check your plan still fits this site. If not, call plan with the fixed "
-            "steps (keep ✔ on finished ones).")
-SAME_READ = ("You already read this – the text is exactly the same as last time. Don't read it again: "
-             "save what you need with note, or if it's not there, note \"not found\" and move on with your plan.")
-WRONG_PRODUCT = (
-    "NOT saved: the user asked for {} but your note doesn't say it, so this may be a different product "
-    "(iPhone 16 is not iPhone 16e; Sponsored results are often other models). Check the product name on "
-    "the page. Find the right product, or if this really is it, call note again with its full name."
-)
-PRODUCT_REJECTED = (
-    "REJECTED – not sent to the user. The user asked for {} but your answer doesn't say it. Check each "
-    "price is for exactly that product (e.g. iPhone 17e or 16 is not 16e), then call done again naming "
-    "the exact product (model + storage) for each price."
-)
-WRONG_PAGE = ("\n⚠️ This page's title doesn't mention {} – it may be a different product than the user "
-              "asked for. Check the product name before using any price from it.")
 SAME_PLAN = "That's the same plan you already have – no need to repeat it. Continue with the next step."
-STUCK_NOTE = (
-    "\nWarning: the last 5 steps made no progress (only scrolling, switching or clicking without "
-    "the page changing). Stop wandering: find_text(\"...\") to jump straight to specific "
-    "information anywhere on the page, read_text to see what's on screen, try a different "
-    "element, or call ask_user."
-)
-UNNOTED_READ = (
-    "\n(The text you read before this was dropped – you didn't note anything from it. If you "
-    "still need it, note facts right after reading them next time.)"
-)
-
-
-def clean_text_reply(text):
-    """The model sometimes writes done({...}) / ask_user({...}) as plain text. Pull out the message.
-
-    Returns (kind, message, clear) where kind is "done" or "ask", and clear is False when the text
-    is just free text (could be nonsense from a weak model).
-    """
-    text = (text or "").strip()
-    # Forms seen: done({"summary": ...}), ask_user({"question": ...}), a bare {"summary": ...},
-    # {"done": {"summary": ...}}, {"name": "done", "arguments": {...}} – sometimes cut off before the
-    # last brace, or inside ```json fences.
-    match = re.search(r"\b(?:done|ask_user)\s*\(\s*(\{.*\})\s*\)", text, re.DOTALL)
-    candidate = match.group(1) if match else re.sub(r"^```(?:json)?\s*|\s*```$", "", text)
-    if candidate.startswith("{"):
-        try:
-            args = json.loads(candidate)
-        except json.JSONDecodeError:
-            args = None
-        while isinstance(args, dict) and "summary" not in args and "question" not in args:
-            inner = args.get("done") or args.get("ask_user") or args.get("arguments") or args.get("parameters")
-            if isinstance(inner, str):
-                try:
-                    inner = json.loads(inner)
-                except json.JSONDecodeError:
-                    inner = None
-            args = inner
-        if isinstance(args, dict):
-            if "question" in args:
-                return "ask", str(args["question"]), True
-            if "summary" in args:
-                return "done", str(args["summary"]), True
-        # Broken JSON (e.g. a missing closing brace): pull the field out directly.
-        for field, kind in (("question", "ask"), ("summary", "done")):
-            if found := re.search(rf'"{field}"\s*:\s*"((?:[^"\\]|\\.)*)"', candidate):
-                try:
-                    return kind, json.loads(f'"{found.group(1)}"'), True
-                except json.JSONDecodeError:
-                    return kind, found.group(1), True
-    return "done", text or "Done.", False
-
-
-_NUMBER = re.compile(r"\d[\d,]*(?:\.\d+)?")
-
-
-def missing_words(task, text):
-    """Model words from the task (letters + digits: 16e, s24, 256gb) that the text doesn't mention."""
-    flat = re.sub(r"[^a-z0-9]", "", text.lower())  # "256 GB", "Apple-iPhone-17e" -> "256gb", "appleiphone17e"
-    words = {w for w in re.findall(r"[a-z0-9]+", task.lower()) if re.search(r"\d", w) and re.search(r"[a-z]", w)}
-    return sorted(w for w in words if w not in flat)
-
-
-def missing_models(task, note):
-    """Model words missing from a note or answer that has a price – a sign the price is for a
-    different product."""
-    return missing_words(task, note) if re.search(r"\d{3}|₹|\$", note) else []
-
-
-def joined_pages(seen):
-    """Everything read this task, as one string, thousands separators stripped (so ₹69,900
-    matches 69900)."""
-    return re.sub(r"(?<=\d),(?=\d)", "", "\n".join(seen))
-
-
-def is_seen(number, pages):
-    """Is `number` (plain digits, no thousands separators) really in `pages` – not just a
-    fragment of a bigger number (so "900" doesn't match inside "69900")."""
-    return bool(re.search(rf"(?<![\d.]){re.escape(str(number))}(?![\d])", pages))
-
-
-def unverified_numbers(text, seen):
-    """Numbers with 3+ digits in `text` (prices, years…) that appear nowhere in `seen`.
-    Thousands separators are ignored, so ₹69,900 matches 69900."""
-    pages = joined_pages(seen)
-    missing = []
-    for raw in _NUMBER.findall(text or ""):
-        number = raw.replace(",", "").rstrip(".")
-        if sum(c.isdigit() for c in number) < 3 or raw in missing:
-            continue
-        if not is_seen(number, pages):
-            missing.append(raw.rstrip(".,"))
-    return missing
-
-
-# A derived number (a count/total/difference computed from numbers actually read) is let through
-# the fact check if the summary SHOWS the arithmetic and every number it used was really seen –
-# instead of requiring the result itself to appear verbatim, which a calculation never will.
-_TOKEN = re.compile(r"\d[\d,]*(?:\.\d+)?|[+\-*/()=×]")
-_SAFE_OPS = {ast.Add: lambda a, b: a + b, ast.Sub: lambda a, b: a - b,
-             ast.Mult: lambda a, b: a * b, ast.Div: lambda a, b: a / b if b else None}
-
-
-def _tokens(chunk):
-    """`chunk` reduced to just its numbers and + - * / ( ) = × (dropping words between them, e.g.
-    "12 pages × 20 rows + 17 on the last page = 257" reads as "12 × 20 + 17 = 257") – joined with
-    spaces, not glued together, so two numbers with only a dropped word between them (no real
-    operator) fail to parse as arithmetic instead of silently becoming one wrong number."""
-    return " ".join(_TOKEN.findall(chunk))
-
-
-def _candidate_expressions(text):
-    """Where the summary most likely shows its working: inside parentheses (the shape the prompt
-    asks for, and naturally self-contained even next to an earlier bare mention of the same
-    number, e.g. "There are 257 users (12 × 20 + 17 = 257)."), or – with no parentheses – a whole
-    sentence, so "12 × 20 + 17 = 257 users total." still works on its own."""
-    text = text or ""
-    for group in re.findall(r"\(([^()]*)\)", text):
-        tokens = _tokens(group)
-        if tokens:
-            yield tokens
-    for sentence in re.split(r"(?<=[.!?])\s+|\n+", re.sub(r"\([^()]*\)", " ", text)):
-        tokens = _tokens(sentence)
-        if tokens:
-            yield tokens
-
-
-def _safe_eval(expr):
-    """Evaluate a plain arithmetic expression (digits, + - * / and parens only; no eval()/exec())
-    and return (value, operands), or None if it isn't valid simple arithmetic."""
-    expr = expr.replace(",", "").replace("×", "*").strip()
-    if not expr or not re.fullmatch(r"[\d.\s+\-*/()]+", expr):
-        return None
-    try:
-        tree = ast.parse(expr, mode="eval")
-    except SyntaxError:
-        return None
-    operands = []
-
-    def ev(node):
-        if isinstance(node, ast.Expression):
-            return ev(node.body)
-        if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
-            operands.append(node.value)
-            return node.value
-        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
-            value = ev(node.operand)
-            return None if value is None else -value
-        if isinstance(node, ast.BinOp) and type(node.op) in _SAFE_OPS:
-            left, right = ev(node.left), ev(node.right)
-            return None if left is None or right is None else _SAFE_OPS[type(node.op)](left, right)
-        return None  # anything else (a name, a call, …) – not plain arithmetic, reject
-
-    value = ev(tree)
-    return (value, operands) if value is not None else None
-
-
-def explained_by_calculation(raw_number, text, seen):
-    """True if `raw_number` is the result of arithmetic shown in `text`, using only numbers that
-    were actually seen this task."""
-    target = float(raw_number.replace(",", ""))
-    pages = joined_pages(seen)
-    for expr in _candidate_expressions(text):
-        result = _safe_eval(expr.split("=")[0])
-        if not result:
-            continue
-        value, operands = result
-        if abs(value - target) > 0.01:
-            continue
-        if all(is_seen(int(o) if float(o).is_integer() else o, pages) for o in operands):
-            return True
-    return False
-
-
-def unexplained_numbers(text, seen):
-    """unverified_numbers(), minus any that the summary itself derives (and shows the working for)
-    from numbers that were really seen – e.g. a page-count × page-size total."""
-    return [n for n in unverified_numbers(text, seen) if not explained_by_calculation(n, text, seen)]
-
-
-# Proper-noun-ish phrases: quoted text, or 2+ consecutive Capitalized Words (product/brand names).
-_PHRASE = re.compile(r'"([^"]{3,60})"|\b[A-Z][\w&-]*(?:\s+[A-Z][\w&-]*)+\b')
-PHRASE_STOPWORDS = {
-    "the", "and", "for", "with", "your", "you", "this", "that", "add", "cart", "page", "shop",
-    "task", "plan", "notes", "current", "elements", "click", "done", "yes", "no",
-}
-
-
-def unverified_phrases(text, seen):
-    """Proper-noun-ish phrases in `text` whose significant words don't all appear anywhere in
-    `seen`. A token-level match (not exact substring, unlike unverified_numbers) so rewording
-    doesn't false-positive, but an outright invented product/brand name still gets caught."""
-    pages = "\n".join(seen).lower()
-    missing = []
-    for match in _PHRASE.finditer(text or ""):
-        phrase = (match.group(1) or match.group(0)).strip()
-        words = [w for w in re.findall(r"[A-Za-z]+", phrase.lower()) if len(w) > 2 and w not in PHRASE_STOPWORDS]
-        if words and not all(w in pages for w in words) and phrase not in missing:
-            missing.append(phrase)
-    return missing
-
-
 NUDGE = (
     "Reminder: reply by calling one operation. If the task is finished, call done with a summary; "
     "if you need something from the user, call ask_user."
 )
 
 
-def describe(name, args):
-    """Readable step text for the side panel, e.g. 'click [12]'."""
-    match name:
-        case "open_url": return f"🌐 Open {args.get('url')}"
-        case "click" | "click_at":
-            where = (f"cell {args['cell']}" if args.get("cell") else f"[{args.get('element')}]") if name == "click" \
-                else f"at ({args.get('x')}, {args.get('y')})"
-            count = str(args.get("count") or 1)
-            word = "Right-click" if args.get("button") == "right" else {"2": "Double-click", "3": "Triple-click"}.get(count, "Click")
-            return f"🖱️ {word} {where}"
-        case "drag":
-            a = f"[{args['from_element']}]" if args.get("from_element") is not None else f"({args.get('from_x')}, {args.get('from_y')})"
-            b = f"[{args['to_element']}]" if args.get("to_element") is not None else f"({args.get('to_x')}, {args.get('to_y')})"
-            return f"✋ Drag {a} → {b}"
-        case "hover": return f"👆 Hover over [{args.get('element')}]"
-        case "type":
-            enter = " + Enter" if args.get("submit") else ""
-            return f"⌨️ Type \"{args.get('text')}\" into [{args.get('element')}]{enter}"
-        case "press_key":
-            times = f" × {args.get('repeat')}" if str(args.get("repeat") or 1) not in ("1", "0") else ""
-            return f"⌨️ Press {args.get('key')}{times}"
-        case "type_here": return f"⌨️ Type \"{args.get('text')}\" where the cursor is"
-        case "go_to_cell": return f"📍 Go to cell {args.get('cell')}"
-        case "read_cells": return f"📊 Read cells {args.get('cells')}"
-        case "scroll":
-            where = f" the box at [{args['element']}]" if args.get("element") is not None else ""
-            return f"↕️ Scroll{where} {args.get('direction')}"
-        case "select_option": return f"📋 Choose \"{args.get('option')}\" in [{args.get('element')}]"
-        case "new_tab": return f"🗂️ New tab: {args.get('url')}"
-        case "switch_tab": return f"🗂️ Switch to tab {args.get('tab')}"
-        case "close_tab": return f"🗂️ Close tab {args.get('tab')}"
-        case "go_back": return "⬅️ Go back"
-        case "reload": return "🔄 Reload"
-        case "wait": return f"⏳ Wait {args.get('seconds')}s"
-        case "get_page_info" | "get_elements": return "👀 Look at the page"
-        case "find_elements": return f"🔎 Looking for \"{args.get('query')}\""
-        case "find_text": return f"🔎 Searching the page for \"{args.get('query')}\""
-        case "read_text": return "📖 Read the whole page" if args.get("scope") == "page" else "📖 Read the screen"
-        case "inspect": return f"🔍 Looking closer at [{args['ref']}]" if args.get("ref") else "🔍 Looking at the page structure"
-        case "sheet_query": return f"📊 Ask the sheet: {args.get('sql')}"
-        case _: return f"{name} {args}"
-
-
-class Agent:
+class Agent(ToolsMixin, GuardrailsMixin, ContextMixin, MemoryMixin, OutputMixin):
     """One agent per side-panel connection. Keeps the chat so follow-ups work."""
 
     def __init__(self, browser, ui, confirm, plan_review, client=""):
@@ -614,18 +68,10 @@ class Agent:
         self.browser = browser  # async (name, args) -> str, raises on failure
         self.confirm = confirm  # async (text) -> bool: ask the user Allow / Block
         self.plan_review = plan_review  # async (steps) -> (action, steps): Approve / Update / Reject a plan
-        self.elements = ""  # latest numbered element list, used by the safety check
-        self.open_list = None  # the open custom dropdown list in the latest view (pageview.View.open_list)
-        self.form = None  # the form being filled in the latest view (pageview.View.form)
-        self.unrestricted = False  # the side panel's Unrestricted switch, as of the latest page view
-        self.submit_guarded = set()  # (form name, empty fields) a Save click was already refused for
-        self.view_text = ""  # the latest page view as the AI reads it (structured lines with field hints)
-        self.form_edit = None  # {url, name}: a form Krify started filling and hasn't submitted yet
-        self.leave_warned = set()  # steps that would leave that form, refused once already
+        self.state = TaskState()  # the task in progress and the page it's on (agent/state.py)
         # Sheets-only tools are sent only once a Google Sheet has been open (then always, since the
         # chat history may hold calls to them, and a call to a tool not sent is rejected by the API).
         self.sheet_tools = False
-        self.last_typed_line = ""
         self.dev_mode = False  # debug trace (tools used + what they found) appended to the answer
         self.trace = []  # this task's trace, built only while dev_mode is on
 
@@ -636,8 +82,6 @@ class Agent:
             await ui(kind, text)
 
         self.task_id = None  # database id of the running task
-        self.product_text = ""  # the user's own words, for the wrong-product checks
-        self.current_title = ""
         self.location = None  # where the user is, sent by the side panel with each task
         self.model = None  # model the task is currently using
 
@@ -646,372 +90,17 @@ class Agent:
         self.page_views = []  # (message, text_before_page_view) – trimmed later to save tokens
         self.last_page = None
         self.screen_reads = {}  # site -> its newest read_text result (older ones are trimmed)
-        self.notes_at_last_read = 0  # len(self.notes) as of the last screen read – for the unnoted-read nudge
+        self.notes_at_last_read = 0  # len(state.notes) as of the last screen read – for the unnoted-read nudge
         self.screenshot_msgs = []  # messages holding a screenshot – dropped when the page changes
         self.tokens = 0
-        # Per task: shown to the AI at every step so it keeps the goal in view.
-        self.task_text = ""
-        self.goal = ""
-        self.done_when = ""
-        self.plan = []
-        self.sites = set()  # sites seen this task – a new one triggers a plan check
         self.last_task = ""  # previous task, so the planner understands follow-ups
         self.last_status = ""  # how the previous task ended ("ask" = the next message is an answer)
-        self.plan_approved = False  # has the user signed off on the current self.plan?
-        self.trail = []  # (page key, title) after each action that changed the page – loop detection
-        self.loop_warnings = 0
-        self.loop_question = ""
-        self.notes = []
-        self.seen = []  # everything read from pages this task – used by the fact check
-        self.fact_check_failed = False
-        self.filter_check_failed = False
-        self.claim_check_failed = False
-        self.handoff_check_failed = False
-        self.actions = []  # (op, args, result) that really ran – checked against "I have …" claims
-        self.turn_start = 0  # len(self.actions) when the user's latest message came in
-        self.page_status = ""  # the page's own [Status] line as of the last page view
-        self.ui_check_failed = False
-
-    def header(self):
-        """'[Your task] … [Your plan] … [Your notes] …' – sent with every page view."""
-        lines = [f"[Your task] {self.task_text}"]
-        if self.goal:
-            lines.append(f"[Goal] {self.goal}")
-        if self.plan:
-            lines.append("[Your plan] " + " | ".join(f"{i}. {s}" for i, s in enumerate(self.plan, 1)))
-        if self.notes:
-            lines.append("[Your notes] " + " | ".join(self.notes))
-        if self.done_when:
-            lines.append(f"[Done when] {self.done_when}")
-        return "\n".join(lines)
-
-    def check_facts(self, summary):
-        """Fact check before 'done': every number (3+ digits) and proper-noun-ish name in the
-        answer must have appeared on a page Krify read this task, or (for a number) be arithmetic
-        shown in the summary over numbers that were; a priced answer must also name the product
-        asked for (16e, 256gb). Returns a rejection message, or None if the answer may go out."""
-        if (models := missing_models(self.product_text, summary)) and not self.product_check_failed:
-            self.product_check_failed = True
-            return PRODUCT_REJECTED.format(", ".join(models))
-        numbers = unexplained_numbers(summary, self.seen)
-        phrases = unverified_phrases(summary, self.seen)
-        if not numbers and not phrases:
-            return None
-        if self.fact_check_failed:  # second time: let it through, but tell the user honestly
-            return None
-        self.fact_check_failed = True
-        parts = []
-        if numbers:
-            parts.append(f"numbers ({', '.join(numbers)})")
-        if phrases:
-            parts.append(f"names ({', '.join(phrases)})")
-        return (
-            f"REJECTED – not sent to the user. These {' and '.join(parts)} in your answer were not seen on any "
-            "page you read (and aren't arithmetic shown over numbers that were). Use read_text to find the real "
-            "values, report only what you actually saw or correctly computed from it (no guesses or made-up "
-            "names), then call done again."
-        )
-
-    def check_claims(self, text):
-        """Before an answer or question goes out: every "I have entered / clicked / submitted …" in it
-        must match an action that really ran in this task (a named value – a number, a quoted text –
-        must be what was typed). Rejects once; the second time it goes out. → message or None."""
-        if self.claim_check_failed:
-            return None
-        problems = unbacked_claims(text, self.actions)
-        if not problems:
-            return None
-        self.claim_check_failed = True
-        return CLAIM_REJECTED.format("; ".join(problems))
-
-    def check_handoff(self, question):
-        """Before a question goes out: is Krify telling the user to do a browser step ("please sign in",
-        "click …", "go to …") it could do itself – without having done anything since their last message?
-        Asking for a password / OTP / captcha is fine: only the user knows those. Rejects once."""
-        if self.handoff_check_failed or len(self.actions) > self.turn_start:
-            return None
-        if not HANDOFF.search(question) or USER_ONLY.search(question):
-            return None
-        self.handoff_check_failed = True
-        sign_in = next((line for line in (self.elements or "").splitlines()
-                        if re.match(r"^\[\d+\] ", line) and re.search(r"sign ?in|log ?in", line, re.I)), "")
-        hint = f" The sign-in link is on this page: {sign_in} – click it." if sign_in else ""
-        return HANDOFF_REJECTED.format(hint)
-
-    def filter_dropdowns(self):
-        """Dropdowns on the page outside the form being filled – list filters such as
-        '[16] "My Activities"' (at most 4)."""
-        in_form = {str(f.get("id")) for f in (self.form or {}).get("fields") or []}
-        found = [f'[{n}] "{label}"' for n, label in _DROPDOWN_LINE.findall(self.elements or "") if n not in in_form]
-        return found[:4]
-
-    def check_filters(self, summary):
-        """Before a 'not found' answer: reject once if the page has filter dropdowns and none was
-        changed this task – the rows may just be filtered out ("My Activities" hid Geetha's)."""
-        if self.filter_check_failed or not NOT_FOUND.search(summary or ""):
-            return None
-        filters = self.filter_dropdowns()
-        if not filters or any(op == "select_option" for op, _, _ in self.actions):
-            return None
-        self.filter_check_failed = True
-        return FILTER_CHECK.format(", ".join(filters))
-
-    def check_ui_state(self):
-        """UI check before 'done': reject once if the page is showing a status/error message
-        (see content.js's [Status] line), so the model can't declare success while the page is
-        still complaining. Returns a rejection message, or None if the answer may go out."""
-        if not self.page_status or self.ui_check_failed:
-            return None
-        self.ui_check_failed = True
-        return (
-            f"REJECTED – not sent to the user. The page is showing: \"{self.page_status}\". Make sure this "
-            "isn't an error before calling done – read it, fix the problem, or call ask_user."
-        )
-
-    def reset(self):
-        self.messages = self.messages[:1]
-        self.page_views = []
-        self.last_page = None
-        self.screen_reads = {}
-        self.screenshot_msgs = []
-        self.last_task = self.last_status = ""
-        self.notes_at_last_read = 0
-
-    def add_screen_read(self, message, text):
-        """Keep the newest screen text of each site in full (at most MAX_READ_SITES sites), so a
-        price read on one site is still there while on the next – the AI often forgets to note it."""
-        site = site_of(self.current_url) or "this page"
-        if self.screen_reads and len(self.notes) == self.notes_at_last_read:
-            text = f"{text}{UNNOTED_READ}"  # the previous read is about to be dropped, unnoted
-        old = self.screen_reads.pop(site, None)
-        if old:
-            old["content"] = OLD_SCREEN
-        while len(self.screen_reads) >= MAX_READ_SITES:  # dicts keep order: drop the oldest site
-            self.screen_reads.pop(next(iter(self.screen_reads)))["content"] = OLD_SCREEN
-        message["content"] = f"[Read from {site}]\n{text}"
-        self.messages.append(message)
-        self.screen_reads[site] = message
-        self.notes_at_last_read = len(self.notes)
-
-    def check_repeat(self, name, args, page_changed):
-        """Repeat detector: the same action 3 times within the last 6 steps, with the page never
-        changing (e.g. clicking one spot over and over). Positions within 20px count as the same."""
-        clean = {k: (round(v / 20) if k in ("x", "y", "from_x", "from_y", "to_x", "to_y") and isinstance(v, (int, float))
-                     else v) for k, v in args.items() if not k.startswith("_")}
-        sig = f"{name} {json.dumps(clean, sort_keys=True, default=str)}"
-        if page_changed:
-            self.recent_steps = []
-        self.recent_steps = (self.recent_steps + [sig])[-6:]
-        if self.recent_steps.count(sig) >= 3:
-            self.recent_steps = []
-            return REPEAT_NOTE
-        return ""
-
-    def scroll_key(self, args):
-        """Scrolls are counted per page (and separately for a scrollable box on it)."""
-        return self.current_url + (" box" if args.get("element") is not None else "")
-
-    def scrolled(self, args, page):
-        """After a scroll: did it show anything not seen on this page before? (At the bottom, or going
-        back and forth, it didn't – those count toward the idle-scroll limit.)"""
-        done = self.scrolls.get(self.scroll_key(args))
-        if done is None:
-            return
-        view = hash(page)  # the whole view: its scroll position and on/off-screen markers change as it moves
-        seen = done.setdefault("views", set())
-        done["idle"] = done["idle"] + 1 if view in seen else 0
-        seen.add(view)
-
-    def page_key(self, page):
-        """A page's identity for loop detection: URL + which elements it has (typed values, ticks and
-        states left out – so filling a form doesn't count as a different page)."""
-        if STRUCTURED_VIEW:  # the whole page's labels: the same wherever it's scrolled to
-            return hash((self.current_url, frozenset(re.findall(r'^\[\d+\] ([^"\n]*"[^"\n]*")', self.elements or "", re.M))))
-        return hash((self.current_url, layout(page)))
-
-    def start_trail(self, page):
-        self.trail = [(self.page_key(page), self.current_title)]
-        self.loop_warnings = 0
-        self.loop_question = ""  # set when it's still looping after a warning: stop and ask the user
-
-    def check_loop(self, page, changed):
-        """After an action. → (new_page, warning). new_page is False when the action led BACK to a
-        page seen a few actions ago – that's not progress (it hid going back and forth from the stuck
-        and repeat detectors, which only asked "did the page change?"). The warning is given when the
-        recent pages repeat in a cycle (A→B→A→B, or A→B→C→A→B→C); the 2nd time, loop_question is set."""
-        key = self.page_key(page)
-        if self.dev_mode and self.trace and changed:
-            self.trace[-1] += f' → "{self.current_title}"'
-        if key == self.trail[-1][0]:  # same page (maybe a ticked box or typed text): not a revisit
-            return changed, ""
-        revisit = any(k == key for k, _ in self.trail[-LOOP_TRAIL:])
-        self.trail = (self.trail + [(key, self.current_title)])[-2 * LOOP_TRAIL:]
-        keys = [k for k, _ in self.trail]
-        for period in (2, 3):
-            if len(keys) >= 2 * period and keys[-period:] == keys[-2 * period:-period]:
-                titles = list(dict.fromkeys(t or "untitled" for _, t in self.trail[-period:]))
-                where = " ↔ ".join(f'"{t}"' for t in titles) if len(titles) > 1 else f'"{titles[0]}" (the same few screens)'
-                self.trail = self.trail[-1:]  # a fresh start: it takes another full cycle to warn again
-                self.loop_warnings += 1
-                if self.loop_warnings >= 2:
-                    self.loop_question = LOOP_ASK.format(where, self.current_title or self.current_url)
-                return False, LOOP_NOTE.format(where)
-        return not revisit, ""
 
     async def stop_looping(self):
         """Still going in circles after a warning: stop and ask the user instead of burning steps."""
-        question, self.loop_question = self.loop_question, ""
+        question, self.state.loop_question = self.state.loop_question, ""
         await self.ui("step", "🔁 Going in circles – stopping to ask you")
         await self.finish("ask", question)
-
-    def check_progress(self, name, page_changed):
-        """Stuck detector: count steps that don't move the task forward."""
-        progress = name in PROGRESS_OPS or (
-            name in ("click", "click_at", "drag", "hover", "press_key", "go_back", "screenshot", "scroll") and page_changed
-        )
-        self.idle_steps = 0 if progress else self.idle_steps + 1
-        if self.idle_steps >= IDLE_LIMIT:
-            self.idle_steps = 0
-            return STUCK_NOTE
-        return ""
-
-    def close_open_calls(self):
-        """After Stop, answer any tool calls left open, so the next request is valid."""
-        answered = set()
-        for msg in reversed(self.messages):
-            if msg.get("role") == "tool":
-                answered.add(msg.get("tool_call_id"))
-            elif msg.get("role") == "assistant":
-                for call in msg.get("tool_calls") or []:
-                    if call["id"] not in answered:
-                        self.messages.append({"role": "tool", "tool_call_id": call["id"], "content": "Stopped by the user."})
-                break
-
-    async def look(self):
-        """Read the page and render the view the AI gets, WITHOUT touching any agent state – so the
-        side panel's "AI view" button can show it any time. → (view text, page info, flat element
-        list, status line, hint, the bare view without hint/header lines, the open dropdown list
-        (field name, [option labels]) or None, the form checklist or None, Unrestricted on?).
-        Structured (sections → items → elements, see pageview.py) or the old flat element list,
-        depending on STRUCTURED_VIEW."""
-        info = await self.browser("get_page_info", {})
-        open_list = form = None
-        full = False
-        if STRUCTURED_VIEW:
-            view = pageview.render(await self.browser("get_page_model", {}))
-            elements, shown, status, hint = view.flat, view.text, view.status, view.hint
-            open_list, form, full = view.open_list, view.form, view.full
-        else:
-            elements = shown = await self.browser("get_elements", {})
-            status = match.group(1) if (match := _STATUS_LINE.search(elements)) else ""
-            hint = ambiguity_hint(elements)
-        # The page view lists only elements (and item titles); plain text – paragraphs, a table with
-        # nothing clickable, a record's detail fields – is otherwise only read with read_text. In
-        # Unrestricted mode it's sent too, uncut. Not on Sheets: their text is a canvas, read as CSV.
-        text = f"{shown}\n{hint}" if hint else shown
-        if full and not is_sheet(info.get("url", "")):
-            page_text = await self.browser_quiet("read_text", {"scope": "page"})
-            if isinstance(page_text, str) and page_text.strip() and not page_text.startswith("(no text"):
-                shown += PAGE_TEXT.format(page_text)  # counts as read for the fact check
-                text += PAGE_TEXT.format(page_text)
-        if is_sheet(info.get("url", "")):
-            text = f"{SHEET_HINT}\n{text}"
-        tabs = f"[Tabs] {info['tabs']}\n" if info.get("tabs") else ""
-        text = f"{tabs}[Current page] {info.get('title')} – {info.get('url')}\n{text}"
-        return text, info, elements, status, hint, shown, open_list, form, full
-
-    async def page_view(self):
-        """The page view for the next message, recording what the safety/fact checks need."""
-        try:
-            (text, info, elements, self.page_status, hint, shown, self.open_list, self.form,
-             self.unrestricted) = await self.look()
-        except Exception as err:
-            return f"[Current page] (can't read it: {err})"
-        # The safety and fact checks get the flat list of EVERY collected element, never just the
-        # shortened view; item lines (titles, prices) count as read for the fact check.
-        if STRUCTURED_VIEW:
-            self.seen.append(shown)
-        self.elements = elements
-        self.view_text = text
-        self.seen.append(elements)
-        self.current_url = info.get("url", "")
-        self.current_title = str(info.get("title") or "")
-        if hint:
-            self.boost_next = True
-        return text
-
-    def drop_screenshots(self):
-        """Replace older screenshots with a short note: they cost tokens and need a vision model."""
-        for msg in self.screenshot_msgs:
-            msg["content"] = OLD_SCREENSHOT
-        self.screenshot_msgs = []
-
-    async def add_screenshot(self, tool_msg):
-        """Take a screenshot (with element numbers drawn on it) and attach it for the AI."""
-        if not has_vision_model():
-            self.messages.append({**tool_msg, "content": "Screenshots aren't available (no model that can see images)."})
-            return
-        result = await self.safe_run("screenshot", {})
-        if not str(result).startswith("data:image/"):
-            self.messages.append({**tool_msg, "content": f"Couldn't take a screenshot: {result}"})
-            return
-        self.drop_screenshots()
-        self.shot_size = image_size(result)
-        size = "{}×{}".format(*self.shot_size) if self.shot_size else "1024 wide"
-        # Tool results must be text for most providers, so the image goes in a user message after it.
-        self.messages.append({**tool_msg, "content": "Screenshot taken – it's in the next message."})
-        image_msg = {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": f"Screenshot of the current screen, {size} pixels (click_at uses these "
-                                         "pixels, x from the left, y from the top). Numbers in boxes = element numbers."},
-                {"type": "image_url", "image_url": {"url": result}},
-            ],
-        }
-        self.messages.append(image_msg)
-        self.screenshot_msgs.append(image_msg)
-
-    def add_with_page(self, message, text, page):
-        """Add a message that ends with a page view. Only the newest page view is kept in full."""
-        if page != self.last_page:
-            self.drop_screenshots()  # the screen changed, so the old picture is out of date
-        if page == self.last_page:  # nothing changed: don't send the same list again
-            message["content"] = f"{text}\n\n{self.header()}\n[Page unchanged since the last view.]"
-            self.messages.append(message)
-            return
-        site = site_of(self.current_url)
-        if site and site not in self.sites:
-            if self.plan and self.sites:  # the first site was known when planning
-                text += NEW_SITE.format(site)
-            self.sites.add(site)
-        for old_msg, old_text in self.page_views:
-            old_msg["content"] = old_text + OLD_PAGE
-        message["content"] = f"{text}\n\n{self.header()}\n{page}"
-        self.messages.append(message)
-        self.page_views = [(message, text)]
-        self.last_page = page
-
-    async def finish(self, kind, text):
-        """Send the final message, with how many tokens the task used, and save the result."""
-        log.info("Task used %d tokens", self.tokens)
-        if kind == "done":
-            if missing := unexplained_numbers(text, self.seen):
-                text = f"{text}\n⚠️ Krify couldn't confirm these numbers on the pages it read: {', '.join(missing)}"
-            if missing := unverified_phrases(text, self.seen):
-                text = f"{text}\n⚠️ Krify couldn't confirm these names on the pages it read: {', '.join(missing)}"
-        self.end_task(kind, text)
-        if self.dev_mode and self.trace:
-            steps = "\n".join(f"{i}. {t}" for i, t in enumerate(self.trace, 1))
-            text = f"{text}\n\n🔍 Debug trace:\n{steps}"
-        if kind == "done":
-            text = f"{text}\n· used {self.tokens / 1000:.1f}k tokens"
-        await self.ui(kind, text)
-
-    def end_task(self, status, summary):
-        """Save how the task ended (done / ask / stopped / error) in the history."""
-        self.last_status = status
-        if self.task_id:
-            history.finish_task(self.task_id, status, summary, self.tokens, self.model)
 
     async def run(self, task, model, location=None):
         self.location = location
@@ -1019,63 +108,32 @@ class Agent:
         self.messages[0]["content"] = f"{system_prompt()}\n\n{where}" if where else system_prompt()
         # The user's message may answer the agent's ask_user: then carry on with the same task.
         continuing = self.last_status == "ask"
-        if continuing:  # same task: keep the goal, plan, notes and what was read so far
-            self.product_text = f"{self.product_text} {task}"
-            self.task_text = f"{self.task_text}\n(You asked the user; they answered: {task})"
-            self.seen.append(task)
-        else:
-            self.product_text = task
-            self.task_text, self.notes, self.sites = task, [], set()
-            self.goal, self.plan, self.done_when = "", [], ""
-            self.plan_approved = False
-            self.actions = []
-            self.seen = [task]  # numbers the user gave count as known
-            self.form_edit, self.leave_warned = None, set()
-        self.idle_steps = 0
+        self.state.start(task, continuing)
         self.tokens = 0
         self.trace = []
         self.model = model
         self.task_id = history.start_task(task, model, self.client)
-        self.last_read = ""  # newest read_text result, to catch reading the same text again
-        self.note_warnings = set()  # wrong-product warnings already given (the 2nd try is saved)
-        self.product_check_failed = False  # final answer sent back once for not naming the product
-        self.fact_check_failed = False
-        self.filter_check_failed = False
-        self.claim_check_failed = False
-        self.handoff_check_failed = False
-        self.turn_start = len(self.actions)
-        self.page_status = ""
-        self.ui_check_failed = False
         self.notes_at_last_read = 0
-        self.current_url = ""
-        self.scrolls = {}  # url (+ " box") -> {"total", "idle" (scrolls that showed nothing new), "views" seen}
-        self.edit_allowed = False  # the user allowed editing a Google Sheet/Doc in this task
-        self.form, self.submit_guarded = None, set()
-        self.recent_steps = []  # for the repeat detector
-        self.shot_size = None  # (width, height) of the last screenshot
-        self.shot_page = None  # the page when the last screenshot was taken
-        self.last_cell = ""
-        self.boost_next = True  # the first reply (interpreting the raw task) gets more thought
         nudged = False
         empty_replies = 0
         page = await self.page_view()
-        self.start_trail(page)
+        start_trail(self.state, page)
         if not continuing:
             await self.make_plan(task, page, model)
-        self.last_task = self.task_text
+        self.last_task = self.state.task_text
         self.add_with_page({"role": "user"}, task, page)
 
         for step in range(MAX_STEPS):
             if MAX_STEPS - step == WRAP_UP_AT:
                 await self.ui("step", "⏰ Few steps left – asking Krify to wrap up")
                 self.messages.append({"role": "user", "content": WRAP_UP})
-            self.sheet_tools = self.sheet_tools or is_sheet(self.current_url)
+            self.sheet_tools = self.sheet_tools or is_sheet(self.state.current_url)
             tools = TOOLS if self.sheet_tools else [t for t in TOOLS if t["function"]["name"] not in SHEET_ONLY_TOOLS]
             reply, used_model, tokens = await ask_ai(
                 self.messages, tools, model, on_note=lambda t: self.ui("step", t),
-                need_vision=bool(self.screenshot_msgs), boost=self.boost_next,
+                need_vision=bool(self.screenshot_msgs), boost=self.state.boost_next,
             )
-            self.boost_next = False
+            self.state.boost_next = False
             self.tokens += tokens
             if used_model != model:
                 model = used_model  # keep using the model that still has free quota
@@ -1105,15 +163,15 @@ class Agent:
                 if not clear and text.lstrip().startswith(("{", "[", "```")):
                     # Still unreadable JSON after the nudge: never show raw JSON to the user.
                     text = "I finished, but my answer came out garbled. Please ask again."
-                if kind == "done" and (rejection := self.check_ui_state()):
+                if kind == "done" and (rejection := check_ui_state(self.state)):
                     await self.ui("step", "🔍 Checking the page isn't showing an error before finishing")
                     self.messages.append({"role": "user", "content": rejection})
                     continue
-                if kind == "done" and (rejection := self.check_filters(text)):
+                if kind == "done" and (rejection := check_filters(self.state, text)):
                     await self.ui("step", "🔍 The list may be filtered – asking Krify to check the filters first")
                     self.messages.append({"role": "user", "content": rejection})
                     continue
-                if kind == "done" and (rejection := self.check_facts(text)):
+                if kind == "done" and (rejection := check_facts(self.state, text)):
                     await self.ui("step", "🔍 Fact check: answer sent back to be checked")
                     self.messages.append({"role": "user", "content": rejection})
                     continue
@@ -1139,7 +197,7 @@ class Agent:
             actions_done = 0
             batch_stopped = ""  # why the rest of the batch is skipped
             prev_page = self.last_page
-            seen = self.elements  # the element list the AI saw when it sent these calls
+            seen = self.state.elements  # the element list the AI saw when it sent these calls
             for i, call in enumerate(calls):
                 name = call.function.name
                 tool_msg = {"role": "tool", "tool_call_id": call.id}
@@ -1150,48 +208,48 @@ class Agent:
 
                 if finished:
                     self.messages.append({**tool_msg, "content": "Skipped."})
-                elif name in ACTION_OPS | {"batch", "done"} and self.plan and not self.plan_approved:
+                elif name in ACTION_OPS | {"batch", "done"} and self.state.plan and not self.state.plan_approved:
                     self.messages.append({**tool_msg, "content": PLAN_NOT_APPROVED})
-                    self.check_progress(name, False)
+                    check_progress(self.state, name, False)
                 elif name in ACTION_OPS and batch_stopped:
                     self.messages.append({**tool_msg, "content": batch_stopped})
                 elif name == "done" and actions_done:
                     self.messages.append({**tool_msg, "content": DONE_TOO_EARLY})
                 elif name == "done":
                     summary = args.get("summary", "Done.")
-                    if rejection := self.check_ui_state():
+                    if rejection := check_ui_state(self.state):
                         await self.ui("step", "🔍 Checking the page isn't showing an error before finishing")
                         self.messages.append({**tool_msg, "content": rejection})
                         continue
-                    if rejection := self.check_claims(summary):
+                    if rejection := check_claims(self.state, summary):
                         await self.ui("step", "🔍 Claim check: Krify said it did something it didn't – sent back")
                         self.messages.append({**tool_msg, "content": rejection})
                         continue
-                    if rejection := self.check_filters(summary):
+                    if rejection := check_filters(self.state, summary):
                         await self.ui("step", "🔍 The list may be filtered – asking Krify to check the filters first")
                         self.messages.append({**tool_msg, "content": rejection})
                         continue
-                    if rejection := self.check_facts(summary):
+                    if rejection := check_facts(self.state, summary):
                         await self.ui("step", "🔍 Fact check: answer sent back to be checked")
                         self.messages.append({**tool_msg, "content": rejection})
                         continue
                     self.messages.append({**tool_msg, "content": "Reported to the user."})
                     await self.finish("done", summary)
                     finished = True
-                elif (name == "plan" and [str(s) for s in (args.get("steps") or [])][:8] == self.plan
+                elif (name == "plan" and [str(s) for s in (args.get("steps") or [])][:8] == self.state.plan
                       and not str(args.get("done_when") or "").strip()):
                     self.messages.append({**tool_msg, "content": SAME_PLAN})
                 elif name == "plan":
                     steps = [str(s) for s in (args.get("steps") or [])][:8]
                     if done_when := str(args.get("done_when") or "").strip():
                         # The site turned out different from what the first plan assumed.
-                        self.done_when = done_when[:200]
-                    if not self.plan_approved:
+                        self.state.done_when = done_when[:200]
+                    if not self.state.plan_approved:
                         decision, edited = await self.plan_review(steps)
-                        self.plan = edited
-                        shown = "\n".join(f"{i}. {s}" for i, s in enumerate(self.plan, 1))
+                        self.state.plan = edited
+                        shown = "\n".join(f"{i}. {s}" for i, s in enumerate(self.state.plan, 1))
                         if decision == "approve":
-                            self.plan_approved = True
+                            self.state.plan_approved = True
                             await self.ui("step", f"✅ Plan approved:\n{shown}")
                             self.messages.append({**tool_msg, "content": f"Plan approved by the user:\n{shown}\nProceed with it."})
                         elif decision == "reject":
@@ -1205,18 +263,18 @@ class Agent:
                                                         "if needed, and call plan again to re-propose it."}
                             )
                     else:
-                        title = "📋 Plan updated:" if self.plan else "📋 Plan:"
-                        self.plan = steps
-                        await self.ui("step", f"{title}\n" + "\n".join(f"{i}. {s}" for i, s in enumerate(self.plan, 1)))
+                        title = "📋 Plan updated:" if self.state.plan else "📋 Plan:"
+                        self.state.plan = steps
+                        await self.ui("step", f"{title}\n" + "\n".join(f"{i}. {s}" for i, s in enumerate(self.state.plan, 1)))
                         self.messages.append(
                             {**tool_msg, "content": "Plan saved – you'll see it at every step. Call plan again to "
                                                     "update it; start finished steps with ✔."}
                         )
-                    self.check_progress(name, False)
-                elif name == "ask_user" and (rejection := self.check_claims(str(args.get("question", "")))):
+                    check_progress(self.state, name, False)
+                elif name == "ask_user" and (rejection := check_claims(self.state, str(args.get("question", "")))):
                     await self.ui("step", "🔍 Claim check: Krify said it did something it didn't – sent back")
                     self.messages.append({**tool_msg, "content": rejection})
-                elif name == "ask_user" and (rejection := self.check_handoff(str(args.get("question", "")))):
+                elif name == "ask_user" and (rejection := check_handoff(self.state, str(args.get("question", "")))):
                     await self.ui("step", "🔍 Krify asked you to do a step it can do itself – sent back")
                     self.messages.append({**tool_msg, "content": rejection})
                 elif name == "ask_user":
@@ -1226,23 +284,23 @@ class Agent:
                 elif name == "screenshot":
                     await self.ui("step", "📸 Screenshot")
                     await self.add_screenshot(tool_msg)
-                    self.check_progress(name, self.last_page != self.shot_page)
-                    self.shot_page = self.last_page
+                    check_progress(self.state, name, self.last_page != self.state.shot_page)
+                    self.state.shot_page = self.last_page
                 elif name == "note":
                     text = str(args.get("text", ""))
-                    missing = missing_models(self.product_text, text)
-                    if missing and tuple(missing) not in self.note_warnings:
+                    missing = missing_models(self.state.product_text, text)
+                    if missing and tuple(missing) not in self.state.note_warnings:
                         # e.g. the task says "iPhone 16e" but the note says "iPhone 16" (a sponsored result).
-                        self.note_warnings.add(tuple(missing))
+                        self.state.note_warnings.add(tuple(missing))
                         await self.ui("step", f"🔍 Note doesn't mention {', '.join(missing)} – checking the product")
                         self.messages.append({**tool_msg, "content": WRONG_PRODUCT.format(", ".join(missing))})
                     else:
                         await self.ui("step", f"📝 {text}")
-                        self.notes.append(text[:200])
+                        self.state.notes.append(text[:200])
                         self.messages.append({**tool_msg, "content": "Saved."})
-                    self.check_progress(name, False)
+                    check_progress(self.state, name, False)
                 elif name in READ_OPS:
-                    on_sheet = name in SHEET_OPS | {"read_text"} and is_sheet(self.current_url)
+                    on_sheet = name in SHEET_OPS | {"read_text"} and is_sheet(self.state.current_url)
                     label = "📊 Read the sheet" if on_sheet and name == "read_text" else describe(name, args)
                     await self.ui("step", label)
                     if on_sheet:
@@ -1252,24 +310,24 @@ class Agent:
                     else:
                         result = await self.safe_run(name, args)
                     if name == "inspect" and args.get("ref") is not None and re.search(
-                            rf'^\[{re.escape(str(args["ref"]))}\] (dropdown|select) ', self.elements or "", re.M):
+                            rf'^\[{re.escape(str(args["ref"]))}\] (dropdown|select) ', self.state.elements or "", re.M):
                         # A closed dropdown's choices aren't on the page: inspecting it can't show them.
                         result = (f"{result}\n[{args['ref']}] is a dropdown: its choices exist only while it's open, so "
                                   f"inspect can't show them. Use select_option(element={args['ref']}, option=<the choice "
                                   "you want>) – it opens, searches and picks; a miss lists the real choices.")
                     if (name in ("find_text", "find_elements") and str(result).startswith(("(no text", "(no elements"))
-                            and (filters := self.filter_dropdowns())):
+                            and (filters := filter_dropdowns(self.state))):
                         result = f"{result}{FILTER_HINT.format(', '.join(filters))}"
-                    same_read = name == "read_text" and str(result) == self.last_read
-                    stuck = self.check_progress("same_read" if same_read else name, False)
-                    self.seen.append(str(result))
+                    same_read = name == "read_text" and str(result) == self.state.last_read
+                    stuck = check_progress(self.state, "same_read" if same_read else name, False)
+                    self.state.seen.append(str(result))
                     if self.dev_mode:
                         self.trace.append(f"{label} → {preview(str(result))}")
                     if name == "get_elements":
-                        self.elements = str(result)
+                        self.state.elements = str(result)
                         self.add_with_page(tool_msg, "Elements:", result)
                     elif name == "find_elements":
-                        self.elements = merge_elements(self.elements, str(result))
+                        self.state.elements = merge_elements(self.state.elements, str(result))
                         self.messages.append({**tool_msg, "content": str(result)})
                     elif same_read:
                         # Reading the same unchanged text again (seen 6× in a row on Amazon): say so.
@@ -1281,30 +339,30 @@ class Agent:
                         self.add_with_page(tool_msg, f"{result}\n(Save facts you'll need later with note.)", page)
                     elif name in ("read_text", "find_text"):
                         if name == "read_text":
-                            self.last_read = str(result)
-                            if not on_sheet and (models := missing_words(self.product_text, f"{self.current_title} {self.current_url}")):
+                            self.state.last_read = str(result)
+                            if not on_sheet and (models := missing_words(self.state.product_text, f"{self.state.current_title} {self.state.current_url}")):
                                 result = f"{result}{WRONG_PAGE.format(', '.join(models))}"
                         self.add_screen_read(tool_msg, f"{result}\n(Save facts you'll need later with note.)")
                     else:
                         self.messages.append({**tool_msg, "content": str(result)})
                     if name in ("find_elements", "inspect"):
-                        self.boost_next = True  # it already flagged this page as unclear – help it decide
+                        self.state.boost_next = True  # it already flagged this page as unclear – help it decide
                 elif name == "batch":
                     actions_done += await self.run_batch(tool_msg, args.get("steps"))
-                    if self.loop_question:
+                    if self.state.loop_question:
                         await self.stop_looping()
                         finished = True
                 else:
-                    label = element_label(self.elements, args.get("element"))  # before: numbers may change
+                    label = element_label(self.state.elements, args.get("element"))  # before: numbers may change
                     # Remember the page before a click, to tell the AI plainly whether it worked.
-                    before = (self.current_url, self.elements)
-                    open_list = self.open_list  # a dropdown list open before the click: did it get a choice?
-                    clicked = safety.element_line(self.elements, args.get("element")) if name == "click" else ""
+                    before = (self.state.current_url, self.state.elements)
+                    open_list = self.state.open_list  # a dropdown list open before the click: did it get a choice?
+                    clicked = safety.element_line(self.state.elements, args.get("element")) if name == "click" else ""
                     # Later steps of a batch are checked against the view the AI sent them from.
                     result, status = await self.do_action(name, args, seen=seen if actions_done else None)
                     if status != "ok":
                         self.messages.append({**tool_msg, "content": result})
-                        self.check_progress(name, False)
+                        check_progress(self.state, name, False)
                         batch_stopped = ("Skipped: an earlier step was blocked by the user." if status == "blocked"
                                          else BATCH_REFUSED)
                         continue
@@ -1312,28 +370,28 @@ class Agent:
                     failed = result.startswith("Error")
                     page = await self.page_view()
                     if name in ("click", "click_at") and not failed:
-                        if sentence := click_result(before, (self.current_url, self.elements), clicked, self.current_title,
+                        if sentence := click_result(before, (self.state.current_url, self.state.elements), clicked, self.state.current_title,
                                                      open_list):
                             log.info("  told the AI: %s", sentence)
                             result = f"{result}\n{sentence}"
-                    if (name == "click" and not failed and before[0] != self.current_url and not self.page_status
-                            and opened_what_asked(self.task_text, clicked)):
+                    if (name == "click" and not failed and before[0] != self.state.current_url and not self.state.page_status
+                            and opened_what_asked(self.state.task_text, clicked)):
                         # "open agents" + clicked "Agents" + a new page opened: that was the whole task.
                         # Asking the AI again only made it doubt and click around (6 extra steps on Asana).
-                        opened = self.current_title or self.current_url
-                        self.seen.append(opened)
+                        opened = self.state.current_title or self.state.current_url
+                        self.state.seen.append(opened)
                         self.messages.append({**tool_msg, "content": f"{result}\nThe task is finished."})
                         await self.finish("done", f"Done – the page \"{opened}\" is open.")
                         finished = True
                         continue
                     changed = page != prev_page
                     # Going back to a page from a few actions ago isn't progress (A→B→A→B loops).
-                    new_page, loop_note = self.check_loop(page, changed)
+                    new_page, loop_note = check_loop(self.state, page, changed, self.dev_mode, self.trace)
                     if name == "scroll":
-                        self.scrolled(args, page)
-                    result = (f"{result}{form_not_sent(name, args, label, self.page_status)}"
-                              f"{self.check_progress(name, new_page)}"
-                              f"{self.check_repeat(name, args, new_page)}{loop_note}")
+                        scrolled(self.state, args, page)
+                    result = (f"{result}{form_not_sent(name, args, label, self.state.page_status)}"
+                              f"{check_progress(self.state, name, new_page)}"
+                              f"{check_repeat(self.state, name, args, new_page)}{loop_note}")
                     more = any(c.function.name in ACTION_OPS for c in calls[i + 1:])
                     later = [_args_of(c) for c in calls[i + 1:] if c.function.name in ACTION_OPS]
                     moved = failed or (layout(page) != layout(prev_page) and any(uses_element(a) for a in later))
@@ -1345,7 +403,7 @@ class Agent:
                         batch_stopped = BATCH_LIMIT if actions_done >= MAX_BATCH else (STEP_FAILED if failed else PAGE_MOVED)
                     # Show the AI the page after the last action, so it can check the result.
                     self.add_with_page(tool_msg, result, page)
-                    if self.loop_question:
+                    if self.state.loop_question:
                         await self.stop_looping()
                         finished = True
 
@@ -1353,357 +411,9 @@ class Agent:
                 return
 
         # Never end empty-handed: report what was found so far.
-        found = "\n".join(f"• {n}" for n in self.notes) or "• nothing confirmed yet"
+        found = "\n".join(f"• {n}" for n in self.state.notes) or "• nothing confirmed yet"
         await self.finish(
             "done",
             f"Stopped after {MAX_STEPS} steps (safety limit). What Krify found so far:\n{found}\n"
             "Try a simpler or more specific task for the rest.",
         )
-
-    async def make_plan(self, task, page, model):
-        """Plan from the AI's own knowledge before the first action. It never asks the user anything:
-        questions come later from the agent, once it has seen the real options on a site."""
-        result, tokens = await understand(task, page, self.last_task, model, self.location, on_note=lambda t: self.ui("step", t))
-        self.tokens += tokens
-        if not result:
-            return
-        self.goal, self.plan, self.done_when = result["goal"], result["steps"], result["done_when"]
-        steps = "\n".join(f"{i}. {s}" for i, s in enumerate(self.plan, 1))
-        await self.ui("step", f"🎯 Goal: {self.goal}\n📋 Plan:\n{steps}")
-
-    async def ask_permission(self, reason, name, args):
-        """Show Allow / Block in the side panel. Returns True only if the user allows."""
-        line = safety.element_line(self.elements, args.get("element"))
-        what = describe(name, args) + (f" – {line}" if line else "")
-        if name == "type_here" and self.last_cell:
-            what += f" (cell {self.last_cell})"
-        allowed = await self.confirm(f"{reason}: {what}")
-        await self.ui("step", "✅ Allowed by you" if allowed else "⛔ Blocked")
-        return allowed
-
-    async def do_action(self, name, args, seen=None):
-        """One browser action, with the safety check and the scroll limit.
-        seen: for the 2nd+ step of a batch, the element list the AI sent the batch from (its numbers
-        are checked against that view, not just the newest one).
-        Returns (result text, status): status "ok", "blocked" (by the user) or "refused" (scroll limit)."""
-        label = describe(name, args)
-        # Say WHAT was clicked, not just its number: "Click [24] · link "People"" (numbers change per page).
-        target = next((args[f] for f in ELEMENT_FIELDS if args.get(f) is not None), None)
-        if target is not None and (line := safety.element_line(self.elements, target)):
-            label += f" · {line if len(line) <= 70 else line[:70] + '…'}"
-        await self.ui("step", label)
-        if self.dev_mode:
-            self.trace.append(label)
-
-        # Typing into a sheet over cells that already hold data: always ask, showing what would be lost.
-        if name == "type_here" and is_sheet(self.current_url):
-            in_the_way, empty_row = await self.cells_in_the_way(str(args.get("text", "")))
-            if in_the_way:
-                keep = f" Block to keep them (Krify will use the first empty row, {empty_row}, instead)." if empty_row else ""
-                allowed = await self.confirm(f"⚠️ Overwriting: {in_the_way}.{keep}")
-                await self.ui("step", "✅ Allowed by you" if allowed else "⛔ Blocked")
-                if not allowed:
-                    return OVERWRITE_BLOCKED.format(in_the_way, empty_row or "last _row + 1"), "blocked"
-                self.edit_allowed = True  # they saw exactly what changes
-
-        # Safety check runs in code: risky actions always need the user's OK.
-        if name == "click_at" and self.shot_size:  # a spot outside the picture is a misread position
-            w, h = self.shot_size
-            try:
-                x, y = float(args.get("x")), float(args.get("y"))
-            except (TypeError, ValueError):
-                x = y = -1
-            if not (0 <= x <= w and 0 <= y <= h):
-                return (f"NOT clicked: ({args.get('x')}, {args.get('y')}) is outside the screenshot, which is "
-                        f"{w}×{h} pixels. Use pixel positions on the picture."), "refused"
-        if name == "click_at":  # no element number: check what's under the spot
-            under = await self.safe_run("element_at", {"x": args.get("x"), "y": args.get("y")})
-            if str(under).startswith("Error"):
-                return str(under), "refused"
-            args = {**args, "_under": str(under)}
-        for field in ELEMENT_FIELDS:  # the page may have changed since the model looked – check first
-            element_id = args.get(field)
-            if element_id is None:
-                continue
-            expected = safety.element_line(self.elements, element_id)
-            if seen is not None:  # a later step of a batch: was this number in the view it was sent from?
-                composed = safety.element_line(seen, element_id)
-                if not composed:
-                    return NOT_IN_VIEW.format(element_id), "refused"
-                if expected and _line_key(composed) != _line_key(expected):
-                    return CHANGED_IN_BATCH.format(element_id, _line_key(expected), _line_key(composed)), "refused"
-            if not expected:
-                continue  # nothing recorded to compare against – not our problem to flag
-            live = str(await self.safe_run("describe_element", {"element": element_id}))
-            if live != expected:
-                now = f', now "{live}"' if live else ", now gone"
-                return (f'NOT done: [{element_id}] has changed since you looked (expected "{expected}"{now}) '
-                        "– get the elements again."), "refused"
-            if field == "element" and (refusal := self.wrong_element(element_id, args.get("label"))):
-                await self.ui("step", f"🔢 [{element_id}] isn't \"{args.get('label')}\" any more – sent back")
-                return refusal, "refused"
-        if leaving := await self.leave_guard(name, args):
-            return leaving
-        # Enter sends whatever form the field is in: look at that form's own button (e.g. "Place order").
-        if (name == "press_key" and str(args.get("key", "")).strip().lower() == "enter") or (name == "type" and args.get("submit")):
-            target = await self.browser_quiet("enter_target", {"element": args.get("element") if name == "type" else None})
-            if isinstance(target, dict):
-                args = {**args, "_enter": target}
-        if refusal := self.required_empty(name, args):
-            await self.ui("step", "📝 Required fields still empty – filling those first")
-            return refusal, "refused"
-        reason = safety.check(name, args, self.elements, self.last_typed_line, self.current_url)
-        if reason == "Editing" and self.edit_allowed:
-            reason = None  # editing this document was already allowed in this task
-        if reason and not await self.ask_permission(reason, name, args):
-            return BLOCKED, "blocked"
-        if reason == "Editing":
-            self.edit_allowed = True
-        if name == "go_to_cell":
-            self.last_cell = str(args.get("cell", ""))
-
-        if name == "scroll":
-            # Scrolling a box (embedded page, chat list) has its own limit, apart from the page's.
-            key = self.scroll_key(args)
-            done = self.scrolls.setdefault(key, {"total": 0, "idle": 0})
-            why = (f"the last {done['idle']} scrolls on this page showed nothing new." if done["idle"] >= MAX_IDLE_SCROLLS
-                   else f"you already scrolled this page {done['total']} times." if done["total"] >= MAX_SCROLLS_PER_PAGE else "")
-            if why:
-                await self.ui("step", "🛑 Scroll limit for this page – deciding with what was found")
-                return SCROLL_REFUSED.format(why), "refused"
-            done["total"] += 1
-            done.setdefault("views", set()).add(hash(self.last_page))  # where it scrolls from counts as seen
-
-        if name == "type":
-            self.last_typed_line = safety.element_line(self.elements, args.get("element"))
-        result = str(await self.safe_run(name, args))
-        if not result.startswith("Error"):
-            self.actions.append((name, {k: v for k, v in args.items() if not k.startswith("_")}, result))
-            self.track_form_edit(name, args)
-        return result, "ok"
-
-    def element_names(self, element_id):
-        """What [n] is in the latest view: its flat line, its structured line (with the field's visible
-        label as a hint) and, for a form field, the [Form] checklist's label and value."""
-        names = []
-        if line := safety.element_line(self.elements, element_id):
-            names.append(line)
-        try:
-            n = int(element_id)
-        except (TypeError, ValueError):
-            return names
-        if match := re.search(rf"^\s*\[{n}\] (.*)$", self.view_text or "", re.M):
-            names.append(match.group(1))
-        for f in (self.form or {}).get("fields") or []:
-            if str(f.get("id")) == str(n):
-                names.append(f'"{f.get("label", "")}" "{f.get("value", "")}"')
-        return names
-
-    def wrong_element(self, element_id, label):
-        """The refusal when the AI's label for [n] doesn't fit what [n] is now ('' if it fits, or if
-        either is unknown). Names the number(s) that do carry that label now, if any."""
-        label = str(label or "").strip()
-        names = self.element_names(element_id)
-        if not label or not names or label_matches(label, names):
-            return ""
-        now = [m.group(1) for m in re.finditer(r'^\[(\d+)\] [^\n]*$', self.elements or "", re.M)
-               if label_matches(label, [m.group(0)[len(m.group(1)) + 3:]])]
-        if now:
-            hint = f" (\"{label}\" is {', '.join(f'[{i}]' for i in now[:3])} now)"
-        else:
-            hint = (" – it isn't on the page now. A dropdown's options exist only while it's open: use select_option "
-                    "with the dropdown field and the option's text")
-        line = safety.element_line(self.elements, element_id)
-        return WRONG_ELEMENT.format(id=element_id, line=_line_key(line) or line, label=label, hint=hint)
-
-    def track_form_edit(self, name, args):
-        """Remember that Krify has started filling the form in view (typed into / chose in one of its
-        fields), so a click that would leave it is caught; forget it once the form is submitted.
-        self.form is still the view from before this action."""
-        form = self.form
-        if not form:
-            return
-        el = str(args.get("element"))
-        submits = {str(i) for i in form.get("submits") or []}
-        submitted = ((name == "click" and (el in submits or (not submits and SUBMIT_WORDS.search(
-                         element_label(self.elements, el) or ""))))
-                     or (name == "type" and args.get("submit"))
-                     or (name == "press_key" and str(args.get("key", "")).strip().lower() == "enter"))
-        if submitted:
-            self.form_edit, self.leave_warned = None, set()
-            return
-        kinds = {str(f.get("id")): f.get("kind") for f in form.get("fields") or []}
-        # Clicked one of an open list's options, or ticked a checkbox/radio (opening a dropdown isn't filling it).
-        picked = name == "click" and self.open_list is not None and element_label(self.elements, el) in self.open_list[1]
-        ticked = name == "click" and kinds.get(el) == "choice"
-        if (name in ("type", "select_option") and el in kinds) or picked or ticked:
-            self.form_edit = {"url": self.current_url, "name": form.get("name", "")}
-
-    async def leave_guard(self, name, args):
-        """A step that would leave a form Krify has started filling (a sidebar/header link or other
-        link outside it, open_url, back, reload): refused once with an explanation – usually the AI
-        used a stale number. Sent again: the user decides (Allow/Block).
-        → (refusal text, status) or None to go ahead."""
-        edit, form = self.form_edit, self.form
-        if not edit:
-            return None
-        if edit["url"] != self.current_url or not form:
-            self.form_edit = None  # that form is gone (saved, closed or left already)
-            return None
-        if name == "click" and args.get("element") is not None and not args.get("cell"):
-            where = await self.browser_quiet("leave_check", {"element": args["element"]})
-            if not (isinstance(where, dict) and where.get("form") and not where.get("inside") and where.get("navigates")):
-                return None
-            line = safety.element_line(self.elements, args["element"])
-            what = f"[{args['element']}] {_line_key(line)}".strip()
-        elif name in ("open_url", "go_back", "reload"):
-            what = {"open_url": f"opening {args.get('url')}", "go_back": "going back", "reload": "reloading"}[name]
-            what = what[0].upper() + what[1:]
-        else:
-            return None
-        key = (name, str(args.get("element") if args.get("element") is not None else args.get("url", "")))
-        if key not in self.leave_warned:
-            self.leave_warned.add(key)
-            await self.ui("step", "📝 That would leave the unsaved form – sent back")
-            filled = [f'{f.get("label") or "[" + str(f.get("id")) + "]"} = "{f.get("value")}"'
-                      for f in form.get("fields") or [] if f.get("filled") and f.get("value")]
-            filled_text = f" ({', '.join(filled[:4])}{' …' if len(filled) > 4 else ''})" if filled else ""
-            submits = [f"[{i}] \"{element_label(self.elements, i)}\"" for i in form.get("submits") or []]
-            return LEAVE_FORM.format(what=what, name=f' "{form["name"]}"' if form.get("name") else "",
-                                     filled=filled_text, submit=f" with {submits[0]}" if submits else ""), "refused"
-        if await self.ask_permission("Leaves a form Krify filled in without saving it", name, args):
-            return None
-        return BLOCKED, "blocked"
-
-    def required_empty(self, name, args):
-        """Refuse (once) a click on the form's Save/Submit button while the [Form] checklist still
-        shows required fields empty. → the refusal text, or '' to let the click through."""
-        form = self.form
-        if name != "click" or not form or str(args.get("element")) not in {str(i) for i in form.get("submits") or []}:
-            return ""
-        missing = pageview.missing_required(form)
-        key = (form.get("name", ""), tuple(missing))
-        if not missing or key in self.submit_guarded:
-            return ""
-        self.submit_guarded.add(key)
-        return REQUIRED_EMPTY.format(", ".join(missing), FILL_ANY if DUMMY.search(self.task_text) else ASK_ONCE)
-
-    async def run_batch(self, tool_msg, steps):
-        """The batch tool: several actions in a row, the page shown once at the end. Stops at a
-        blocked or failed step, or when the page changes (element numbers may have moved).
-        Returns how many actions ran."""
-        steps = [s for s in (steps or []) if isinstance(s, dict)]
-        count = min(len(steps), MAX_BATCH)
-        await self.ui("step", f"📦 {count} step{'s' if count != 1 else ''} at once")
-        report, page, prev, ran = [], None, self.last_page, 0
-        seen = self.elements  # the element list the AI saw when it sent the batch
-        for n, step in enumerate(steps[:MAX_BATCH], 1):
-            op = step.get("op")
-            args = {k: v for k, v in step.items() if k != "op"}
-            if op not in ACTION_OPS:
-                report.append(f"{n}. '{op}' can't be used in batch – stopped here.")
-                break
-            label = element_label(self.elements, args.get("element"))
-            before, open_list = (self.current_url, self.elements), self.open_list
-            clicked = safety.element_line(self.elements, args.get("element")) if op == "click" else ""
-            result, status = await self.do_action(op, args, seen=seen if ran else None)
-            if status != "ok":
-                report.append(f"{n}. {result}")
-                break
-            ran += 1
-            page = await self.page_view()
-            if op in ("click", "click_at") and not result.startswith("Error"):
-                if sentence := click_result(before, (self.current_url, self.elements), clicked,
-                                            self.current_title, open_list):
-                    log.info("  told the AI: %s", sentence)
-                    result = f"{result}\n{sentence}"
-            if not_sent := form_not_sent(op, args, label, self.page_status):
-                report.append(f"{n}. {result}{not_sent} – stopped here.")
-                break
-            new_page, loop_note = self.check_loop(page, page != prev)
-            if op == "scroll":
-                self.scrolled(args, page)
-            self.check_progress(op, new_page)
-            if loop_note:
-                report.append(f"{n}. {result}{loop_note} – stopped here.")
-                break
-            if result.startswith("Error"):
-                report.append(f"{n}. {describe(op, args)} FAILED: {result} – stopped here.")
-                break
-            report.append(f"{n}. {result} ✓")
-            moved = layout(page) != layout(prev) and any(uses_element(s) for s in steps[n:MAX_BATCH])
-            prev = page
-            if moved and n < len(steps):
-                report.append("Stopped: the page changed, so the remaining steps were skipped.")
-                break
-        else:
-            if len(steps) > MAX_BATCH:
-                report.append("Only the first 5 steps were done.")
-        if not steps:
-            report.append("No steps given.")
-        self.add_with_page(tool_msg, "\n".join(report), page or await self.page_view())
-        return ran
-
-    async def cells_in_the_way(self, typed):
-        """What typing `typed` at the selected cell would overwrite, as text for the user
-        ('A125 = 'STU2026124', B125 = 'Rahul', …', or '' if all those cells are empty), and the
-        sheet's first empty row (None if unknown)."""
-        try:
-            live = await self.browser("sheet_active_cell", {})
-            start = str(live.get("cell", "")).upper().split(":")[0]
-            data = await self.browser("sheet_csv", {})
-            found = sheets.filled_cells(data["csv"], start, typed)
-            empty_row = sheets.first_empty_row(data["csv"])
-        except Exception as err:
-            log.warning("Couldn't check the cells before typing: %s", err)
-            return "couldn't check whether these cells are empty – they may hold data", None
-        if not found:
-            return "", empty_row
-        shown = ", ".join(f"{ref} = {value!r}" for ref, value in found[:6])
-        return shown + (f" (+{len(found) - 6} more cells)" if len(found) > 6 else ""), empty_row
-
-    async def live_cell(self, ref):
-        """One cell that's selected right now: read it from the formula bar – instant, and right
-        even before Google has saved. None if it can't be read that way (then the sheet is downloaded)."""
-        ref = ref.strip().upper().replace("$", "")
-        if not ref or ":" in ref:
-            return None
-        try:
-            live = await self.browser("sheet_active_cell", {})
-        except Exception:
-            return None
-        formula = live.get("formula") if isinstance(live, dict) else None
-        if formula is None or str(live.get("cell", "")).upper() != ref or formula.startswith("="):
-            return None  # another cell is selected, or a formula (its result is in the download)
-        return f"{ref}: {formula!r} (live, from the formula bar)" if formula else f"{ref}: (empty) (live)"
-
-    async def sheet_op(self, name, args):
-        """Google Sheets: the extension downloads the sheet as CSV, DuckDB answers here."""
-        if name == "read_cells" and (live := await self.live_cell(str(args.get("cells", "")))):
-            return live
-        data = await self.safe_run("sheet_csv", {})
-        if not isinstance(data, dict):
-            return data  # an "Error: …" text
-        try:
-            if name == "read_text":
-                return sheets.summary(data.get("csv", ""), data.get("title", ""), data.get("tab", ""))
-            if name == "read_cells":
-                return sheets.cells(data.get("csv", ""), str(args.get("cells", "")), self.unrestricted)
-            return sheets.query(data.get("csv", ""), args.get("sql", ""), self.unrestricted)
-        except Exception as err:
-            await self.ui("step", f"⚠️ {err}")
-            return f"Error: {err}"
-
-    async def browser_quiet(self, name, args):
-        """A browser call whose failure doesn't matter (None instead of an error step in the panel)."""
-        try:
-            return await self.browser(name, args)
-        except Exception:
-            return None
-
-    async def safe_run(self, name, args):
-        try:
-            return await self.browser(name, args)
-        except Exception as err:
-            await self.ui("step", f"⚠️ {err}")
-            return f"Error: {err}"

@@ -21,7 +21,7 @@ If a model hits its limit, Krify waits or switches to another free model.
 
 ## 1. SEE
 
-Code: [extension/content.js](../extension/content.js)
+Code: [extension/context/content.js](../extension/context/content.js)
 
 ### What it can see
 
@@ -56,7 +56,7 @@ Code: [extension/content.js](../extension/content.js)
 
 ## 2. DECIDE
 
-Code: [backend/app/agent/loop.py](../backend/app/agent/loop.py), [prompt.py](../backend/app/agent/prompt.py), [tools.py](../backend/app/agent/tools.py)
+Code: [backend/app/agent/loop.py](../backend/app/agent/loop.py), [prompt.py](../backend/app/context/prompt.py), [schemas.py](../backend/app/tools/schemas.py)
 
 ### What it uses to decide
 
@@ -100,7 +100,7 @@ It replies with **one action**, or a **batch of up to 5** when it's sure without
 
 ## 3. ACT
 
-Code: [extension/sidepanel/operations.js](../extension/sidepanel/operations.js), [realinput.js](../extension/sidepanel/realinput.js), [extension/content.js](../extension/content.js)
+Code: [extension/tools/operations.js](../extension/tools/operations.js), [realinput.js](../extension/tools/realinput.js), [extension/context/content.js](../extension/context/content.js)
 
 ### How it acts
 
@@ -139,7 +139,7 @@ After every action it **waits for the page to load** (checks the tab every 0.3 s
 
 ## 4. CHECK
 
-Code: [backend/app/agent/loop.py](../backend/app/agent/loop.py), [safety.py](../backend/app/agent/safety.py)
+Code: [backend/app/agent/loop.py](../backend/app/agent/loop.py), [safety.py](../backend/app/guardrails/safety.py)
 
 ### How it checks
 

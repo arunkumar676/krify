@@ -1,5 +1,5 @@
 import { currentLocation, initLocation } from "./location.js";
-import { beginTask, resetTabs, runOperation, setWorking, showAgentTab, showMyTab } from "./operations.js";
+import { beginTask, resetTabs, runOperation, setWorking, showAgentTab, showMyTab } from "../tools/operations.js";
 
 // The Krify server: the shared office server by default. Each person can change it under
 // side panel → Server (e.g. 127.0.0.1 to use a server running on their own PC).

@@ -226,9 +226,9 @@ const ELEMENT_FNS = new Set(["click", "hover", "type", "pointAt", "spotOf", "hov
  *  world (it reads React dropdowns' options for content.js). The hook is optional: if it can't be
  *  injected, dropdowns just show their options after select_option has opened them. */
 async function injectKrify(target) {
-  await chrome.scripting.executeScript({ target, files: ["content.js"] });
+  await chrome.scripting.executeScript({ target, files: ["context/content.js"] });
   try {
-    await chrome.scripting.executeScript({ target, files: ["pagehook.js"], world: "MAIN" });
+    await chrome.scripting.executeScript({ target, files: ["context/pagehook.js"], world: "MAIN" });
   } catch {
     // ignore
   }

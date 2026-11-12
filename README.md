@@ -136,23 +136,26 @@ krify/
 │   │   ├── config.py        # providers, models, settings
 │   │   ├── db.py            # SQLite database: tasks, steps, usage, limits
 │   │   ├── history.py       # task history
-│   │   ├── sheets.py        # Google Sheets: CSV → DuckDB → answers
-│   │   ├── agent/
-│   │   │   ├── loop.py      # the agent loop
-│   │   │   ├── tools.py     # actions the AI can choose
-│   │   │   ├── prompt.py    # instructions for the AI
-│   │   │   └── safety.py    # what counts as risky
+│   │   ├── agent/           # the agent loop (loop.py) and per-task state (state.py)
+│   │   ├── context/         # what the AI sees: prompt, page view, planner
+│   │   ├── tools/           # the tools the AI can call, running them, Google Sheets (CSV → DuckDB)
+│   │   ├── guardrails/      # checks before a step runs: risky actions, stale numbers, forms, loops
+│   │   ├── verification/    # checks before an answer goes out: facts, claims, filters, page errors
+│   │   ├── memory/          # keeping the chat small (token trimming)
+│   │   ├── output/          # the final answer
 │   │   └── llm/
 │   │       ├── client.py    # AI providers + auto-switch
 │   │       └── usage.py     # tokens/requests per model per day
+│   ├── checks/              # refactor safety net: golden outputs + scripted replay (checks/run.py)
 │   ├── krify.db             # your local database (not in Git)
 │   ├── .env.example
 │   └── pyproject.toml
 ├── extension/
 │   ├── manifest.json
 │   ├── background.js        # opens the side panel
-│   ├── content.js           # runs in the page: reads it, acts, animations
-│   └── sidepanel/           # chat UI, model picker, history, Allow/Block, sheets.js, realinput.js
+│   ├── context/             # runs in the page: content.js (reads it, acts, animations), pagehook.js
+│   ├── tools/               # browser actions: operations.js, realinput.js, sheets.js
+│   └── sidepanel/           # chat UI, model picker, history, Allow/Block
 ├── README.md
 └── TODO.md                  # progress checklist
 ```

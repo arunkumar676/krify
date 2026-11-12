@@ -22,7 +22,17 @@ uv run python try_nlu.py "search for wireless mouse"  # same, one sentence
 ```
 There is no lint/format/test tooling configured (no ruff/pytest/etc. in `pyproject.toml`) and no
 test suite — verify backend changes with `try_nlu.py` or by running the real extension against the
-server.
+server. For changes that must NOT change behaviour (refactors, moving code between layers) there is a
+deterministic safety net, no LLM/browser/network needed:
+```bash
+uv run python checks/run.py --record   # on known-good code first: records checks/golden/ (gitignored)
+uv run python checks/run.py            # after the change: everything must be identical
+```
+It runs static checks (compile, `ruff --select F`, every module importable on its own, empty layer
+`__init__.py`s, every `self.X`/`state.X` a real attribute), the pageview CLI on every fixture + the
+system prompt + `TOOLS` (golden text), the pure helpers on a fixed input table (`checks/characterize.py`),
+and `checks/replay.py`: real `Agent.run()` with scripted model replies and a fake browser built on
+`fixtures/`, recording every side-panel event, browser call, AI request and state field.
 
 Extension (no build step — plain JS, ES modules):
 1. `chrome://extensions` → enable Developer mode → **Load unpacked** → select `extension/`.
@@ -50,6 +60,40 @@ the server sends `{"type": "run", "id", "name", "args"}` and *waits* on a `Futur
 until the extension replies with `{"type": "result", "id", "ok", "value"|"error"}`. `confirm`/
 `confirm_result` (Allow/Block prompts) work the same way with a separate id space.
 
+### Backend layers (`backend/app/`)
+
+The agent is split by what each part does; extension files mirror the same names where they apply.
+
+| Folder | What it holds |
+|---|---|
+| `agent/` | `loop.py`: `Agent` (`__init__`, `run()`'s dispatch, `stop_looping`); `state.py`: `TaskState` |
+| `context/` | what the AI sees: `prompt.py`, `pageview.py`, `understand.py` (planner), `view.py` (`look`/`page_view`/screenshots/`make_plan`), `header.py`, `element_list.py`, `sites.py` |
+| `tools/` | `schemas.py` (`TOOLS`), `ops.py` (op-name sets, batch rules), `describe.py`, `actions.py` (`do_action`, `run_batch`, sheet reads), `sheets.py` (CSV → DuckDB) |
+| `guardrails/` | before a step runs: `safety.py`, `element_match.py` (`wrong_element`), `forms.py` (`required_empty`, `track_form_edit`, `form_not_sent`), `permission.py` (`ask_permission`, `leave_guard`, `cells_in_the_way`), `progress.py` (stuck/repeat/loop detection, scroll limits) |
+| `verification/` | before an answer goes out: `facts.py`, `claims.py` (claims + handoff), `filters.py`, `ui_state.py`, `changes.py` (did a click work) |
+| `memory/` | `transcript.py`: token trimming of the chat (`add_with_page`, `add_screen_read`, `reset`, …) |
+| `output/` | `answer.py` (`finish`, `end_task`), `text_reply.py` (`clean_text_reply`) |
+
+`main.py`, `config.py`, `db.py`, `history.py` (task history for the side panel, never fed to the model) and
+`llm/` sit outside the layers.
+
+How the pieces fit:
+- **`TaskState`** (`agent/state.py`) holds everything about the task in progress and the page it's on
+  (`task_text`, `plan`, `notes`, `seen`, `actions`, the `*_check_failed` flags, `elements`, `form`, …).
+  `Agent.state` is created once and reset **in place** by `state.start(task, continuing)` at the start of
+  each `run()` – never replaced, because a message answering `ask_user` continues the same task (goal,
+  plan, notes, `seen`, `actions` kept). Connection-level things stay on `Agent`: callbacks (`browser`,
+  `ui`, `confirm`, `plan_review`), the chat (`messages`, `page_views`, `screen_reads`, `screenshot_msgs`),
+  `sheet_tools`, `dev_mode`, `trace`, `tokens`, `task_id`, `model`, `last_task`, `last_status`.
+- **Sync checks are plain functions over the state**: `check_facts(state, summary)`,
+  `wrong_element(state, n, label)`, `check_progress(state, name, changed)`, … – testable without an Agent.
+- **Methods that need the browser, the user or the chat are mixins** (`ToolsMixin`, `GuardrailsMixin`,
+  `ContextMixin`, `MemoryMixin`, `OutputMixin`), combined in `class Agent(...)`; they call each other through
+  `self`. Method names must be unique across them (checked by `checks/static.py`).
+- **Imports point one way**: layers never import `app.agent.loop`; layer `__init__.py` files stay empty
+  (a re-export can create an import cycle); `loop.py` must not `from app import tools` (`run()` has a
+  local `tools`).
+
 ### The agent loop (`backend/app/agent/loop.py`)
 
 One `Agent` instance per side-panel connection (so follow-up tasks share chat history). `Agent.run()`
@@ -58,61 +102,67 @@ the model replies with one or more tool calls → each call is dispatched (brows
 `plan`, `note`, `done`, `ask_user`, …) → the result (plus a fresh page view) is appended back into
 `messages` → repeat, up to `MAX_STEPS` (`config.py`, default 25).
 
-Key mechanics worth knowing before touching this file:
+Key mechanics worth knowing before touching the loop (they live in the layer modules named):
 - **Batching**: the model can send several `ACTION_OPS` tool calls in one reply (or use the explicit
-  `batch` tool), up to `MAX_BATCH` (5). The loop stops a batch early if the page's *layout* changed
-  (`layout()` strips typed values before comparing) and a later queued step references an element
-  number — because numbers may have shifted.
-- **Token trimming**: only the newest page view / screen read / screenshot is kept in full in
-  `messages`; older ones are replaced with a short placeholder (`OLD_PAGE`, `OLD_SCREEN`,
-  `OLD_SCREENSHOT`). `self.notes` (from the `note` tool) are what survive long-term and get
-  re-injected via `header()` on every page view.
-- **Stuck/repeat detection**: `check_progress` (5 non-progress steps → nudge) and `check_repeat`
+  `batch` tool, `run_batch` in `tools/actions.py`), up to `MAX_BATCH` (5). The loop stops a batch early if
+  the page's *layout* changed (`layout()` strips typed values before comparing) and a later queued step
+  references an element number — because numbers may have shifted.
+- **Token trimming** (`memory/transcript.py`): only the newest page view / screen read / screenshot is
+  kept in full in `messages`; older ones are replaced with a short placeholder (`OLD_PAGE`, `OLD_SCREEN`,
+  `OLD_SCREENSHOT`). `state.notes` (from the `note` tool) are what survive long-term and get
+  re-injected via `header()` (`context/header.py`) on every page view.
+- **Stuck/repeat detection** (`guardrails/progress.py`): `check_progress` (5 non-progress steps → nudge) and `check_repeat`
   (same op+args 3× in 6 steps with no page change → nudge) inject warning text into the tool result
   rather than failing — the model is expected to self-correct. `check_loop` keeps a short trail of
   page keys (URL + `layout()`): landing back on a page from a few actions ago isn't progress for
   either detector, a repeating cycle (A→B→A→B, A→B→C→A→B→C) gets `LOOP_NOTE`, and a second cycle
   in the same task ends it as an `ask` (`stop_looping()`) instead of burning steps.
 - **Element numbers are re-assigned every page view**, so actions on an element are checked before they
-  run (`do_action`): the model sends `label` (the element's quoted text) with each number and
-  `wrong_element()` refuses the step if [n] is something else now; later steps of a batch must
-  refer to numbers that were in the view the batch was sent from (`seen`); and once Krify has
-  typed/chosen in a form, `leave_guard()` refuses (then asks Allow/Block for) a link/nav click,
-  `open_url`, back or reload that would leave it unsaved (`leaveCheck` in `content.js`).
+  run (`do_action` in `tools/actions.py`): the model sends `label` (the element's quoted text) with each
+  number and `wrong_element()` (`guardrails/element_match.py`) refuses the step if [n] is something else
+  now; later steps of a batch must refer to numbers that were in the view the batch was sent from
+  (`seen`); and once Krify has typed/chosen in a form, `leave_guard()` (`guardrails/permission.py`)
+  refuses (then asks Allow/Block for) a link/nav click, `open_url`, back or reload that would leave it
+  unsaved (`leaveCheck` in `content.js`).
 - **Dropdowns**: `select_option` handles native `<select>` and custom dropdowns alike
   (`pickInCustomDropdown` in `content.js`): opens the field, finds its list (aria-controls, the open
   list, or whatever opening it added – portals too), types into its search box / scrolls a lazy list
   if needed, clicks the match and checks the field shows it. A miss returns the real option names.
   `describe()` calls a button/clickable with a down-chevron icon (or role=combobox /
   aria-haspopup=listbox) `dropdown "…"`: list filters like "My Activities" only show their current
-  choice. `filter_dropdowns()` in `loop.py` uses that to hint after an empty `find_text`/`find_elements`
-  and to send a "not found" answer back once (`check_filters`) if no filter was changed. A native
-  `<select>` line always lists its options. A custom dropdown's options are usually only in the DOM
-  while it's open, so `describe()` asks `extension/pagehook.js` – injected next to `content.js` in the
-  page's own JS world (`world: "MAIN"`, `injectKrify()` in `operations.js`) – over a synchronous
+  choice. `filter_dropdowns()` in `verification/filters.py` uses that to hint after an empty
+  `find_text`/`find_elements` and to send a "not found" answer back once (`check_filters`) if no filter
+  was changed. A native `<select>` line always lists its options. A custom dropdown's options are usually
+  only in the DOM while it's open, so `describe()` asks `extension/context/pagehook.js` – injected next to
+  `content.js` in the page's own JS world (`world: "MAIN"`, `injectKrify()` in `extension/tools/operations.js`) – over a synchronous
   `krify:options` / `krify:options-result` event pair; it reads the owning React component's
   `options`/`items` prop (current fiber, ≤3 components up) without opening anything. Non-React sites
   fall back to the options `pickInCustomDropdown` saw when it last opened that dropdown (`seenOptions`).
   Either way the line reads `dropdown "…" (options: a, b, …, +N more)`.
 - **Answer format**: the prompt and the `done` tool ask for a one-line answer, then 3+ items as
   `- item` / `1. item` lines; `formatText()` in `sidepanel.js` (escape first) renders those as lists.
-- **Fact check**: before a `done`, `check_facts()` rejects the summary once if it contains a 3+ digit
-  number that never appeared in anything read this task (`self.seen`); a second rejection is allowed
-  through with a caveat appended.
-- **Safety is enforced in code, not just prompted**: `agent/safety.py#check()` inspects the action and
+- **Fact check**: before a `done`, `check_facts()` (`verification/facts.py`) rejects the summary once if
+  it contains a 3+ digit number that never appeared in anything read this task (`state.seen`); a second
+  rejection is allowed through with a caveat appended.
+- **Known gap (kept as-is, pinned by `checks/replay.py`)**: a plain-text `done({...})` reply runs
+  ui_state → filters → facts but not `check_claims`, and plain-text replies skip the plan-approval gate;
+  the `done` tool runs ui_state → claims → filters → facts. Each check rejects only once, so their order
+  matters.
+- **Safety is enforced in code, not just prompted**: `guardrails/safety.py#check()` inspects the action and
   the *element's own label text* (never arbitrary page content) to decide if it's risky (money,
   sending, deleting, account actions, private-data fields) and forces an Allow/Block round trip via
-  `Agent.ask_permission()`. Google Sheets/Docs edits get an additional overwrite guard
+  `ask_permission()` (`guardrails/permission.py`). Google Sheets/Docs edits get an additional overwrite guard
   (`cells_in_the_way`) that downloads the sheet and reports exactly which cells would be clobbered
   before typing.
 
 ### Adding a new agent operation
 
-Three places need to agree: `agent/tools.py` (the JSON-schema tool definition sent to the LLM),
-`agent/loop.py` (how the server-side loop handles/describes that tool name — see `describe()` and the
-big dispatch in `run()`), and `extension/sidepanel/operations.js` (the actual browser implementation,
-registered in the `operations` object and looked up by `runOperation()`). Risky new actions should
-also be taught to `agent/safety.py#check()`.
+Three places need to agree: `tools/schemas.py` (the JSON-schema tool definition sent to the LLM),
+the server side (how the loop handles that tool name — the big dispatch in `run()` in `agent/loop.py`,
+`ACTION_OPS`/`READ_OPS` in `tools/ops.py`, and its side-panel text in `tools/describe.py`), and
+`extension/tools/operations.js` (the actual browser implementation, registered in the `operations`
+object and looked up by `runOperation()`). Risky new actions should also be taught to
+`guardrails/safety.py#check()`.
 
 ### Model routing (`backend/app/llm/client.py`, `backend/app/config.py`)
 
@@ -127,8 +177,8 @@ database so the side panel's model picker can show "64% used" next to each model
 ### Google Sheets (read path vs. edit path)
 
 Sheets' grid is a canvas, not readable DOM text, so reading goes: extension downloads the open tab as
-CSV via authenticated `fetch` (`sidepanel/sheets.js`) → server loads it into an in-memory DuckDB table
-`sheet` with file/network access disabled (`backend/app/sheets.py`) → the model writes a `sheet_query`
+CSV via authenticated `fetch` (`extension/tools/sheets.js`) → server loads it into an in-memory DuckDB table
+`sheet` with file/network access disabled (`backend/app/tools/sheets.py`) → the model writes a `sheet_query`
 SQL `SELECT`, or `read_cells` for exact values → only the answer rows (capped at `MAX_CHARS`) go back
 to the model, never the whole sheet. `sheets.py` also adds a synthetic `_row` column and reports each
 SQL result column's real sheet letter, so the model can turn a query result into a cell address
@@ -137,7 +187,7 @@ without counting columns.
 Editing a Sheet is a different, real-input path (see below): `go_to_cell` + `type_here`, checked
 before and after.
 
-### Real keyboard/mouse via `chrome.debugger` (`extension/sidepanel/realinput.js`)
+### Real keyboard/mouse via `chrome.debugger` (`extension/tools/realinput.js`)
 
 JS-synthesized key/mouse events are flagged "untrusted" and ignored by Google Sheets/Docs. For those
 origins (`needsRealInput()`), and for anything needing right-click/double-click/drag, the extension
@@ -147,7 +197,7 @@ attached). This is detached automatically when a task ends (`setWorking(false)` 
 a user clicking "Cancel" on the yellow bar permanently blocks real input for the rest of that task
 (`cancelled` flag in `realinput.js`).
 
-### Content script as "eyes" (`extension/content.js`)
+### Content script as "eyes" (`extension/context/content.js`)
 
 Injected on demand into the active page. Walks the DOM for a fixed `SELECTOR` list of interactive
 elements, filters to what's currently visible/on-screen, assigns each a stable `[n]` number via
@@ -167,18 +217,18 @@ extension's `get_page_model` returns the *whole* page as JSON (`buildPageModel()
 sections (dialog, header, nav, main › heading, form, footer, embedded pages), cards (repeated items
 such as product tiles or table rows, with title/price/rating/badges) and elements (with accessibility
 states such as disabled/required/invalid/expanded, `aria-describedby` hints, table column). On-screen
-elements are collected first, then the rest, up to a cap and a time limit. `backend/app/agent/pageview.py`
+elements are collected first, then the rest, up to a cap and a time limit. `backend/app/context/pageview.py`
 decides what the AI sees: restricted mode shows what's on screen plus any open dialog and the focused form,
 with long nav/sidebar lists cut and the footer collapsed. Full mode (the side panel's Unrestricted switch)
 shows everything and marks off-screen parts. `View.flat` keeps every collected element in the old
 `[n] role "label"` format, because `safety.py`, the fact check and `merge_elements` depend on it, so they
 always see the whole page. `find_elements`/`inspect` repeat the same numbering (`numbering` in `content.js`)
 so their ids match the view. To try the renderer without a browser:
-`uv run python -m app.agent.pageview fixtures/amazon_search.json [--full] [--flat]`.
+`uv run python -m app.context.pageview fixtures/amazon_search.json [--full] [--flat]`.
 
 The page view (flat or structured) is the only page data sent automatically every step. Plain text (paragraphs, a
 table with nothing clickable) otherwise needs `read_text`. In Unrestricted mode (structured view, not on Sheets),
-`look()` adds the whole page's `read_text` to the view under `[Page text]`, uncut, and it is trimmed along with the
+`look()` (`context/view.py`) adds the whole page's `read_text` to the view under `[Page text]`, uncut, and it is trimmed along with the
 view. When it doesn't show which
 element goes with which (e.g. several identical "Add to cart" buttons in a list), the model can call
 the `inspect` tool: an indented accessibility-tree view (`getAccessibilityTree()`) built from the same
@@ -189,7 +239,7 @@ for a smaller `depth` or a narrower `ref` rather than silently truncating.
 
 ### Krify only touches its own tabs
 
-`operations.js` tracks `krifyTabs`/`agentTabId`/`openedByKrify` per side-panel session: a task starts
+`extension/tools/operations.js` tracks `krifyTabs`/`agentTabId`/`openedByKrify` per side-panel session: a task starts
 in whatever tab is currently active, new tabs opened by Krify (or `target="_blank"` links followed
 from its tab) are added to the set, and `close_tab` refuses to close a tab Krify didn't open itself.
 

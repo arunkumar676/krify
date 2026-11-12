@@ -10,10 +10,10 @@ import sys
 from dotenv import load_dotenv
 from groq import BadRequestError, Groq
 
-from app.agent import pageview
-from app.agent.prompt import system_prompt
-from app.agent.tools import TOOLS
 from app.config import STRUCTURED_VIEW
+from app.context import pageview
+from app.context.prompt import system_prompt
+from app.tools.schemas import TOOLS
 
 MODEL = "openai/gpt-oss-120b"
 MAX_STEPS = 8  # per sentence

@@ -8,7 +8,7 @@ import json
 import logging
 import re
 
-from app.agent.prompt import where_line
+from app.context.prompt import where_line
 from app.llm.client import ask_ai
 
 log = logging.getLogger("krify")

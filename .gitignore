@@ -19,3 +19,8 @@ Thumbs.db
 backend/usage.json
 backend/krify.db
 backend/usage.json.imported
+
+# Refactor safety checks (backend/checks/run.py): outputs and the locally recorded baseline
+backend/checks/out/
+backend/checks/golden/
+backend/.coverage

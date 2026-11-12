@@ -10,7 +10,7 @@ The flat list (`View.flat`) always holds EVERY collected element in the old `[n]
 format, so safety.check, the fact check and merge_elements see the whole page, never just the
 shortened view the AI got.
 
-Try it on a saved page model:  uv run python -m app.agent.pageview fixtures/amazon_search.json [--full]
+Try it on a saved page model:  uv run python -m app.context.pageview fixtures/amazon_search.json [--full]
 """
 
 import json
