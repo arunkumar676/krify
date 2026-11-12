@@ -164,6 +164,13 @@ Key mechanics worth knowing before touching the loop (they live in the layer mod
   Either way the line reads `dropdown "…" (options: a, b, …, +N more)`.
 - **Answer format**: the prompt and the `done` tool ask for a one-line answer, then 3+ items as
   `- item` / `1. item` lines; `formatText()` in `sidepanel.js` (escape first) renders those as lists.
+- **Plan approval**: the planner (`make_plan`) always writes a plan, but the user only has to approve it when
+  `plan_needs_approval()` (`guardrails/safety.py`) says so: 3+ steps, or the task/steps mention something with side
+  effects (send/post/delete/pay/sign in – `RISKY_WORDS` – or message/edit/update/add/save/fill/type…). A 1–2 step
+  look-up or "go to this page" plan is shown but pre-approved (`state.plan_approved = True`), so the agent acts at
+  once; the agent's own `plan` call gets the same rule. Until a plan is approved, actions are refused with
+  `PLAN_NOT_APPROVED`, which tells the model to call `plan`; `SAME_PLAN` ("you already have this plan") only applies
+  to an approved plan, so re-sending the planner's steps still reaches the approval prompt.
 - **Fact check**: before a `done`, `check_facts()` (`verification/facts.py`) rejects the summary once if
   it contains a 3+ digit number that never appeared in anything read this task (`state.seen`); a second
   rejection is allowed through with a caveat appended.

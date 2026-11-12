@@ -16,8 +16,9 @@ OVERWRITE_BLOCKED = (
 BLOCKED = ("BLOCKED by the user – this action was NOT done. "
            "Don't try it again. Tell the user what's left, or call ask_user.")
 
-PLAN_NOT_APPROVED = ("Skipped: waiting for the user to approve your plan. If they asked for changes, "
-                     "revise it and call plan again.")
+PLAN_NOT_APPROVED = ("Skipped: your plan isn't approved yet, so nothing was done. Call the plan tool now (steps = the "
+                     "steps in [Your plan], changed if needed): the user is asked to approve it, then carry on. If they "
+                     "asked for changes, revise it and call plan again.")
 
 # A click that would navigate away from a form the AI has started filling.
 LEAVE_FORM = ("NOT done: {what} is outside the form{name} you are filling and would leave it – what you entered{filled} "

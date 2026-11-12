@@ -8,6 +8,7 @@ from app.context import pageview
 from app.context.element_list import ambiguity_hint
 from app.context.sites import is_sheet
 from app.context.understand import understand
+from app.guardrails.safety import plan_needs_approval
 from app.llm.client import has_vision_model
 
 SHEET_HINT = "[Google Sheet] Call read_text first to see the columns, then sheet_query with SQL."
@@ -130,5 +131,7 @@ class ContextMixin:
         if not result:
             return
         self.state.goal, self.state.plan, self.state.done_when = result["goal"], result["steps"], result["done_when"]
+        # A short, harmless plan (go to a page, look something up) needs no sign-off: the agent can act at once.
+        self.state.plan_approved = not plan_needs_approval(self.state.plan, task)
         steps = "\n".join(f"{i}. {s}" for i, s in enumerate(self.state.plan, 1))
         await self.ui("step", f"🎯 Goal: {self.state.goal}\n📋 Plan:\n{steps}")

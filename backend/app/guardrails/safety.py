@@ -22,6 +22,21 @@ PRIVATE_FIELDS = (
 # Typing into these and pressing Enter usually sends something.
 MESSAGE_FIELDS = r"message|comment|reply|post|chat|compose|tweet|write"
 
+# A plan this short is only shown to the user, not held for their approval – unless it does something
+# with side effects (the words below, plus every RISKY_WORDS category). Reading and navigating are free.
+PLAN_FREE_STEPS = 2
+PLAN_SIDE_EFFECTS = r"message|e-?mail|comment|edit|update|create|add|save|upload|write|fill|enter|type|talk|chat|ask"
+
+
+def plan_needs_approval(steps, task=""):
+    """Must the user approve this plan before Krify acts? Yes for 3+ steps, or when the task or any
+    step could send, change, delete, pay for or sign in to something. A one- or two-step look-up or
+    "go to this page" plan doesn't: asking would cost a round trip and add nothing."""
+    if len(steps) > PLAN_FREE_STEPS:
+        return True
+    words = "|".join([*RISKY_WORDS.values(), PLAN_SIDE_EFFECTS])
+    return bool(re.search(rf"\b(?:{words})\b", " ".join([task, *steps]), re.I))
+
 
 def _find(pattern, text):
     return re.search(rf"\b({pattern})\b", text, re.IGNORECASE)

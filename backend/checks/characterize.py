@@ -167,6 +167,11 @@ for name, args, last, url in [
     ("type", {"element": 8, "text": "A1"}, "", SHEET), ("drag", {}, "", SHEET), ("scroll", {}, "", SHEET), ("hover", {"element": 1}, "", ""),
 ]:
     show("safety.check", name, args, ELEMENTS, last, url, fn=safety.check)
+for steps, task in [(["Click Contacts"], "navigate to contact page"), (["Open amazon", "Search mouse"], "price of a mouse"),
+                    (["a", "b", "c"], "x"), (["Open the chat", "Send hai"], "talk to sofi"), ([], "send an email"),
+                    (["Open the site"], "sign in to my account"), (["Open the site"], "who is the CEO"),
+                    (["Click Sender list"], "open senders page")]:
+    show("safety.plan_needs_approval", steps, task, fn=getattr(safety, "plan_needs_approval", None) or (lambda *a: "n/a"))
 show("safety.element_line", ELEMENTS, 4, fn=safety.element_line)
 show("safety.visible_text", 'input submit "Go" (value: "Go")', fn=safety.visible_text)
 

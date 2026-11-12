@@ -242,7 +242,8 @@ class Agent(ToolsMixin, GuardrailsMixin, ContextMixin, MemoryMixin, OutputMixin)
                     self.messages.append({**tool_msg, "content": "Reported to the user."})
                     await self.finish("done", summary)
                     finished = True
-                elif (name == "plan" and [str(s) for s in (args.get("steps") or [])][:8] == self.state.plan
+                elif (name == "plan" and self.state.plan_approved
+                      and [str(s) for s in (args.get("steps") or [])][:8] == self.state.plan
                       and not str(args.get("done_when") or "").strip()):
                     self.messages.append({**tool_msg, "content": SAME_PLAN})
                 elif name == "plan":
@@ -250,6 +251,8 @@ class Agent(ToolsMixin, GuardrailsMixin, ContextMixin, MemoryMixin, OutputMixin)
                     if done_when := str(args.get("done_when") or "").strip():
                         # The site turned out different from what the first plan assumed.
                         self.state.done_when = done_when[:200]
+                    if not self.state.plan_approved and not safety.plan_needs_approval(steps, self.state.task_text):
+                        self.state.plan_approved = True  # short and harmless: saved below, no approval needed
                     if not self.state.plan_approved:
                         decision, edited = await self.plan_review(steps)
                         self.state.plan = edited

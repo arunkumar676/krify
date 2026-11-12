@@ -314,7 +314,7 @@ def ask_user_paths():
 @scenario
 def plan_rejected():
     return Scenario("plan_rejected", "shop", ["compare mouse prices on two sites"], plans=[PLAN],
-                    reviews=[("reject", None)], replies=[tool("plan", steps=["Open amazon", "Open flipkart"])])
+                    reviews=[("reject", None)], replies=[tool("plan", steps=["Open amazon", "Open flipkart", "Compare"])])
 
 
 @scenario
@@ -479,6 +479,40 @@ def loop_detection():
         tool("click", element=6, label="anu@acme.test"), tool("click", element=15, label="Cancel"),
         tool("click", element=6, label="anu@acme.test"), tool("click", element=15, label="Cancel"),
         tool("click", element=6, label="anu@acme.test"), tool("done", summary="unreachable"),
+    ])
+
+
+@scenario
+def short_plan_no_approval():
+    """A 1-step look-up plan is shown, not held: the click runs at once, with no plan_review."""
+    short = '{"goal": "Open the contact", "steps": ["Click the contact"], "done_when": "The contact is open"}'
+    return Scenario("short_plan_no_approval", "list", ["open the acme contact please"], plans=[short],
+                    moves={("click", 6): "form"}, replies=[
+        tool("click", element=6, label="anu@acme.test"),
+        tool("done", summary="Opened the contact."),
+    ])
+
+
+@scenario
+def short_plan_with_side_effects():
+    """A 2-step plan that sends something still waits for approval (the click is refused first)."""
+    risky = '{"goal": "Send a message", "steps": ["Open the chat", "Send hai"], "done_when": "The message is sent"}'
+    return Scenario("short_plan_with_side_effects", "list", ["send hai to anu in the chat"], plans=[risky],
+                    reviews=[("approve", None)], moves={("click", 6): "form"}, replies=[
+        tool("click", element=6, label="anu@acme.test"),
+        tool("plan", steps=["Open the chat", "Send hai"]),
+        tool("click", element=6, label="anu@acme.test"),
+        tool("done", summary="Sent."),
+    ])
+
+
+@scenario
+def agent_plan_tool_short():
+    """The agent's own plan call: 2 harmless steps are saved without asking; 3 steps would ask."""
+    return Scenario("agent_plan_tool_short", "list", ["check the acme contact details"], plans=[""], replies=[
+        tool("plan", steps=["Open the contact", "Read it"]),
+        tool("plan", steps=["Open the contact", "Read it"]),  # same plan, now approved: told not to repeat it
+        tool("done", summary="Read."),
     ])
 
 
