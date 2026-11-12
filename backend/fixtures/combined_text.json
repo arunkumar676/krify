@@ -1,5 +1,5 @@
 {
-  "_note": "Hand-built test page shaped like krify.co's home page in Unrestricted mode: text blocks placed among the elements (texts), floating buttons, sub-menu links, a long clickable card, and junk text that must be dropped.",
+  "_note": "Hand-built test page shaped like krify.co's home page in Unrestricted mode: text blocks placed among the elements (texts), reading keys (k) for side-by-side boxes, link destinations (go), owners of vague buttons (of), floating buttons, sub-menu links, a long clickable card, and junk text that must be dropped.",
   "full": true,
   "pages": [
     {
@@ -11,6 +11,7 @@
       "partial": false,
       "sections": [
         {"name": "Header", "kind": "header", "kinds": ["header"], "modal": false, "box": [40, 0, 1240, 120]},
+        {"name": "Main › \"OUR CLIENTS\"", "kind": "main", "kinds": ["main"], "modal": false, "box": [60, 500, 1220, 650]},
         {"name": "Main › \"ABOUT US\"", "kind": "main", "kinds": ["main"], "modal": false, "box": [60, 700, 1220, 1100]},
         {"name": "Main › \"Top Mobile App, Web and AI Development Company\"", "kind": "main", "kinds": ["main"], "modal": false, "box": [60, 1200, 1220, 1600]},
         {"name": "Main › Form", "kind": "form", "kinds": ["main", "form"], "modal": false, "box": [60, 2400, 900, 2900]},
@@ -18,34 +19,44 @@
       ],
       "cards": [],
       "elements": [
-        {"id": 1, "text": "link \"Facebook\"", "states": [], "hint": "", "col": "", "pos": 0, "s": 0, "c": -1, "y": 10, "x": 40},
-        {"id": 2, "text": "link \"Linkedin-in\"", "states": [], "hint": "", "col": "", "pos": 0, "s": 0, "c": -1, "y": 10, "x": 80},
-        {"id": 3, "text": "link \"X-twitter\"", "states": [], "hint": "", "col": "", "pos": 0, "s": 0, "c": -1, "y": 10, "x": 120},
-        {"id": 4, "text": "link \"Go to Our Services page\"", "states": ["collapsed"], "hint": "", "col": "", "pos": 0, "s": 0, "c": -1, "y": 80, "x": 600},
-        {"id": 5, "text": "link \"Go to Blog page\"", "states": [], "hint": "", "col": "", "pos": 0, "s": 0, "c": -1, "y": 80, "x": 900},
-        {"id": 6, "text": "link \"whatsapp icon\"", "states": [], "hint": "", "col": "", "pos": 0, "s": 0, "c": -1, "y": 600, "x": 30, "float": true},
-        {"id": 7, "text": "link \"request quote\"", "states": [], "hint": "", "col": "", "pos": 0, "s": 0, "c": -1, "y": 700, "x": 30, "float": true},
-        {"id": 8, "text": "tab \"Our Vision\"", "states": ["expanded", "selected"], "hint": "", "col": "", "pos": 1, "s": 1, "c": -1, "y": 900, "x": 100},
-        {"id": 9, "text": "tab \"Our Mission\"", "states": ["collapsed"], "hint": "", "col": "", "pos": 1, "s": 1, "c": -1, "y": 900, "x": 300},
-        {"id": 10, "text": "clickable \"Krify has cutting-edge development technique which allows us to develop custom Responsive Web Design which is compatible with mobile, tablet, and desktop.\"", "states": [], "hint": "", "col": "", "pos": 1, "s": 2, "c": -1, "y": 1300, "x": 100},
-        {"id": 11, "text": "input text \"Enter Full Name\" (empty)", "states": [], "hint": "", "col": "", "pos": 1, "s": 3, "c": -1, "y": 2500, "x": 100},
-        {"id": 12, "text": "button submit \"Submit\"", "states": [], "hint": "", "col": "", "pos": 1, "s": 3, "c": -1, "y": 2800, "x": 100},
-        {"id": 13, "text": "link \"terms-of-use\"", "states": [], "hint": "", "col": "", "pos": 1, "s": 4, "c": -1, "y": 4100, "x": 100}
+        {"id": 1, "text": "link \"call-us\"", "states": [], "hint": "", "col": "", "pos": 0, "s": 0, "c": -1, "y": 10, "x": 400, "k": [[10, 400]], "go": "call +1 212 380 1160"},
+        {"id": 2, "text": "link \"call-us\"", "states": [], "hint": "", "col": "", "pos": 0, "s": 0, "c": -1, "y": 10, "x": 700, "k": [[10, 700]], "go": "call +44 20 3006 2580"},
+        {"id": 3, "text": "link \"mail-us\"", "states": [], "hint": "", "col": "", "pos": 0, "s": 0, "c": -1, "y": 10, "x": 900, "k": [[10, 900]], "go": "email info@krify.co"},
+        {"id": 4, "text": "link \"Facebook\"", "states": [], "hint": "", "col": "", "pos": 0, "s": 0, "c": -1, "y": 10, "x": 40, "k": [[10, 40]], "go": "facebook.com (new tab)"},
+        {"id": 5, "text": "link \"Linkedin-in\"", "states": [], "hint": "", "col": "", "pos": 0, "s": 0, "c": -1, "y": 10, "x": 80, "k": [[10, 80]], "go": "linkedin.com (new tab)"},
+        {"id": 6, "text": "link \"view-about-krify-company\"", "states": [], "hint": "", "col": "", "pos": 0, "s": 0, "c": -1, "y": 60, "x": 40, "k": [[60, 40]], "go": "home page"},
+        {"id": 7, "text": "link \"Go to Our Services page\"", "states": ["collapsed"], "hint": "", "col": "", "pos": 0, "s": 0, "c": -1, "y": 80, "x": 600, "k": [[80, 600]], "go": "/services/"},
+        {"id": 8, "text": "link \"Go to Blog page\"", "states": [], "hint": "", "col": "", "pos": 0, "s": 0, "c": -1, "y": 80, "x": 900, "k": [[80, 900]], "go": "/blog/"},
+        {"id": 9, "text": "link \"whatsapp icon\"", "states": [], "hint": "", "col": "", "pos": 0, "s": 0, "c": -1, "y": 600, "x": 30, "k": [[600, 30]], "float": true, "go": "WhatsApp chat"},
+        {"id": 10, "text": "button \"Close\"", "states": [], "hint": "", "col": "", "pos": 0, "s": 0, "c": -1, "y": 650, "x": 1200, "k": [[650, 1200]], "float": true, "of": "chat \"Talk to Sofi Live\""},
+        {"id": 11, "text": "tab \"Our Vision\"", "states": ["expanded", "selected"], "hint": "", "col": "", "pos": 1, "s": 2, "c": -1, "y": 900, "x": 100, "k": [[900, 100]]},
+        {"id": 12, "text": "tab \"Our Mission\"", "states": ["collapsed"], "hint": "", "col": "", "pos": 1, "s": 2, "c": -1, "y": 900, "x": 300, "k": [[900, 300]]},
+        {"id": 13, "text": "clickable \"Krify has cutting-edge development technique which allows us to develop custom Responsive Web Design which is compatible with mobile, tablet, and desktop.\"", "states": [], "hint": "", "col": "", "pos": 1, "s": 3, "c": -1, "y": 1300, "x": 100, "k": [[1300, 100]]},
+        {"id": 14, "text": "button \"Play Video\"", "states": [], "hint": "", "col": "", "pos": 1, "s": 3, "c": -1, "y": 1500, "x": 100, "k": [[1500, 100], [1500, 100]], "of": "testimonial \"John Smith\""},
+        {"id": 15, "text": "button \"Play Video\"", "states": [], "hint": "", "col": "", "pos": 1, "s": 3, "c": -1, "y": 1500, "x": 700, "k": [[1500, 700], [1500, 700]], "of": "testimonial \"Priya K\""},
+        {"id": 16, "text": "input text \"Enter Full Name\" (empty)", "states": [], "hint": "", "col": "", "pos": 1, "s": 4, "c": -1, "y": 2500, "x": 100, "k": [[2500, 100]]},
+        {"id": 17, "text": "button submit \"Submit\"", "states": [], "hint": "", "col": "", "pos": 1, "s": 4, "c": -1, "y": 2800, "x": 100, "k": [[2800, 100]]},
+        {"id": 18, "text": "link \"terms-of-use\"", "states": [], "hint": "", "col": "", "pos": 1, "s": 5, "c": -1, "y": 4100, "x": 100, "k": [[4100, 100]], "go": "/terms-of-use/"}
       ],
       "texts": [
-        {"t": "Facebook Linkedin-in X-twitter", "s": 0, "c": -1, "pos": 0, "y": 10, "x": 40},
-        {"t": "(US) +1 212 380 1160 (India) +91 7901322222 info@krify.co", "s": 0, "c": -1, "pos": 0, "y": 10, "x": 400},
-        {"t": "1 2 3 4", "s": 1, "c": -1, "pos": 1, "y": 650, "x": 600},
-        {"t": "ABOUT US", "s": 1, "c": -1, "pos": 1, "y": 720, "x": 100},
-        {"t": "Krify is a Multi-National Company specialized in crafting latest Mobile Apps, Software Applications and Web Applications.", "s": 1, "c": -1, "pos": 1, "y": 780, "x": 100},
-        {"t": "Krify wants to enhance its presence in Digital Marketing, which is one of the most happening wings of marketing.", "s": 1, "c": -1, "pos": 1, "y": 960, "x": 100},
-        {"t": "Krify has cutting-edge development technique which allows us to develop custom Responsive Web Design which is compatible with mobile, tablet, and desktop.", "s": 2, "c": -1, "pos": 1, "y": 1300, "x": 100},
-        {"t": "Get a Free Consultation", "s": 3, "c": -1, "pos": 1, "y": 2400, "x": 100},
-        {"t": "Full Name", "s": 3, "c": -1, "pos": 1, "y": 2480, "x": 100},
-        {"t": "An ISO 9001:2015, ISO 27001:2013 Certified Company.", "s": 4, "c": -1, "pos": 1, "y": 4000, "x": 100}
+        {"t": "Facebook Linkedin-in", "s": 0, "c": -1, "pos": 0, "y": 10, "x": 40, "k": [[10, 40]]},
+        {"t": "1 2 3 4", "s": 1, "c": -1, "pos": 1, "y": 480, "x": 600, "k": [[480, 600]]},
+        {"t": "20 +", "s": 1, "c": -1, "pos": 1, "y": 520, "x": 100, "k": [[520, 100], [520, 100]]},
+        {"t": "1500 +", "s": 1, "c": -1, "pos": 1, "y": 520, "x": 500, "k": [[520, 500], [520, 500]]},
+        {"t": "2000 +", "s": 1, "c": -1, "pos": 1, "y": 520, "x": 900, "k": [[520, 900], [520, 900]]},
+        {"t": "years of experience", "s": 1, "c": -1, "pos": 1, "y": 580, "x": 100, "k": [[520, 100], [580, 100]]},
+        {"t": "Happy Clients", "s": 1, "c": -1, "pos": 1, "y": 580, "x": 500, "k": [[520, 500], [580, 500]]},
+        {"t": "Projects", "s": 1, "c": -1, "pos": 1, "y": 580, "x": 900, "k": [[520, 900], [580, 900]]},
+        {"t": "ABOUT US", "s": 2, "c": -1, "pos": 1, "y": 720, "x": 100, "k": [[720, 100]]},
+        {"t": "Krify is a Multi-National Company specialized in crafting latest Mobile Apps, Software Applications and Web Applications.", "s": 2, "c": -1, "pos": 1, "y": 780, "x": 100, "k": [[780, 100]]},
+        {"t": "Krify wants to enhance its presence in Digital Marketing, which is one of the most happening wings of marketing.", "s": 2, "c": -1, "pos": 1, "y": 960, "x": 100, "k": [[960, 100]]},
+        {"t": "Krify has cutting-edge development technique which allows us to develop custom Responsive Web Design which is compatible with mobile, tablet, and desktop.", "s": 3, "c": -1, "pos": 1, "y": 1300, "x": 100, "k": [[1300, 100]]},
+        {"t": "Get a Free Consultation", "s": 4, "c": -1, "pos": 1, "y": 2400, "x": 100, "k": [[2400, 100]]},
+        {"t": "Full Name", "s": 4, "c": -1, "pos": 1, "y": 2480, "x": 100, "k": [[2480, 100]]},
+        {"t": "An ISO 9001:2015, ISO 27001:2013 Certified Company.", "s": 5, "c": -1, "pos": 1, "y": 4000, "x": 100, "k": [[4000, 100]]}
       ],
       "counts": ["7 rows like \"Full Name\"", "7 rows like \"2026 Krify\""],
-      "count": 13
+      "count": 18
     }
   ]
 }
