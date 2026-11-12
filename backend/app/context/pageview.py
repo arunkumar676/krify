@@ -107,7 +107,7 @@ def form_lines(form, full=False):
         filled = [f for f in fields if f.get("filled")]
         done = f" Filled: {', '.join(_field(f) for f in filled[:cap_required])}." if filled else ""
         return [f"[Form{name}] It marks no fields as required: fill what the user gave; after saving, "
-                f"read [Status] for anything missing.{done}"]
+                f"read ⚠ ALERTS for anything missing.{done}"]
     required = [f for f in fields if f.get("required")]
     optional = [f for f in fields if not f.get("required")]
     more = f" (+{len(required) - cap_required} more)" if cap_required and len(required) > cap_required else ""
@@ -133,10 +133,101 @@ def _label(text):
     return quoted.group(1) if quoted else ""
 
 
+# ---------- one fixed way to write every element ----------
+# The extension describes elements in many shapes ('input text "Email" (value: "x")', 'select "Sort"
+# = "Featured" (…)', 'div "Agents"', 'clickable "Select a contact"'). The AI gets ONE shape:
+#   [n] role "label" = "value" (states)
+# with a small fixed set of role words. Only the AI's text changes: View.flat (safety, fact check,
+# merge_elements) keeps the extension's own wording.
+ROLES = {"link", "button", "input", "textarea", "checkbox", "radio", "toggle", "dropdown", "tab", "menuitem",
+         "option", "slider", "row", "group", "clickable", "image", "heading"}
+ROLE_MAP = {"select": "dropdown", "combobox": "dropdown", "listbox": "dropdown", "switch": "toggle",
+            "searchbox": "input", "spinbutton": "input", "menuitemcheckbox": "menuitem", "menuitemradio": "menuitem",
+            "img": "image", "a": "link"}
+BUTTON_INPUTS = {"submit", "button", "reset", "image"}
+PLAIN_INPUTS = {"text", "search", ""}  # no need to say the type of an ordinary text box
+KEEP_AS_IS = ("scrollable box ", "this embedded page")  # Krify's own lines: the AI is told how to use them
+_DESCRIPTION = re.compile(r'^(?P<head>[^"\n]*?)\s*"(?P<label>[^"\n]*)"(?P<rest>.*)$', re.S)
+_VALUE = re.compile(r'^\(value: "(?P<value>.*)"\)(?P<rest>.*)$', re.S)
+HOVER = " (shows on hover)"
+
+
+def _tidy(text):
+    """'input text "Search" (value: "mouse")' → ('input "Search" = "mouse"', []), plus the states the
+    description itself carried ('submit', 'email', 'hover', 'checked'). Anything unexpected is
+    returned unchanged."""
+    extra = []
+    if HOVER in text:
+        text = text.replace(HOVER, "")
+        extra.append("hover")
+    match = _DESCRIPTION.match(text)
+    if not match or text.startswith(KEEP_AS_IS):
+        return text, extra
+    words, label, rest = match.group("head").split(), match.group("label"), match.group("rest").strip()
+    if not words:
+        return text, extra
+    role = words[0]
+    kind = words[1] if len(words) > 1 else ""
+    if role == "input":
+        if kind in ("checkbox", "radio"):
+            role = kind
+        elif kind in BUTTON_INPUTS:
+            role = "button"
+            if kind == "submit":
+                extra.append("submit")
+        elif kind not in PLAIN_INPUTS:
+            extra.append(kind)  # email, password, number, date…: tells the AI what to type
+    elif role == "button" and kind in ("submit", "reset"):
+        extra.append(kind)
+    elif role not in ROLES:
+        role = ROLE_MAP.get(role, "clickable")  # div, span, li…: something that reacts to a click
+    value = ""
+    if found := _VALUE.match(rest):
+        value, rest = found.group("value"), found.group("rest").strip()
+    for word in ("(empty)", "(unchecked)", "(checked)"):
+        if rest.startswith(word):
+            rest = rest[len(word):].strip()
+            if word == "(checked)":
+                extra.append("checked")
+    line = f'{role} "{label}"'
+    if value:
+        line += f' = "{value}"'
+    if rest:
+        line += f" {rest}"  # a dropdown's  = "choice" (options: …)
+    return line, extra
+
+
+def _states(states):
+    """The extension's state words → short fixed ones: 'collapsed, opens menu' → 'menu▸',
+    'expanded' → 'open', 'unchecked' dropped (only 'checked' is shown)."""
+    states = list(states or [])
+    opener = next((s[len("opens "):] for s in states if s.startswith("opens ")), "")
+    is_open = any(s == "expanded" or s.startswith("expanded –") for s in states)
+    out = []
+    for s in states:
+        if s in ("expanded", "collapsed", "unchecked") or s.startswith(("opens ", "expanded –")):
+            continue
+        out.append("read-only" if s == "readonly" else s)
+    if opener and opener != "list":
+        out.insert(0, f"{opener} open" if is_open else f"{opener}▸")
+    elif is_open:
+        out.insert(0, "list open" if opener == "list" else "open")
+    elif "collapsed" in states and not opener:
+        out.insert(0, "closed")
+    return out
+
+
 def _element_line(el):
-    line = f"[{el['id']}] {el['text']}"
-    if el.get("states"):
-        line += f" ({', '.join(el['states'])})"
+    text, extra = _tidy(el["text"])
+    states = []
+    for s in extra + _states(el.get("states")):
+        if s not in states:
+            states.append(s)
+    if text.startswith("clickable ") and ({"open", "closed"} & set(states)):
+        text = "group " + text[len("clickable "):]  # opens/closes a part of the page (sidebar group, accordion)
+    line = f"[{el['id']}] {text}"
+    if states:
+        line += f" ({', '.join(states)})"
     if el.get("col"):
         line += f' · column "{el["col"]}"'
     if el.get("hint"):
@@ -151,16 +242,10 @@ def _card_line(card, pos):
     parts = []
     if "Sponsored" in badges:
         badges.remove("Sponsored")
-        parts.append("Sponsored ·")
+        parts.append("Sponsored")
     parts.append(f'"{card.get("title", "")}"')
-    if card.get("price"):
-        parts.append(card["price"])
-    if card.get("rating"):
-        parts.append(card["rating"])
-    line = " ".join(parts)
-    if badges:
-        line += " · " + " · ".join(badges)
-    return f"▸ {line}"
+    parts += [card[key] for key in ("price", "rating") if card.get(key)]
+    return "▸ " + " · ".join(parts + badges)
 
 
 def flat_lines(model):
@@ -234,6 +319,109 @@ def _ambiguity(entries, shown):
     return dupes_warning(dupes) if dupes else ""
 
 
+# ---------- the page in design order ----------
+# The page is shown the way a person sees it: an open pop-up first (it sits on top of the page),
+# then top → bottom, left → right: top bar, nav, left sidebar, main, right column, embedded pages,
+# footer. Each region is written whole (column by column), never mixed row by row.
+REGION_ORDER = ["TOP BAR", "NAV", "LEFT SIDEBAR", "SIDEBAR", "MAIN", "RIGHT COLUMN", "EMBEDDED", "FOOTER"]
+SIDE_SHARE = 0.35  # a section within the left/right 35% of the window is a sidebar/column
+TOP_BAR_Y = 150  # a nav/search ending this close to the top of the page belongs to the top bar
+MAX_ALERTS = 3
+LANDMARKS = {"Header", "Main", "Nav", "Sidebar", "Footer", "Section", "Page"}  # region names say these already
+
+
+def _region(sec, page_index, width):
+    """Which part of the page layout a section belongs to (see REGION_ORDER). Uses the page's own
+    landmarks (header, nav, main, aside, footer) and, when the extension sent it, where the section
+    sits; without a position nothing is guessed (NAV / SIDEBAR instead of left/right)."""
+    if page_index:
+        return "EMBEDDED"
+    kinds = sec.get("kinds") or ["page"]
+    outer = kinds[0]
+    box = sec.get("box")
+    side = ""
+    if box and width:
+        if box[2] <= width * SIDE_SHARE:
+            side = "LEFT SIDEBAR"
+        elif box[0] >= width * (1 - SIDE_SHARE):
+            side = "RIGHT COLUMN"
+    if outer == "header":
+        return "TOP BAR"
+    if outer == "footer":
+        return "FOOTER"
+    if outer in ("nav", "toolbar", "menubar", "aside"):
+        if side:
+            return side
+        if box and box[3] <= TOP_BAR_Y and outer != "aside":
+            return "TOP BAR"
+        return "SIDEBAR" if outer == "aside" else "NAV"
+    if outer == "search" and box and box[3] <= TOP_BAR_Y:
+        return "TOP BAR"
+    return "MAIN"
+
+
+def _sub_name(name):
+    """A section's name without what its region already says: 'Header › Nav "Shortcuts"' → 'Shortcuts',
+    'Main › "Results"' → 'Results', 'Embedded page "X" › Form "Sign in"' → 'Form "Sign in"'."""
+    parts = []
+    for part in name.split(" › "):
+        if part.startswith('Embedded page "') or part in LANDMARKS:
+            continue
+        word, _, rest = part.partition(' "')
+        parts.append(f'"{rest}' if rest and word in LANDMARKS else part)
+    text = " › ".join(parts)
+    return text[1:-1] if text.count('"') == 2 and text.startswith('"') and text.endswith('"') else text
+
+
+def _counts(hidden):
+    """'2 below the screen, 1 above the screen' for elements left out of the view."""
+    cut = sum(1 for e in hidden if e.el.get("pos", 0) == 0)
+    parts = [f"{cut} more on screen"] if cut else []
+    parts += [f"{n} {POSITION[pos]}" for pos in POSITION if (n := sum(1 for e in hidden if e.el.get("pos") == pos))]
+    return ", ".join(parts)
+
+
+def _section_lines(sec, group, shown, cards, sub):
+    """One section, in place: its heading line and elements (cards with their own elements indented),
+    or a one-line note when none of its elements are shown."""
+    visible = [e for e in group if e.order in shown]
+    hidden = [e for e in group if e.order not in shown]
+    if not visible:
+        where = _counts(hidden)
+        how = "find_elements" if all(e.el.get("pos", 0) == 0 for e in hidden) else "scroll there or use find_elements"
+        return [f"## {sub} ({where} – {how})" if sub else f"({where} – {how})"]
+    lines = []
+    header = f"## {sub}" if sub else ""
+    items = len({e.card for e in group if e.card})
+    if items >= 3:
+        header = f"{header or '##'} ({items} items)"
+    if header:
+        lines.append(header)
+    card, pos = None, 0
+    # A clickable table row is its own card: its `row "…"` line is the ▸ line, with the row's own
+    # buttons/links indented under it (a card summary would repeat the same cells).
+    row_ids = {cards[e.card]["row"] for e in visible if e.card and cards.get(e.card, {}).get("row")}
+    rows = {e.card: e for e in visible if e.el["id"] in row_ids}
+    for e in visible:
+        el_pos = e.el.get("pos", 0)
+        if el_pos != pos:
+            lines.append(f"-- {POSITION.get(el_pos, 'on screen')} --")
+            pos = el_pos
+        if e.card != card:
+            card = e.card
+            if card in rows:
+                lines.append("▸ " + _element_line(rows[card].el))
+            elif card:
+                lines.append(_card_line(cards.get(card), el_pos))
+        if card in rows and e is rows[card]:
+            continue
+        lines.append(("  " if card else "") + _element_line(e.el))
+    if hidden:
+        how = "use find_elements" if all(e.el.get("pos", 0) == 0 for e in hidden) else "scroll there or use find_elements"
+        lines.append(f"(+{len(hidden)} more here: {_counts(hidden)} – {how})")
+    return lines
+
+
 def render(model):
     """→ View: the outline the AI reads, the flat list, the status line and an ambiguity hint."""
     pages = model.get("pages") or []
@@ -254,12 +442,14 @@ def render(model):
     info = pages[0].get("page") or {}
     head = [x for x in (info.get("type"), f'"{info["h1"]}"' if info.get("h1") else "", info.get("results"),
                         _scroll(info)) if x]
-    lines = ["[Page] " + " · ".join(head)]
-    statuses = [page["status"] for page in pages if page.get("status")]
-    if statuses:
-        lines.append(f"[Status] {' | '.join(statuses)}")
     if focused:
-        lines.append("[Focused] " + " ".join(f"[{i}]" for i in sorted(focused)))
+        head.append("keyboard in " + " ".join(f"[{i}]" for i in sorted(focused)))
+    lines = ["PAGE  " + " · ".join(head)]
+    statuses = [page["status"] for page in pages if page.get("status")]
+    if statuses:  # one line at the top, so the AI sees at once whether its last action worked
+        alerts = [a for status in statuses for a in status.split(" | ") if a]
+        more = f" | +{len(alerts) - MAX_ALERTS} more" if len(alerts) > MAX_ALERTS else ""
+        lines.append("⚠ ALERTS  " + " | ".join(alerts[:MAX_ALERTS]) + more)
     form = next((page["form"] for page in pages if page.get("form")), None)
     lines += form_lines(form, full)
 
@@ -272,59 +462,106 @@ def render(model):
     open_list = next(((sections[key]["name"], [_label(e.el["text"]) for e in group  # options, not its search box
                                                 if not e.el["text"].startswith(("input", "textarea"))])
                       for key, group in ordered if sections[key].get("list")), None)
-    off_screen = []
+
+    # Pop-ups sit on top of the page, so they come first; then the regions in design order.
+    width = info.get("width") or 0
+    popups, regions = [], {}
     for key, group in ordered:
         sec = sections[key]
-        visible = [e for e in group if e.order in shown]
-        hidden = [e for e in group if e.order not in shown]
-        cut = sum(1 for e in hidden if e.el.get("pos", 0) == 0)
-        where = {pos: sum(1 for e in hidden if e.el.get("pos") == pos) for pos in POSITION}
-        if not visible:
-            if cut:
-                lines.append(f"## {sec['name']} ({cut} not shown – find_elements)")
+        if POPUP_KINDS & set(sec.get("kinds") or ()):
+            popups.append((key, group))
+        else:
+            region = _region(sec, key[0], width)
+            regions.setdefault((REGION_ORDER.index(region), key[0] if region == "EMBEDDED" else 0, region), []).append(
+                (key, group))
+    modal = any(sections[key].get("modal") for key, _ in popups)
+
+    behind = set()  # elements shown in no detail: behind a pop-up that blocks the page
+    last_popup = None
+    for key, group in popups:
+        sec = sections[key]
+        root, _, inner = sec["name"].partition(" › ")  # 'Dialog "Sign in" › Form': one title per pop-up
+        if root != last_popup:
+            last_popup = root
+            kind = next(k for k in reversed(sec["kinds"]) if k in POPUP_KINDS)
+            if sec.get("list"):
+                title = f"🔲 DROPDOWN LIST (open) – {root}: click one of these options, or select_option on its field"
+            elif sec.get("modal"):
+                title = f"🔲 POP-UP (covers the page – deal with it first) – {root}"
             else:
-                counts = ", ".join(f"{n} {POSITION[pos].replace(' the screen', '')}" for pos, n in where.items() if n)
-                off_screen.append(f"{sec['name']}: {counts}")
+                title = f"🔲 OPEN {kind.upper()} – {root}"
+            lines.append(title)
+        lines += _section_lines(sec, group, shown, cards, _sub_name(inner) if inner else "")
+    for (_, page_index, region), members in sorted(regions.items()):
+        name = f'EMBEDDED PAGE "{pages[page_index].get("frame")}"' if region == "EMBEDDED" else region
+        group_all = [e for _, group in members for e in group]
+        # Behind a blocking pop-up: one line (the AI can't use it until the pop-up is closed) – except
+        # embedded pages (often the pop-up's own content) and the part where the keyboard is.
+        if modal and region != "EMBEDDED" and not any(e.el["id"] in focused for e in group_all):
+            behind |= {e.order for e in group_all}
+            headings = [s for key, _ in members if (s := _sub_name(sections[key]["name"]))]
+            about = f" · {', '.join(headings[:4])}" if headings else ""
+            count = f"{len(group_all)} element{'s' if len(group_all) != 1 else ''}"
+            lines.append(f"┌ {name} (behind the pop-up – {count}{about})")
             continue
-        header = f"## {sec['name']}"
-        items = len({e.card for e in group if e.card})
-        if items >= 3:
-            header += f" ({items} items)"
-        if sec.get("modal"):
-            header += " (modal – blocks the page)"
-        if sec.get("list"):
-            header += " (open dropdown list – click one of these options, or select_option on its field)"
-        lines.append(header)
-        card, pos = None, 0
-        # A clickable table row is its own card: its `row link "…"` line is the ▸ line, with the
-        # row's own buttons/links indented under it (a card summary would repeat the same cells).
-        row_ids = {cards[e.card]["row"] for e in visible if e.card and cards.get(e.card, {}).get("row")}
-        rows = {e.card: e for e in visible if e.el["id"] in row_ids}
-        for e in visible:
-            el_pos = e.el.get("pos", 0)
-            if el_pos != pos:
-                lines.append(f"-- {POSITION.get(el_pos, 'on screen')} --")
-                pos = el_pos
-            if e.card != card:
-                card = e.card
-                if card in rows:
-                    lines.append("▸ " + _element_line(rows[card].el))
-                elif card:
-                    lines.append(_card_line(cards.get(card), el_pos))
-            if card in rows and e is rows[card]:
-                continue
-            lines.append(("  " if card else "") + _element_line(e.el))
-        more = [f"{cut} more on screen"] if cut else []
-        more += [f"{n} {POSITION[p]}" for p, n in where.items() if n]
-        if more:
-            how = "use find_elements" if len(hidden) == cut else "scroll there or use find_elements"
-            lines.append(f"(+{len(hidden)} more here: {', '.join(more)} – {how})")
-    if off_screen:
-        lines.append(f"[Not on screen] {' · '.join(off_screen)} – scroll there or use find_elements")
+        if not any(e.order in shown for e in group_all):  # nothing of it is shown: one line, in its place
+            lines.append(f"┌ {name} ({_counts(group_all)} – scroll there or use find_elements)")
+            continue
+        lines.append(f"┌ {name}")
+        for key, group in members:
+            lines += _section_lines(sections[key], group, shown, cards, _sub_name(sections[key]["name"]))
     if any(page.get("partial") for page in pages):
         lines.append("(very large page: far-off parts weren't listed – scroll there to see them)")
-    return View("\n".join(lines), flat_lines(model), statuses[0] if statuses else "", _ambiguity(entries, shown),
-                open_list, form, full)
+    return View("\n".join(lines), flat_lines(model), statuses[0] if statuses else "",
+                _ambiguity(entries, shown - behind), open_list, form, full)
+
+
+# ---------- Unrestricted mode: the page's text, without what the view already says ----------
+_QUOTED = re.compile(r'"([^"\n]+)"')
+_SCREEN_READER = re.compile(r"^(skip to (the )?(main )?content|skip to main|skip navigation|jump to (main )?content|"
+                            r"keyboard shortcut:.*|press .* to (open|search).*)$", re.I)
+_SKIP_LINK = re.compile(r"^(skip to (the )?(main )?content|skip navigation|jump to (main )?content)\b", re.I)
+_DIGIT = re.compile(r"^\d$")
+_ROW_COUNTS = re.compile(r"^\[Exact counts of repeated rows loaded on this page so far: (.*?)\. (Use these.*)$")
+_ROW_COUNT = re.compile(r'\d+ (?:table )?rows? like "([^"]*)"')
+DIGIT_RUN = 3  # 3+ lines of one digit each in a row: an animated counter ("0 1 2 … 9"), not content
+
+
+def clean_page_text(text, view_text):
+    """The [Page text] for Unrestricted mode, without what's already in the view or means nothing:
+    lines that are just an element's label ("Home", "Inbox", "Create"), screen-reader helpers
+    ("Skip to main content"), animated digit strips, and "rows like" counts of junk ("10 rows like "0"")."""
+    said = {q.strip().lower() for q in _QUOTED.findall(view_text or "")}
+    lines = (text or "").split("\n")
+    digits = [bool(_DIGIT.match(line.strip())) for line in lines]
+    keep = []
+    i = 0
+    while i < len(lines):
+        if digits[i]:  # a run of single digits: keep it only if it's short (a real "3")
+            j = i
+            while j < len(lines) and digits[j]:
+                j += 1
+            if j - i < DIGIT_RUN:
+                keep += lines[i:j]
+            i = j
+            continue
+        line = lines[i]
+        i += 1
+        plain = line.strip()
+        if helper := _SKIP_LINK.match(plain):  # "Skip to main content Create Search": drop the helper part
+            plain = line = plain[helper.end():].strip()
+        if not plain or plain.lower() in said or _SCREEN_READER.match(plain):
+            continue
+        if counts := _ROW_COUNTS.match(plain):
+            real = [c for c in counts.group(1).split("; ")
+                    if (m := _ROW_COUNT.match(c)) and len(re.sub(r"\W", "", m.group(1))) > 2
+                    and m.group(1).strip().lower() not in said]
+            if real:
+                keep.append(f"[Exact counts of repeated rows loaded on this page so far: {'; '.join(real)}. "
+                            f"{counts.group(2)}")
+            continue
+        keep.append(line)
+    return "\n".join(keep).strip()
 
 
 if __name__ == "__main__":

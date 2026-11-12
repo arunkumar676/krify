@@ -65,6 +65,8 @@ class ContextMixin:
         text = f"{shown}\n{hint}" if hint else shown
         if full and not is_sheet(info.get("url", "")):
             page_text = await self.browser_quiet("read_text", {"scope": "page"})
+            if isinstance(page_text, str) and not page_text.startswith("(no text"):
+                page_text = pageview.clean_page_text(page_text, shown)  # not what the view already says
             if isinstance(page_text, str) and page_text.strip() and not page_text.startswith("(no text"):
                 shown += PAGE_TEXT.format(page_text)  # counts as read for the fact check
                 text += PAGE_TEXT.format(page_text)

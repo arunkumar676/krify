@@ -1506,6 +1506,13 @@ if (!window.__krify) {
         cards[c].els.push(n);
       }
       const r = n.rect;
+      // Where the section sits on the page (page coordinates, grown from its elements): pageview.py
+      // shows the sections in the order a person sees them – top bar, left sidebar, main, right column.
+      const box = sections[s].box || (sections[s].box = [Infinity, Infinity, -Infinity, -Infinity]);
+      box[0] = Math.min(box[0], r.left + scrollX);
+      box[1] = Math.min(box[1], r.top + scrollY);
+      box[2] = Math.max(box[2], r.right + scrollX);
+      box[3] = Math.max(box[3], r.bottom + scrollY);
       const pos = inView(n.el) ? 0 : r.bottom < 0 ? -1 : r.top > innerHeight ? 1 : 2;
       const field = fieldInfo(n.el);
       elements.push({
@@ -1544,6 +1551,8 @@ if (!window.__krify) {
       extra(doc, `this embedded page (${at} – scroll with element=${id + 1})`);
     }
 
+    for (const sec of sections) if (sec.box) sec.box = sec.box.map(Math.round);
+
     const focusedEl = activeDeep();
     const focused = focusedEl && focusedEl !== document.body ? Number(focusedEl.getAttribute("data-krify-id")) || null : null;
     const mainCards = cards.filter((_, i) => elements.some((e) => e.c === i && /main|page/.test(sections[e.s].kind))).length;
@@ -1556,6 +1565,7 @@ if (!window.__krify) {
         results,
         scrollY: Math.round(scrollY),
         scrollMax: Math.max(0, doc.scrollHeight - innerHeight),
+        width: Math.round(innerWidth), // to tell a left sidebar / right column from the main area
       },
       status: statusSignals(),
       form: formSummary(numbered),

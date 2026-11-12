@@ -218,7 +218,12 @@ sections (dialog, header, nav, main › heading, form, footer, embedded pages), 
 such as product tiles or table rows, with title/price/rating/badges) and elements (with accessibility
 states such as disabled/required/invalid/expanded, `aria-describedby` hints, table column). On-screen
 elements are collected first, then the rest, up to a cap and a time limit. `backend/app/context/pageview.py`
-decides what the AI sees: restricted mode shows what's on screen plus any open dialog and the focused form,
+decides what the AI sees, in design order: open pop-ups first (🔲; behind a modal the page is one line per
+part), then the page's parts as laid out (┌ TOP BAR, NAV, LEFT SIDEBAR/SIDEBAR, MAIN, RIGHT COLUMN, EMBEDDED PAGE,
+FOOTER – `_region()`, from landmarks plus each section's `box` and the page `width` sent by content.js), a
+`⚠ ALERTS` line for the site's own messages, and every element in one shape, `[n] role "label" = "value" (states)`
+(`_tidy()`/`_states()`); `clean_page_text()` drops what the view already says from Unrestricted mode's
+`[Page text]`. Restricted mode shows what's on screen plus any open dialog and the focused form,
 with long nav/sidebar lists cut and the footer collapsed. Full mode (the side panel's Unrestricted switch)
 shows everything and marks off-screen parts. `View.flat` keeps every collected element in the old
 `[n] role "label"` format, because `safety.py`, the fact check and `merge_elements` depend on it, so they
