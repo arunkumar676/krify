@@ -50,11 +50,11 @@ class ContextMixin:
         depending on STRUCTURED_VIEW."""
         info = await self.browser("get_page_info", {})
         open_list = form = None
-        full = False
+        full = inline_text = False
         if STRUCTURED_VIEW:
             view = pageview.render(await self.browser("get_page_model", {}))
             elements, shown, status, hint = view.flat, view.text, view.status, view.hint
-            open_list, form, full = view.open_list, view.form, view.full
+            open_list, form, full, inline_text = view.open_list, view.form, view.full, view.inline_text
         else:
             elements = shown = await self.browser("get_elements", {})
             status = match.group(1) if (match := _STATUS_LINE.search(elements)) else ""
@@ -63,7 +63,8 @@ class ContextMixin:
         # nothing clickable, a record's detail fields – is otherwise only read with read_text. In
         # Unrestricted mode it's sent too, uncut. Not on Sheets: their text is a canvas, read as CSV.
         text = f"{shown}\n{hint}" if hint else shown
-        if full and not is_sheet(info.get("url", "")):
+        # (Not needed when the extension already sent the text among the elements – inline_text.)
+        if full and not inline_text and not is_sheet(info.get("url", "")):
             page_text = await self.browser_quiet("read_text", {"scope": "page"})
             if isinstance(page_text, str) and not page_text.startswith("(no text"):
                 page_text = pageview.clean_page_text(page_text, shown)  # not what the view already says

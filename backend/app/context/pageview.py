@@ -48,6 +48,7 @@ class View:
     # The form being filled (content.js formSummary): {name, marks, fields, submits}, or None.
     form: dict | None = None
     full: bool = False  # Unrestricted mode: nothing was cut (the loop then lifts its own caps too)
+    inline_text: bool = False  # the page's own text is already in the view, among the elements (Unrestricted)
 
 
 @dataclass
@@ -150,6 +151,8 @@ KEEP_AS_IS = ("scrollable box ", "this embedded page")  # Krify's own lines: the
 _DESCRIPTION = re.compile(r'^(?P<head>[^"\n]*?)\s*"(?P<label>[^"\n]*)"(?P<rest>.*)$', re.S)
 _VALUE = re.compile(r'^\(value: "(?P<value>.*)"\)(?P<rest>.*)$', re.S)
 HOVER = " (shows on hover)"
+LONG_LABEL = 100  # a label longer than this (a clickable card's whole text) is cut to SHORT_LABEL –
+SHORT_LABEL = 80  # in Unrestricted mode its full text is shown as a text block next to it (content.js)
 
 
 def _tidy(text):
@@ -189,6 +192,8 @@ def _tidy(text):
             rest = rest[len(word):].strip()
             if word == "(checked)":
                 extra.append("checked")
+    if len(label) > LONG_LABEL:
+        label = label[:SHORT_LABEL].rstrip() + "…"
     line = f'{role} "{label}"'
     if value:
         line += f' = "{value}"'
@@ -225,6 +230,11 @@ def _element_line(el):
             states.append(s)
     if text.startswith("clickable ") and ({"open", "closed"} & set(states)):
         text = "group " + text[len("clickable "):]  # opens/closes a part of the page (sidebar group, accordion)
+    elif text.startswith("tab "):
+        states = [s for s in states if s not in ("open", "closed")]  # "selected" says which tab is showing
+    elif text.startswith("link ") and ({"open", "closed"} & set(states)):
+        # A menu link that also opens a sub-menu ("Our Services ▾"): say so, not "closed".
+        states = ["submenu open" if s == "open" else "submenu▸" if s == "closed" else s for s in states]
     line = f"[{el['id']}] {text}"
     if states:
         line += f" ({', '.join(states)})"
@@ -323,7 +333,7 @@ def _ambiguity(entries, shown):
 # The page is shown the way a person sees it: an open pop-up first (it sits on top of the page),
 # then top → bottom, left → right: top bar, nav, left sidebar, main, right column, embedded pages,
 # footer. Each region is written whole (column by column), never mixed row by row.
-REGION_ORDER = ["TOP BAR", "NAV", "LEFT SIDEBAR", "SIDEBAR", "MAIN", "RIGHT COLUMN", "EMBEDDED", "FOOTER"]
+REGION_ORDER = ["TOP BAR", "NAV", "LEFT SIDEBAR", "SIDEBAR", "MAIN", "RIGHT COLUMN", "FLOATING", "EMBEDDED", "FOOTER"]
 SIDE_SHARE = 0.35  # a section within the left/right 35% of the window is a sidebar/column
 TOP_BAR_Y = 150  # a nav/search ending this close to the top of the page belongs to the top bar
 MAX_ALERTS = 3
@@ -362,15 +372,14 @@ def _region(sec, page_index, width):
 
 def _sub_name(name):
     """A section's name without what its region already says: 'Header › Nav "Shortcuts"' → 'Shortcuts',
-    'Main › "Results"' → 'Results', 'Embedded page "X" › Form "Sign in"' → 'Form "Sign in"'."""
+    'Main › "Results"' → 'Results', 'Embedded page "X" › Form "Sign in"' → 'Form Sign in'."""
     parts = []
     for part in name.split(" › "):
         if part.startswith('Embedded page "') or part in LANDMARKS:
             continue
         word, _, rest = part.partition(' "')
-        parts.append(f'"{rest}' if rest and word in LANDMARKS else part)
-    text = " › ".join(parts)
-    return text[1:-1] if text.count('"') == 2 and text.startswith('"') and text.endswith('"') else text
+        parts.append(rest if rest and word in LANDMARKS else part)
+    return " › ".join(parts).replace('"', "")
 
 
 def _counts(hidden):
@@ -381,12 +390,34 @@ def _counts(hidden):
     return ", ".join(parts)
 
 
-def _section_lines(sec, group, shown, cards, sub):
-    """One section, in place: its heading line and elements (cards with their own elements indented),
-    or a one-line note when none of its elements are shown."""
+# Text that says nothing new: screen-reader helpers, a strip of small numbers (slider dots "1 2 3 4",
+# animated counters), or a line made only of element labels ("Facebook Linkedin-in X-twitter").
+_NUMBERS_ONLY = re.compile(r"^(\d{1,2}\s+){2,}\d{1,2}$")
+
+
+def _only_labels(text, labels):
+    """True if `text` (lower case) is nothing but element labels (longest first) and punctuation."""
+    rest = text
+    for label in labels:
+        if label in rest:
+            rest = rest.replace(label, " ")
+    return not re.search(r"\w", rest)
+
+
+def _junk(text, said, labels):
+    plain = text.strip()
+    low = plain.lower()
+    return (not plain or low in said or bool(_SCREEN_READER.match(plain)) or bool(_NUMBERS_ONLY.match(plain))
+            or _only_labels(low, labels))
+
+
+def _section_lines(sec, group, shown, cards, sub, texts=()):
+    """One section, in place: its heading line, then its elements and (Unrestricted mode) its text
+    blocks together in page order – cards with their own elements and text indented – or a one-line
+    note when nothing of it is shown."""
     visible = [e for e in group if e.order in shown]
     hidden = [e for e in group if e.order not in shown]
-    if not visible:
+    if not visible and not texts:
         where = _counts(hidden)
         how = "find_elements" if all(e.el.get("pos", 0) == 0 for e in hidden) else "scroll there or use find_elements"
         return [f"## {sub} ({where} – {how})" if sub else f"({where} – {how})"]
@@ -397,29 +428,64 @@ def _section_lines(sec, group, shown, cards, sub):
         header = f"{header or '##'} ({items} items)"
     if header:
         lines.append(header)
-    card, pos = None, 0
+    state = {"card": None, "pos": 0, "card_line": ""}
     # A clickable table row is its own card: its `row "…"` line is the ▸ line, with the row's own
     # buttons/links indented under it (a card summary would repeat the same cells).
     row_ids = {cards[e.card]["row"] for e in visible if e.card and cards.get(e.card, {}).get("row")}
     rows = {e.card: e for e in visible if e.el["id"] in row_ids}
-    for e in visible:
-        el_pos = e.el.get("pos", 0)
-        if el_pos != pos:
-            lines.append(f"-- {POSITION.get(el_pos, 'on screen')} --")
-            pos = el_pos
-        if e.card != card:
-            card = e.card
+
+    def enter(card, pos):
+        if pos != state["pos"]:
+            lines.append(f"-- {POSITION.get(pos, 'on screen')} --")
+            state["pos"] = pos
+        if card != state["card"]:
+            state["card"] = card
+            state["card_line"] = ""
             if card in rows:
-                lines.append("▸ " + _element_line(rows[card].el))
+                state["card_line"] = "▸ " + _element_line(rows[card].el)
             elif card:
-                lines.append(_card_line(cards.get(card), el_pos))
-        if card in rows and e is rows[card]:
+                state["card_line"] = _card_line(cards.get(card), pos)
+            if state["card_line"]:
+                lines.append(state["card_line"])
+
+    def say(t):
+        enter(t["card"], t.get("pos", 0))
+        if t["t"].lower() in state["card_line"].lower():  # the ▸ line already has it (title, price)
+            return
+        lines.append(("  " if t["card"] else "") + t["t"])
+
+    texts = sorted(texts, key=lambda t: (t["y"], t["x"]))
+    i = 0
+    for e in visible:
+        if (y := e.el.get("y")) is not None:  # the page's text above this element comes first
+            while i < len(texts) and (texts[i]["y"], texts[i]["x"]) < (y, e.el.get("x", 0)):
+                say(texts[i])
+                i += 1
+        enter(e.card, e.el.get("pos", 0))
+        if e.card in rows and e is rows[e.card]:
             continue
-        lines.append(("  " if card else "") + _element_line(e.el))
+        lines.append(("  " if e.card else "") + _element_line(e.el))
+    for t in texts[i:]:
+        say(t)
     if hidden:
         how = "use find_elements" if all(e.el.get("pos", 0) == 0 for e in hidden) else "scroll there or use find_elements"
         lines.append(f"(+{len(hidden)} more here: {_counts(hidden)} – {how})")
     return lines
+
+
+def _row_counts(page):
+    """The site's repeated rows, counted exactly – only for real lists (results, table rows), not
+    form fields or footer lines that merely look alike."""
+    info = page.get("page") or {}
+    listy = info.get("type") in ("search results", "list")
+    real = [c for c in page.get("counts") or []
+            if (listy or " table row" in f" {c}") and (m := _ROW_COUNT.match(c))
+            and len(re.sub(r"\W", "", m.group(1))) > 2]
+    if not real:
+        return ""
+    return (f"[Exact counts of repeated rows loaded on this page so far: {'; '.join(real)}. Use these, don't count by "
+            "eye. Rows on other pages, behind 'Load more', or not loaded yet (lists that fill in as you scroll) are "
+            "not included.]")
 
 
 def render(model):
@@ -453,12 +519,37 @@ def render(model):
     form = next((page["form"] for page in pages if page.get("form")), None)
     lines += form_lines(form, full)
 
-    by_section = {}
+    # Unrestricted mode: the page's own text blocks, each in its section, minus what's already said
+    # (element labels, headings, the main heading, alerts) and junk.
+    # (A label longer than LONG_LABEL is cut in its element line, so its full text still counts as new.)
+    labels = sorted({lab for e in entries if 1 < len(lab := _label(e.el["text"]).strip().lower()) <= LONG_LABEL},
+                    key=len, reverse=True)
+    said = set(labels) | {_sub_name(sec["name"]).lower() for sec in sections.values()} | {info.get("h1", "").lower()}
+    said |= {a.lower() for status in statuses for a in status.split(" | ")}
+    texts_by_section = {}
+    for p, page in enumerate(pages):
+        for t in page.get("texts") or []:
+            if not _junk(t.get("t", ""), said, labels):
+                card = (p, t["c"]) if t.get("c", -1) >= 0 else None
+                texts_by_section.setdefault((p, t["s"]), []).append({**t, "card": card})
+
+    by_section, floating = {}, []
     for e in entries:
-        by_section.setdefault(e.section, []).append(e)
+        if e.el.get("float") and not POPUP_KINDS & set(sections[e.section].get("kinds") or ()):
+            floating.append(e)  # a chat bubble / "Request a quote" button that stays put: shown on its own
+        else:
+            by_section.setdefault(e.section, []).append(e)
+
+    def top_of(key):
+        ys = [e.el["y"] for e in by_section.get(key, []) if e.el.get("y") is not None]
+        ys += [t["y"] for t in texts_by_section.get(key, [])]
+        return (key[0], not ys, min(ys) if ys else 0, key[1])
+
     # An open dropdown list goes first: its options are numbered after everything else (so opening
-    # it doesn't shift the form's numbers) but they're what the AI should pick from next.
-    ordered = sorted(by_section.items(), key=lambda item: not sections[item[0]].get("list"))
+    # it doesn't shift the form's numbers) but they're what the AI should pick from next. The rest:
+    # in page order (top to bottom), from where their elements and text sit.
+    keys = sorted(set(by_section) | set(texts_by_section), key=lambda k: (not sections[k].get("list"), top_of(k)))
+    ordered = [(key, by_section.get(key, [])) for key in keys]
     open_list = next(((sections[key]["name"], [_label(e.el["text"]) for e in group  # options, not its search box
                                                 if not e.el["text"].startswith(("input", "textarea"))])
                       for key, group in ordered if sections[key].get("list")), None)
@@ -474,6 +565,8 @@ def render(model):
             region = _region(sec, key[0], width)
             regions.setdefault((REGION_ORDER.index(region), key[0] if region == "EMBEDDED" else 0, region), []).append(
                 (key, group))
+    if floating:
+        regions[(REGION_ORDER.index("FLOATING"), 0, "FLOATING")] = [(None, floating)]
     modal = any(sections[key].get("modal") for key, _ in popups)
 
     behind = set()  # elements shown in no detail: behind a pop-up that blocks the page
@@ -491,29 +584,39 @@ def render(model):
             else:
                 title = f"🔲 OPEN {kind.upper()} – {root}"
             lines.append(title)
-        lines += _section_lines(sec, group, shown, cards, _sub_name(inner) if inner else "")
-    for (_, page_index, region), members in sorted(regions.items()):
+        lines += _section_lines(sec, group, shown, cards, _sub_name(inner) if inner else "",
+                                texts_by_section.get(key, ()))
+    for (_, page_index, region), members in sorted(regions.items(), key=lambda item: item[0]):
         name = f'EMBEDDED PAGE "{pages[page_index].get("frame")}"' if region == "EMBEDDED" else region
         group_all = [e for _, group in members for e in group]
+        has_text = any(texts_by_section.get(key) for key, _ in members if key)
         # Behind a blocking pop-up: one line (the AI can't use it until the pop-up is closed) – except
         # embedded pages (often the pop-up's own content) and the part where the keyboard is.
         if modal and region != "EMBEDDED" and not any(e.el["id"] in focused for e in group_all):
             behind |= {e.order for e in group_all}
-            headings = [s for key, _ in members if (s := _sub_name(sections[key]["name"]))]
+            headings = [s for key, _ in members if key and (s := _sub_name(sections[key]["name"]))]
             about = f" · {', '.join(headings[:4])}" if headings else ""
             count = f"{len(group_all)} element{'s' if len(group_all) != 1 else ''}"
             lines.append(f"┌ {name} (behind the pop-up – {count}{about})")
             continue
-        if not any(e.order in shown for e in group_all):  # nothing of it is shown: one line, in its place
+        if not has_text and not any(e.order in shown for e in group_all):  # nothing shown: one line, in its place
             lines.append(f"┌ {name} ({_counts(group_all)} – scroll there or use find_elements)")
+            continue
+        if region == "FLOATING":
+            lines.append("┌ FLOATING (buttons that stay on screen while you scroll)")
+            lines += _section_lines({}, floating, shown, cards, "")
             continue
         lines.append(f"┌ {name}")
         for key, group in members:
-            lines += _section_lines(sections[key], group, shown, cards, _sub_name(sections[key]["name"]))
+            lines += _section_lines(sections[key], group, shown, cards, _sub_name(sections[key]["name"]),
+                                    texts_by_section.get(key, ()))
+    if full and (counts := _row_counts(pages[0])):
+        lines.append(counts)
     if any(page.get("partial") for page in pages):
         lines.append("(very large page: far-off parts weren't listed – scroll there to see them)")
     return View("\n".join(lines), flat_lines(model), statuses[0] if statuses else "",
-                _ambiguity(entries, shown - behind), open_list, form, full)
+                _ambiguity(entries, shown - behind), open_list, form, full,
+                inline_text=any(page.get("texts") for page in pages))
 
 
 # ---------- Unrestricted mode: the page's text, without what the view already says ----------
@@ -532,6 +635,7 @@ def clean_page_text(text, view_text):
     lines that are just an element's label ("Home", "Inbox", "Create"), screen-reader helpers
     ("Skip to main content"), animated digit strips, and "rows like" counts of junk ("10 rows like "0"")."""
     said = {q.strip().lower() for q in _QUOTED.findall(view_text or "")}
+    labels = sorted((q for q in said if len(q) > 1), key=len, reverse=True)
     lines = (text or "").split("\n")
     digits = [bool(_DIGIT.match(line.strip())) for line in lines]
     keep = []
@@ -550,7 +654,7 @@ def clean_page_text(text, view_text):
         plain = line.strip()
         if helper := _SKIP_LINK.match(plain):  # "Skip to main content Create Search": drop the helper part
             plain = line = plain[helper.end():].strip()
-        if not plain or plain.lower() in said or _SCREEN_READER.match(plain):
+        if _junk(plain, said, labels):
             continue
         if counts := _ROW_COUNTS.match(plain):
             real = [c for c in counts.group(1).split("; ")

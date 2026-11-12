@@ -1359,6 +1359,7 @@ if (!window.__krify) {
     if (/docs\.google\.com\/document\//.test(url)) return "document";
     if (deepAll("input[type=password]").some(isRendered)) return "login";
     if (/checkout|\/cart\b|basket|payment/i.test(location.pathname)) return "checkout/cart";
+    if (window === top && /^\/?(index\.\w+)?$/.test(location.pathname) && !location.search) return "home";
     const searchy = /[?&](q|k|query|search|s|keyword|keywords|text)=/i.test(location.search) ||
       /search/i.test(location.pathname) || !!results;
     if (cardCount >= 3 && searchy) return "search results";
@@ -1486,16 +1487,22 @@ if (!window.__krify) {
     const cardIds = new Map();
     const elements = [];
     const full = window.__krify.unrestricted;
-    for (const n of info) {
-      const innerKind = n.section ? kindOf(n.section).kind : "page";
+    // The section a node at screen height `top` belongs to: its landmark chain, and inside main (or
+    // a page with no landmarks) the heading above it. Used for elements and, in full mode, text.
+    const placeOf = (chain, top) => {
+      const section = chain[chain.length - 1] || null;
+      const innerKind = section ? kindOf(section).kind : "page";
       let heading = null;
       if (innerKind === "main" || innerKind === "page") {
         for (const h of headings) {
-          if (h.y > n.rect.top + 2) break;
-          if (h.section === n.section) heading = h;
+          if (h.y > top + 2) break;
+          if (h.section === section) heading = h;
         }
       }
-      const s = sectionFor(n.chain, heading);
+      return sectionFor(chain, heading);
+    };
+    for (const n of info) {
+      const s = placeOf(n.chain, n.rect.top);
       let c = -1;
       if (n.card) {
         if (!cardIds.has(n.card)) {
@@ -1518,8 +1525,12 @@ if (!window.__krify) {
       elements.push({
         id: n.id, text: n.text, states: statesOf(n.el, field), hint: hintOf(n.el, field),
         col: columnOf(n.el), pos, s, c,
+        y: Math.round(r.top + scrollY), x: Math.round(r.left + scrollX), // page order, to place text between elements
+        ...(floating(n.el) ? { float: true } : {}),
       });
     }
+    // Full mode: the page's own text, as blocks placed among the elements (see pageTextBlocks).
+    const texts = full ? pageTextBlocks(placeOf, chainOf, cardIds) : [];
     // Card summaries cost a few DOM reads each: on-screen cards always, all of them in full mode.
     let summaries = 0;
     const cardList = cards.map((card, i) => {
@@ -1575,8 +1586,72 @@ if (!window.__krify) {
       sections,
       cards: cardList,
       elements,
+      texts,
+      counts: full && window === top ? listCounts() : [],
       count: id - start,
     };
+  }
+
+  // A small box that stays put while the page scrolls (chat bubble, WhatsApp / "Request a quote"
+  // button): not part of the header it may sit in. A fixed or sticky bar across the page is not one.
+  function floating(el) {
+    for (let node = el, i = 0; node && node !== document.body && i < 12; node = parentOf(node), i++) {
+      if (node.nodeType !== 1) continue;
+      if (cachedStyle(node).position !== "fixed") continue;
+      const r = node.getBoundingClientRect();
+      return r.width < innerWidth * 0.4 && r.height < innerHeight * 0.5;
+    }
+    return false;
+  }
+
+  const LONG_LABEL = 100; // a numbered element with more text than this (a clickable card) keeps its text as a text block
+  // Full mode: the page's own text, one block per paragraph / heading / list item / cell (the
+  // nearest non-inline box around it), in page order, each placed in its section (and card) like
+  // the elements, so pageview.py can show text and elements together. Left out: text that is only
+  // a numbered element's label (its element line already says it), hidden or screen-reader-only text.
+  function pageTextBlocks(placeOf, chainOf, cardIds) {
+    const blocks = new Map(); // block element → { parts, own, top, left }
+    const range = document.createRange();
+    const blockOf = (node) => {
+      let block = node;
+      while (block && block !== document.body && /^inline/.test(cachedStyle(block).display)) block = parentOf(block);
+      return block || document.body;
+    };
+    for (const node of textNodes(document.body)) {
+      const text = node.nodeValue.replace(/\s+/g, " ").trim();
+      const parent = node.parentElement;
+      if (!text || !parent || /^(SCRIPT|STYLE|NOSCRIPT|TEMPLATE)$/.test(parent.tagName)) continue;
+      range.selectNodeContents(node);
+      const r = range.getBoundingClientRect();
+      if (r.width <= 1 || r.height <= 1) continue; // not laid out, or a screen-reader-only 1px box
+      if (parent.checkVisibility && !parent.checkVisibility({ opacityProperty: true, visibilityProperty: true })) continue;
+      if (closestDeep(parent, '[aria-hidden="true"]')) continue; // decoration (animated digits, icons)
+      const numbered = closestDeep(parent, "[data-krify-id]");
+      const said = numbered && (numbered.innerText || "").length <= LONG_LABEL; // its element line has this text
+      const block = blockOf(parent);
+      let entry = blocks.get(block);
+      if (!entry) blocks.set(block, (entry = { parts: [], own: 0, top: r.top, left: r.left }));
+      entry.parts.push(text);
+      if (!said) entry.own += text.length;
+    }
+    const out = [];
+    for (const [block, entry] of blocks) {
+      if (!entry.own) continue; // only element labels: nothing new
+      const chain = chainOf(block);
+      let c = -1;
+      for (let p = block, i = 0; p && i < 15; p = parentOf(p), i++) {
+        if (cardIds.has(p)) {
+          c = cardIds.get(p);
+          break;
+        }
+      }
+      const pos = entry.top + 2 < 0 ? -1 : entry.top > innerHeight ? 1 : 0;
+      out.push({
+        t: entry.parts.join(" ").replace(/\s+/g, " ").trim(), s: placeOf(chain, entry.top), c, pos,
+        y: Math.round(entry.top + scrollY), x: Math.round(entry.left + scrollX),
+      });
+    }
+    return out;
   }
 
   // ---------- inspect(): accessibility-tree view ----------

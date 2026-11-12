@@ -1,0 +1,51 @@
+{
+  "_note": "Hand-built test page shaped like krify.co's home page in Unrestricted mode: text blocks placed among the elements (texts), floating buttons, sub-menu links, a long clickable card, and junk text that must be dropped.",
+  "full": true,
+  "pages": [
+    {
+      "frame": "",
+      "page": {"type": "home", "h1": "Top Mobile App, Web and AI Development Company", "results": "", "scrollY": 0, "scrollMax": 4200, "width": 1280},
+      "status": "",
+      "focused": null,
+      "popup": false,
+      "partial": false,
+      "sections": [
+        {"name": "Header", "kind": "header", "kinds": ["header"], "modal": false, "box": [40, 0, 1240, 120]},
+        {"name": "Main › \"ABOUT US\"", "kind": "main", "kinds": ["main"], "modal": false, "box": [60, 700, 1220, 1100]},
+        {"name": "Main › \"Top Mobile App, Web and AI Development Company\"", "kind": "main", "kinds": ["main"], "modal": false, "box": [60, 1200, 1220, 1600]},
+        {"name": "Main › Form", "kind": "form", "kinds": ["main", "form"], "modal": false, "box": [60, 2400, 900, 2900]},
+        {"name": "Footer", "kind": "footer", "kinds": ["footer"], "modal": false, "box": [0, 3600, 1280, 4200]}
+      ],
+      "cards": [],
+      "elements": [
+        {"id": 1, "text": "link \"Facebook\"", "states": [], "hint": "", "col": "", "pos": 0, "s": 0, "c": -1, "y": 10, "x": 40},
+        {"id": 2, "text": "link \"Linkedin-in\"", "states": [], "hint": "", "col": "", "pos": 0, "s": 0, "c": -1, "y": 10, "x": 80},
+        {"id": 3, "text": "link \"X-twitter\"", "states": [], "hint": "", "col": "", "pos": 0, "s": 0, "c": -1, "y": 10, "x": 120},
+        {"id": 4, "text": "link \"Go to Our Services page\"", "states": ["collapsed"], "hint": "", "col": "", "pos": 0, "s": 0, "c": -1, "y": 80, "x": 600},
+        {"id": 5, "text": "link \"Go to Blog page\"", "states": [], "hint": "", "col": "", "pos": 0, "s": 0, "c": -1, "y": 80, "x": 900},
+        {"id": 6, "text": "link \"whatsapp icon\"", "states": [], "hint": "", "col": "", "pos": 0, "s": 0, "c": -1, "y": 600, "x": 30, "float": true},
+        {"id": 7, "text": "link \"request quote\"", "states": [], "hint": "", "col": "", "pos": 0, "s": 0, "c": -1, "y": 700, "x": 30, "float": true},
+        {"id": 8, "text": "tab \"Our Vision\"", "states": ["expanded", "selected"], "hint": "", "col": "", "pos": 1, "s": 1, "c": -1, "y": 900, "x": 100},
+        {"id": 9, "text": "tab \"Our Mission\"", "states": ["collapsed"], "hint": "", "col": "", "pos": 1, "s": 1, "c": -1, "y": 900, "x": 300},
+        {"id": 10, "text": "clickable \"Krify has cutting-edge development technique which allows us to develop custom Responsive Web Design which is compatible with mobile, tablet, and desktop.\"", "states": [], "hint": "", "col": "", "pos": 1, "s": 2, "c": -1, "y": 1300, "x": 100},
+        {"id": 11, "text": "input text \"Enter Full Name\" (empty)", "states": [], "hint": "", "col": "", "pos": 1, "s": 3, "c": -1, "y": 2500, "x": 100},
+        {"id": 12, "text": "button submit \"Submit\"", "states": [], "hint": "", "col": "", "pos": 1, "s": 3, "c": -1, "y": 2800, "x": 100},
+        {"id": 13, "text": "link \"terms-of-use\"", "states": [], "hint": "", "col": "", "pos": 1, "s": 4, "c": -1, "y": 4100, "x": 100}
+      ],
+      "texts": [
+        {"t": "Facebook Linkedin-in X-twitter", "s": 0, "c": -1, "pos": 0, "y": 10, "x": 40},
+        {"t": "(US) +1 212 380 1160 (India) +91 7901322222 info@krify.co", "s": 0, "c": -1, "pos": 0, "y": 10, "x": 400},
+        {"t": "1 2 3 4", "s": 1, "c": -1, "pos": 1, "y": 650, "x": 600},
+        {"t": "ABOUT US", "s": 1, "c": -1, "pos": 1, "y": 720, "x": 100},
+        {"t": "Krify is a Multi-National Company specialized in crafting latest Mobile Apps, Software Applications and Web Applications.", "s": 1, "c": -1, "pos": 1, "y": 780, "x": 100},
+        {"t": "Krify wants to enhance its presence in Digital Marketing, which is one of the most happening wings of marketing.", "s": 1, "c": -1, "pos": 1, "y": 960, "x": 100},
+        {"t": "Krify has cutting-edge development technique which allows us to develop custom Responsive Web Design which is compatible with mobile, tablet, and desktop.", "s": 2, "c": -1, "pos": 1, "y": 1300, "x": 100},
+        {"t": "Get a Free Consultation", "s": 3, "c": -1, "pos": 1, "y": 2400, "x": 100},
+        {"t": "Full Name", "s": 3, "c": -1, "pos": 1, "y": 2480, "x": 100},
+        {"t": "An ISO 9001:2015, ISO 27001:2013 Certified Company.", "s": 4, "c": -1, "pos": 1, "y": 4000, "x": 100}
+      ],
+      "counts": ["7 rows like \"Full Name\"", "7 rows like \"2026 Krify\""],
+      "count": 13
+    }
+  ]
+}
