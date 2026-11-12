@@ -78,6 +78,14 @@ def tool(name, **args):
 
 async def fake_ask_ai(messages, tools, preferred, on_note=None, need_vision=False, boost=False):
     sc = SCENARIO
+    if tools is None and messages[0]["content"] == router.GATE_PROMPT:  # the cheap-model gate (router.py)
+        emit("gate", {"model": preferred, "user": messages[1]["content"], "messages": len(messages)})
+        if not sc.gates:
+            raise RuntimeError("replay: the script ran out of gate replies")
+        item = sc.gates.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        return ChatCompletionMessage(role="assistant", content=item), preferred, 20
     if tools is None:  # the planner (understand.py)
         emit("planner", {"model": preferred, "messages": messages})
         return ChatCompletionMessage(role="assistant", content=sc.plans.pop(0) if sc.plans else ""), preferred, 7
@@ -112,6 +120,10 @@ client.has_vision_model = fake_has_vision_model
 from checks._find import mod  # noqa: E402
 
 from app.agent.loop import Agent  # noqa: E402
+from app.context import router  # noqa: E402
+
+# The gate is off unless a scenario scripts its replies (gates=[...]): .env may hold real API keys.
+router.cheap_model = lambda: "test:cheap" if SCENARIO.gates is not None else None
 
 pageview = mod("app.context.pageview", "app.agent.pageview")
 safety = mod("app.guardrails.safety", "app.agent.safety")
@@ -237,6 +249,7 @@ class Scenario:
     reviews: list = dataclasses.field(default_factory=list)
     moves: dict = dataclasses.field(default_factory=dict)
     handlers: dict = dataclasses.field(default_factory=dict)
+    gates: list = None  # scripted replies of the cheap-model gate (None = gate off); an Exception is raised
     vision: bool = False
     dev_mode: bool = False
     location: dict = None
@@ -624,6 +637,41 @@ def session():
     ])
 
 
+@scenario
+def gate_answers():
+    """Chat and general knowledge are answered by the gate: no page view, no planner, no agent call."""
+    return Scenario("gate_answers", "shop", ["hai", "what is 17 times 23, in 2024?", "explain more"],
+                    gates=['{"kind": "chat", "reply": "Hi! I can open sites and search for you."}',
+                           '```json\n{"kind": "answer", "reply": "17 × 23 = 391."}\n```',
+                           '{"kind": "answer", "reply": "17 × 20 = 340 and 17 × 3 = 51."}'], replies=[])
+
+
+@scenario
+def gate_passes_tasks():
+    """Anything unclear or broken goes to the agent unchanged: task, junk, wrong kind, empty reply, error, no reply."""
+    return Scenario("gate_passes_tasks", "shop",
+                    ["price of iPhone 16e 256GB on amazon", "hello there friend", "what is the weather today",
+                     "open a page about cats", "tell me a joke please", "anything else at all"],
+                    gates=['{"kind": "task", "reply": ""}', "I think this is a greeting",
+                           '{"kind": "answer", "reply": ""}', RuntimeError("model down"),
+                           '{"kind": "weird", "reply": "hmm"}', '{"kind": "chat", "reply": "' + "x" * 1300 + '"}'],
+                    plans=[""] * 5,  # the 3-word task skips the planner (MIN_WORDS)
+                    replies=[tool("done", summary="Done 1."), tool("done", summary="Done 2."),
+                             tool("done", summary="Done 3."), tool("done", summary="Done 4."),
+                             tool("done", summary="Done 5."), tool("done", summary="Done 6.")])
+
+
+@scenario
+def gate_skipped_when_answering_ask():
+    """A message answering ask_user continues the task: the gate must not see it ("ok" would look like chat)."""
+    return Scenario("gate_skipped_when_answering_ask", "login", ["sign in to my account", "ok it is hunter2"],
+                    gates=['{"kind": "task", "reply": ""}'], plans=[""], replies=[
+        tool("ask_user", question="What is the password?"),
+        tool("done", summary="Signed in."),
+        tool("done", summary="Signed in."),  # the login page still shows an error: the done is sent back once
+    ])
+
+
 # ---------- running ----------
 
 SKIP = {"browser", "ui", "confirm", "plan_review", "messages", "page_views", "screen_reads", "screenshot_msgs", "state"}
@@ -677,7 +725,7 @@ async def run(make):
         emit("messages", agent.messages)
         emit("fields", fields(agent))
     emit("left_over", {"replies": len(sc.replies), "plans": len(sc.plans), "confirms": len(sc.confirms),
-                       "reviews": len(sc.reviews)})
+                       "reviews": len(sc.reviews), **({"gates": len(sc.gates)} if sc.gates is not None else {})})
 
 
 async def main():

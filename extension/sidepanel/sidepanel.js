@@ -488,6 +488,7 @@ function openReport(open, taskId) {
   reportView.hidden = !open;
   logEl.hidden = open;
   historyView.hidden = true;
+  $("reportClearConfirm").hidden = true;
   if (!open) return;
   reportBody.textContent = "Loading…";
   send(taskId ? { type: "llm_report", task_id: taskId } : { type: "llm_report" });
@@ -525,7 +526,7 @@ function table(headers, rows) {
 function callBlock(c) {
   const box = el("details");
   if (c.status !== "ok") box.className = "failed";
-  const where = c.purpose === "planner" ? "planner" : `step ${c.step}`;
+  const where = c.purpose === "planner" || c.purpose === "router" ? c.purpose : `step ${c.step}`;
   const tokens = c.status === "ok" ? `${fmtN(c.prompt_tokens)} in / ${fmtN(c.completion_tokens)} out` : c.status;
   box.append(el("summary", `#${c.seq} ${where} · ${c.model.split(":")[1] || c.model} · ${tokens} · ${(c.duration_ms / 1000).toFixed(1)}s`));
   if (c.error) box.append(el("div", c.error, "muted"));
@@ -559,6 +560,7 @@ function showReport(msg) {
   }
   lastReport = msg;
   const { task, totals: t, by_model, calls } = msg.report;
+  if (msg.cleared != null) reportBody.append(el("div", `Cleared ${msg.cleared} recorded LLM call(s).`, "muted"));
   $("reportTitle").textContent = `📊 LLM report – task ${task.id}`;
   reportBody.append(el("div", `${STATUS_ICON[task.status] || "•"} ${task.text}`));
   const cards = el("div", null, "report-cards");
@@ -579,6 +581,7 @@ function showReport(msg) {
   reportBody.append(table(["Model", "Calls", "Failed", "Sent", "Received", "Total"],
     Object.entries(by_model).map(([m, g]) => [m, g.calls, g.failed, fmtN(g.prompt_tokens), fmtN(g.completion_tokens), fmtN(g.total_tokens)])));
   reportBody.append(el("h4", "Every call"));
+  if (!calls.length) reportBody.append(el("div", "No LLM calls recorded for this task.", "muted"));
   calls.forEach((c) => reportBody.append(callBlock(c)));
 }
 
@@ -591,6 +594,13 @@ function download(name, text, type) {
 
 $("reportBtn").onclick = () => openReport(reportView.hidden);
 $("closeReportBtn").onclick = () => openReport(false);
+$("reportClearBtn").onclick = () => ($("reportClearConfirm").hidden = false);
+$("reportClearNoBtn").onclick = () => ($("reportClearConfirm").hidden = true);
+$("reportClearYesBtn").onclick = () => {
+  $("reportClearConfirm").hidden = true;
+  reportBody.textContent = "Clearing…";
+  send({ type: "llm_report_clear" });
+};
 $("reportMdBtn").onclick = () => lastReport && download(`krify-llm-report-task-${lastReport.report.task.id}.md`, lastReport.markdown, "text/markdown");
 $("reportJsonBtn").onclick = () =>
   lastReport && download(`krify-llm-report-task-${lastReport.report.task.id}.json`, JSON.stringify(lastReport.report, null, 2), "application/json");

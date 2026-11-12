@@ -36,7 +36,14 @@
       <span class="spacer"></span>
       <button id="reportMdBtn" class="small" title="Download as Markdown">⬇ .md</button>
       <button id="reportJsonBtn" class="small" title="Download as JSON">⬇ .json</button>
+      <button id="reportClearBtn" class="small" title="Delete the recorded AI requests (History stays)">🗑 Clear</button>
       <button id="closeReportBtn" class="small">✕ Close</button>
+    </div>
+    <div id="reportClearConfirm" class="row confirm-clear" hidden>
+      Delete all recorded LLM calls? History stays.
+      <span class="spacer"></span>
+      <button id="reportClearYesBtn" class="small">Yes, delete</button>
+      <button id="reportClearNoBtn" class="small">No</button>
     </div>
     <div id="reportBody" class="report-body"></div>
   </section>

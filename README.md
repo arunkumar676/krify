@@ -11,7 +11,7 @@ Krify is an AI agent that works inside your browser. You tell it what to do in p
 
 ## Features
 
-- 🗣️ **Plain-language tasks**: casual wording and Hinglish work ("amazon pe sasta mouse dhundo")
+- 🗣️ **Plain-language tasks**: casual wording works ("find a cheap mouse on amazon")
 - 🔁 **Plan → act → verify loop**: after every action Krify looks at the page again to check it worked
 - 🖱️ **Browser actions**: open URL, back, reload, click, hover, type (+ Enter), press keys, scroll, choose from dropdowns, read page text
 - 🗂️ **Tabs**: open a site in a new tab, switch between tabs, close tabs. Krify only sees and closes **its own** tabs, never your other ones

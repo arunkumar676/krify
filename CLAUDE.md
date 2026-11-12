@@ -67,7 +67,7 @@ The agent is split by what each part does; extension files mirror the same names
 | Folder | What it holds |
 |---|---|
 | `agent/` | `loop.py`: `Agent` (`__init__`, `run()`'s dispatch, `stop_looping`); `state.py`: `TaskState` |
-| `context/` | what the AI sees: `prompt.py`, `pageview.py`, `understand.py` (planner), `view.py` (`look`/`page_view`/screenshots/`make_plan`), `header.py`, `element_list.py`, `sites.py` |
+| `context/` | what the AI sees: `prompt.py`, `pageview.py`, `understand.py` (planner), `router.py` (cheap-model gate), `view.py` (`look`/`page_view`/screenshots/`make_plan`), `header.py`, `element_list.py`, `sites.py` |
 | `tools/` | `schemas.py` (`TOOLS`), `ops.py` (op-name sets, batch rules), `describe.py`, `actions.py` (`do_action`, `run_batch`, sheet reads), `sheets.py` (CSV → DuckDB) |
 | `guardrails/` | before a step runs: `safety.py`, `element_match.py` (`wrong_element`), `forms.py` (`required_empty`, `track_form_edit`, `form_not_sent`), `permission.py` (`ask_permission`, `leave_guard`, `cells_in_the_way`), `progress.py` (stuck/repeat/loop detection, scroll limits) |
 | `verification/` | before an answer goes out: `facts.py`, `claims.py` (claims + handoff), `filters.py`, `ui_state.py`, `changes.py` (did a click work) |
@@ -87,7 +87,8 @@ comes from a `ContextVar` (`report.set_task` in `Agent.run()`, `set_step` per lo
 signature must stay `(messages, tools, preferred, on_note, need_vision, boost)` (`checks/replay.py`
 fakes it). `task_report()`/`task_report_markdown()` feed the side panel's **📊 Report** view
 (`llm_report` message; per-task button in History; .md/.json download). Full request/response text is
-kept for the newest 50 tasks (`report.prune`), numbers forever; deleting a task deletes its calls.
+kept for the newest 50 tasks (`report.prune`), numbers forever; deleting a task deletes its calls. The report's **🗑 Clear** button (`llm_report_clear` → `report.clear`) deletes
+this install's recorded calls only (History rows and their saved totals stay; the running task keeps its calls).
 `checks/llm_report_check.py` (run by `checks/run.py`) asserts the numbers, redaction and ownership.
 
 How the pieces fit:
@@ -114,6 +115,15 @@ is the core loop: build a page view → call `ask_ai()` with the running `messag
 the model replies with one or more tool calls → each call is dispatched (browser action, `sheet_query`,
 `plan`, `note`, `done`, `ask_user`, …) → the result (plus a fresh page view) is appended back into
 `messages` → repeat, up to `MAX_STEPS` (`config.py`, default 25).
+
+Before any of that, `run()` calls `try_gate()` (`output/answer.py`, logic in `context/router.py`) for every
+new message (not one answering `ask_user`): one tool-less request to a cheap model (`ROUTER_MODEL`, default
+`groq:openai/gpt-oss-20b`, else `gemini-flash-lite`) that replies `chat` / `answer` / `task`. `chat` and `answer`
+(greetings, "who are you", timeless general knowledge) are answered by the cheap model itself and the task ends
+there – no page view, planner or agent call; `task` hands the unchanged message to the loop. It is fail-open:
+no cheap model/key, cooling down, error, 8 s timeout, unreadable, empty or >1200-char reply all mean `task`.
+Gate calls are labelled `router` in the LLM report. `ROUTER=0` turns it off. `checks/replay.py` turns it off
+unless a scenario scripts `gates=[...]` (`.env` may hold real keys).
 
 Key mechanics worth knowing before touching the loop (they live in the layer modules named):
 - **Batching**: the model can send several `ACTION_OPS` tool calls in one reply (or use the explicit

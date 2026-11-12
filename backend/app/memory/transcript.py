@@ -31,7 +31,7 @@ class MemoryMixin:
         self.last_page = None
         self.screen_reads = {}
         self.screenshot_msgs = []
-        self.last_task = self.last_status = ""
+        self.last_task = self.last_status = self.gate_tail = ""
         self.notes_at_last_read = 0
 
     def add_screen_read(self, message, text):

@@ -11,7 +11,7 @@ import datetime
 import json
 from collections import defaultdict
 
-from sqlalchemy import update
+from sqlalchemy import delete, update
 from sqlmodel import func, select
 
 from app.db import LlmCall, Task, session
@@ -28,6 +28,15 @@ def set_task(task_id):
 
 def set_step(step):
     _ctx.set({**_ctx.get(), "step": step})
+
+
+def set_purpose(purpose):
+    """Label the calls made from here on ("router" for the gate); None = the default (planner / agent_step)."""
+    _ctx.set({**_ctx.get(), "purpose": purpose})
+
+
+def _where(purpose, step):
+    return purpose if purpose in ("planner", "router") else f"step {step}"
 
 
 def redact(messages):
@@ -63,7 +72,7 @@ def record_call(model, provider, attempt, messages, tools, extra, boost, need_vi
         "settings": extra,
     }
     row = LlmCall(
-        task_id=ctx["task_id"], step=ctx["step"], purpose="agent_step" if tools else "planner",
+        task_id=ctx["task_id"], step=ctx["step"], purpose=ctx.get("purpose") or ("agent_step" if tools else "planner"),
         duration_ms=duration_ms, model=model, provider=provider, attempt=attempt, boost=bool(boost),
         need_vision=bool(need_vision), status=status, error=str(error)[:500],
         message_count=len(messages), request_chars=_chars(request["messages"]) + request["tools_chars"],
@@ -106,6 +115,20 @@ def prune(keep=KEEP_PAYLOADS):
             s.exec(update(LlmCall).where(LlmCall.task_id.in_(old), LlmCall.request_json != "")
                    .values(request_json="", response_json=""))
             s.commit()
+
+
+def clear(client, keep_task_id=None):
+    """Delete this client's recorded LLM calls (the 📊 Report data). Tasks and their History rows stay,
+    and so do their saved totals; the task running right now (`keep_task_id`) keeps its calls, because
+    its History row is filled from them when it ends. Returns how many calls were deleted."""
+    with session() as s:
+        ids = [i for i in s.exec(select(Task.id).where(Task.client == client)).all() if i != keep_task_id]
+        if not ids:
+            return 0
+        n = s.exec(select(func.count()).select_from(LlmCall).where(LlmCall.task_id.in_(ids))).one()
+        s.exec(delete(LlmCall).where(LlmCall.task_id.in_(ids)))
+        s.commit()
+    return n
 
 
 def latest_task_id(client):
@@ -196,7 +219,7 @@ def task_report_markdown(report):
         lines.append(f"| {m} | {g['calls']} | {g['failed']} | {_n(g['prompt_tokens'])} | {_n(g['completion_tokens'])} | {_n(g['total_tokens'])} |")
     lines += ["", "## Calls"]
     for c in report["calls"]:
-        where = "planner" if c["purpose"] == "planner" else f"step {c['step']}"
+        where = _where(c["purpose"], c["step"])
         lines += [
             "", f"### #{c['seq']} · {where} · {c['model']} · {c['status']}"
             + (f" (retry {c['attempt']})" if c["attempt"] else ""),

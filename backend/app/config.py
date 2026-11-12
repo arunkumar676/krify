@@ -54,6 +54,13 @@ MAX_STEPS = int(os.getenv("MAX_STEPS", "25"))  # safety limit per task
 # Structured page view (sections → items → elements with states, built by agent/pageview.py from
 # the extension's get_page_model). 0 = the old flat element list (get_elements).
 STRUCTURED_VIEW = os.getenv("STRUCTURED_VIEW", "1") == "1"
+# Cheap-model gate in front of the agent (context/router.py): one small tool-less call decides whether
+# the message needs the browser agent; if not (chat, general knowledge) the cheap model answers itself.
+# 0 = every message goes straight to the agent. ROUTER_MODEL picks the cheap model (default: the first
+# of CHEAP_MODELS whose API key is set; none available = no gate).
+ROUTER = os.getenv("ROUTER", "1") == "1"
+ROUTER_MODEL = os.getenv("ROUTER_MODEL", "")
+CHEAP_MODELS = ["groq:openai/gpt-oss-20b", "gemini:gemini-flash-lite-latest"]
 PORT = int(os.getenv("PORT", "8765"))
 # 127.0.0.1 = only this PC. 0.0.0.0 = other PCs on your network can connect too.
 HOST = os.getenv("HOST", "127.0.0.1")

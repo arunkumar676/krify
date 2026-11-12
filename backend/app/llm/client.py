@@ -69,6 +69,11 @@ def _blocked_for(model):
     return _blocked_until.get(model, 0) - time.time()
 
 
+def is_blocked(model):
+    """True while `model` is cooling down after an error/limit (callers that want only that model skip it)."""
+    return _blocked_for(model) > 0
+
+
 def _record(model, chat, tools, extra, boost, need_vision, attempt, started, response=None, status="ok", error=""):
     """Put the request in the LLM report. The report must never break a task."""
     try:

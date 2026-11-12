@@ -71,3 +71,30 @@ print("ok: history totals, pruning")
 history.clear("client-1")
 assert report.totals(task) == (0, 0, 0), "deleting a task deletes its calls"
 print("ok: delete")
+
+# The gate's call is labelled "router" (not "planner") and the purpose resets afterwards.
+gated = history.start_task("hai", "groq:a", "client-1")
+report.set_task(gated)
+report.set_purpose("router")
+call(completion(30, 5), tools=None)
+report.set_purpose(None)
+call(completion(10, 2), tools=None)
+r = report.task_report(gated, "client-1")
+assert [c["purpose"] for c in r["calls"]] == ["router", "planner"], r["calls"]
+assert set(r["by_purpose"]) == {"router", "planner"}
+assert "· router · groq:a" in report.task_report_markdown(r), "markdown must say router, not 'step None'"
+print("ok: router purpose")
+
+# Clearing the report: only this client's calls, History rows stay, the running task is kept.
+mine, running, theirs = (history.start_task(t, "groq:a", c) for t, c in
+                         [("old task", "client-1"), ("running now", "client-1"), ("not mine", "client-2")])
+for t in (mine, running, theirs):
+    report.set_task(t)
+    call(completion(10, 2), tools=None)
+    call(completion(20, 4), tools=None)
+assert report.clear("client-1", keep_task_id=running) == 2 + 2, "gated task (from above) is cleared too"
+assert report.totals(mine) == (0, 0, 0) and report.totals(theirs)[0] == 2, "other client's calls untouched"
+assert report.totals(running)[0] == 2, "the running task keeps its calls"
+assert any(i["id"] == mine for i in history.recent("client-1")), "History rows stay"
+assert report.clear("client-1", keep_task_id=running) == 0 and report.clear("nobody") == 0
+print("ok: clear")

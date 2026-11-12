@@ -230,3 +230,26 @@ for sql in ["SELECT Name, Fee FROM sheet ORDER BY Age DESC", "SELECT count(*) FR
 show("sheets.first_empty_row", CSV, fn=sheets.first_empty_row)
 show("sheets.filled_cells", CSV, "A3", "X\tY", fn=sheets.filled_cells)
 show("sheets.filled_cells", CSV, "A9", "X\tY", fn=sheets.filled_cells)
+
+# ---------- context: router (the cheap-model gate) ----------
+router = mod("app.context.router", "app.context.router")
+print("GATE_PROMPT ->", fmt(router.GATE_PROMPT))
+print("router limits ->", fmt([router.GATE_TIMEOUT, router.MAX_REPLY, router.TAIL_CHARS, router.CHEAP_MODELS]))
+for text in [
+    '{"kind": "chat", "reply": "Hi!"}',
+    '```json\n{"kind": "answer", "reply": "391"}\n```',
+    'Sure: {"kind": "Answer", "reply": " 391 "} done',
+    '{"kind": "task", "reply": ""}',
+    '{"kind": "task", "reply": "ignored text"}',
+    '{"kind": "chat", "reply": ""}',
+    '{"kind": "chat"}',
+    '{"kind": "weird", "reply": "hmm"}',
+    '{"kind": "chat", "reply": 5}',
+    '{"kind": "chat", "reply": "' + "x" * 1201 + '"}',
+    '{"kind": "chat", "reply": "{\\"name\\": \\"done\\"}"}',
+    '{"kind": "chat", "reply": "```code```"}',
+    '["chat"]', "not json at all", "", None,
+]:
+    show("router.parse", text, fn=router.parse)
+show("router.tail_of", "hi", "hello", fn=router.tail_of)
+show("router.tail_of", "q" * 400, "a" * 50, fn=router.tail_of)

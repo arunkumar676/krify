@@ -11,6 +11,7 @@ Side panel → server: {"type": "task", "text", "model", "location": {"country",
                      | {"type": "dev_mode", "on"}  (debug trace appended to the final answer)
                      | {"type": "ai_view"}  (show the page view the AI would get right now)
                      | {"type": "llm_report", "task_id"?}  (every AI request of a task; default = your latest task)
+                     | {"type": "llm_report_clear"}  (delete your recorded AI requests; History stays; answered with llm_report)
 Server → side panel: {"type": "models", "models": [{"id", "label", "status"}]}  (on connect + after each task)
                      | {"type": "run", "id", "name", "args"}  (do a browser operation)
                      | {"type": "confirm", "id", "text"}  (ask the user Allow / Block)
@@ -225,6 +226,16 @@ async def websocket_endpoint(ws: WebSocket):
                                         "markdown": report.task_report_markdown(data)})
                 else:
                     await ws.send_json({"type": "llm_report", "ok": False, "error": "No report for that task."})
+            elif kind == "llm_report_clear":
+                n = report.clear(client, keep_task_id=agent.task_id)
+                log.info("Cleared %d LLM calls", n)
+                latest = report.latest_task_id(client)
+                data = report.task_report(latest, client) if latest else None
+                if data:
+                    await ws.send_json({"type": "llm_report", "ok": True, "report": data,
+                                        "markdown": report.task_report_markdown(data), "cleared": n})
+                else:
+                    await ws.send_json({"type": "llm_report", "ok": False, "error": "No report yet.", "cleared": n})
             elif kind == "history":
                 await ws.send_json({"type": "history", "items": history.recent(client)})
             elif kind == "history_delete":

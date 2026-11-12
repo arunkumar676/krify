@@ -96,6 +96,7 @@ class Agent(ToolsMixin, GuardrailsMixin, ContextMixin, MemoryMixin, OutputMixin)
         self.tokens = 0
         self.last_task = ""  # previous task, so the planner understands follow-ups
         self.last_status = ""  # how the previous task ended ("ask" = the next message is an answer)
+        self.gate_tail = ""  # the gate's last chat exchange, so its follow-ups make sense (context/router.py)
 
     async def stop_looping(self):
         """Still going in circles after a warning: stop and ask the user instead of burning steps."""
@@ -115,6 +116,8 @@ class Agent(ToolsMixin, GuardrailsMixin, ContextMixin, MemoryMixin, OutputMixin)
         self.model = model
         self.task_id = history.start_task(task, model, self.client)
         report.set_task(self.task_id)
+        if not continuing and await self.try_gate(task):  # chat / general knowledge: no agent needed
+            return
         self.notes_at_last_read = 0
         nudged = False
         empty_replies = 0

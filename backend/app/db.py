@@ -53,8 +53,8 @@ class LlmCall(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     task_id: int | None = Field(default=None, foreign_key="task.id", index=True)
     seq: int = 0  # 1.. within the task
-    step: int | None = None  # agent loop step (None = the planner)
-    purpose: str = "agent_step"  # planner | agent_step
+    step: int | None = None  # agent loop step (None = the planner / the router gate)
+    purpose: str = "agent_step"  # router | planner | agent_step
     created_at: datetime.datetime = Field(default_factory=_now)
     duration_ms: int = 0
     model: str = ""

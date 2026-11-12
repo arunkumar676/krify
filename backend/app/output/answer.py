@@ -4,6 +4,7 @@ import logging
 import re
 
 from app import history
+from app.context import router
 from app.llm import report
 from app.verification.facts import unexplained_numbers, unverified_phrases
 
@@ -22,10 +23,31 @@ class OutputMixin:
     Mixed into Agent (agent/loop.py): uses its connection (browser, ui, confirm, messages, …), its
     TaskState (self.state) and the other layers' methods through self."""
 
-    async def finish(self, kind, text):
+    async def try_gate(self, task):
+        """The cheap-model gate (context/router.py): when the message needs no browser (chat, general
+        knowledge) the cheap model's reply is the answer and the agent never starts. Returns True when it
+        answered, False to carry on with the agent (also whenever the gate is off or has any problem)."""
+        cheap = router.cheap_model()
+        if not cheap:
+            return False
+        report.set_purpose("router")
+        try:
+            kind, reply, tokens = await router.gate(task, self.last_task, self.gate_tail, cheap)
+        finally:
+            report.set_purpose(None)
+        self.tokens += tokens
+        if kind == "task":
+            self.gate_tail = ""  # a browser task follows: the chit-chat context no longer applies
+            return False
+        self.gate_tail = router.tail_of(task, reply)
+        self.model = cheap
+        await self.finish("done", reply, verify=False)  # its own words, not read from a page: nothing to fact-check
+        return True
+
+    async def finish(self, kind, text, verify=True):
         """Send the final message, with how many tokens the task used, and save the result."""
         log.info("Task used %d tokens", self.tokens)
-        if kind == "done":
+        if kind == "done" and verify:
             if missing := unexplained_numbers(text, self.state.seen):
                 text = f"{text}\n⚠️ Krify couldn't confirm these numbers on the pages it read: {', '.join(missing)}"
             if missing := unverified_phrases(text, self.state.seen):

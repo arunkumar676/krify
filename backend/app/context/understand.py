@@ -15,7 +15,7 @@ log = logging.getLogger("krify")
 
 MIN_WORDS = 4  # shorter tasks ("open youtube") are simple enough to skip planning
 
-PLANNER_PROMPT = """You plan tasks for a browser agent. Requests may be casual or in Hinglish.
+PLANNER_PROMPT = """You plan tasks for a browser agent. Requests may be casual.
 Reply with ONLY this JSON, nothing else:
 {"goal": "...", "steps": ["...", "..."], "done_when": "..."}
 

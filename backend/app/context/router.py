@@ -1,0 +1,96 @@
+"""The gate in front of the agent: a cheap model decides whether a message needs the browser agent.
+
+One small request (no tools, no page, no chat history) to a cheap model. It answers one of:
+  chat   – greetings, thanks, "who are you" …            → the cheap model's reply is the answer
+  answer – timeless general knowledge / maths / writing  → the cheap model's reply is the answer
+  task   – anything else (browser, page, live data, unsure) → the message goes to the agent, unchanged
+
+Fail-open: any problem (no cheap model, it is cooling down, error, timeout, unreadable or oversized
+reply) means "task", so the gate can only save tokens, never swallow or delay a real task.
+"""
+
+import asyncio
+import json
+import logging
+import re
+
+from app.config import CHEAP_MODELS, MODELS, ROUTER, ROUTER_MODEL
+from app.llm import client
+from app.llm.client import ask_ai
+
+log = logging.getLogger("krify")
+
+GATE_TIMEOUT = 8  # seconds: a slow cheap model must never hold up a real task
+MAX_REPLY = 1200  # characters: a longer reply is not small talk / a short answer → let the agent handle it
+TAIL_CHARS = 300  # how much of the previous gate exchange is shown, so "explain more" works
+
+KINDS = ("chat", "answer", "task")
+
+GATE_PROMPT = """You are the front desk of Krify, a browser agent that opens sites, searches, reads pages, fills
+forms and works with Google Sheets in the user's own browser. Decide whether you can reply yourself or
+whether the browser agent must handle the message. Users may write casually. Always reply in English.
+Reply with ONLY this JSON, nothing else:
+{"kind": "chat" | "answer" | "task", "reply": "..."}
+
+- chat: greetings, thanks, goodbyes, "who are you", "what can you do" (answer from the description above).
+  Reply briefly and warmly, in English.
+- answer: timeless general knowledge, maths, explanations, translation or writing help that needs no
+  browser, no web and no personal data. Reply in 6 lines or fewer, in English.
+- task: EVERYTHING else, with an empty reply. That includes: anything about a page, tab, site, app or
+  sheet ("this page", "here"); any action (open, click, search, find, fill, buy, send, download, log in,
+  scroll, compare); live or current facts (prices, weather, news, scores, "today", "latest"); the user's
+  own accounts, files or data; a follow-up to the previous browser task ("it", "that", "again", "now on
+  flipkart", "the same"); and any message you are not sure about.
+When in doubt, choose task. Never claim to have done something in the browser."""
+
+
+def cheap_model():
+    """The model for the gate, or None (gate off, no cheap model has an API key, or it is cooling down)."""
+    if not ROUTER:
+        return None
+    for model in [ROUTER_MODEL] if ROUTER_MODEL else CHEAP_MODELS:
+        if model in MODELS and not client.is_blocked(model):
+            return model
+    return None
+
+
+def parse(text):
+    """(kind, reply) from the model's text, or ("task", "") when it isn't a clean, usable answer."""
+    match = re.search(r"\{.*\}", text or "", re.DOTALL)
+    if not match:
+        return "task", ""
+    try:
+        data = json.loads(match.group(0))
+    except json.JSONDecodeError:
+        return "task", ""
+    if not isinstance(data, dict):
+        return "task", ""
+    kind = str(data.get("kind") or "").strip().lower()
+    reply = data.get("reply")
+    reply = reply.strip() if isinstance(reply, str) else ""
+    if kind not in ("chat", "answer") or not reply or len(reply) > MAX_REPLY or reply.lstrip().startswith(("{", "[", "```")):
+        return "task", ""
+    return kind, reply
+
+
+def tail_of(question, reply):
+    """What the next gate call is shown about this exchange (kept short)."""
+    return f"User: {question}\nYou: {reply}"[-TAIL_CHARS:]
+
+
+async def gate(text, last_task, tail, model, on_note=None):
+    """Return (kind, reply, tokens). kind "task" (reply "") = hand the message to the agent."""
+    context = f"Message: {text}"
+    if last_task:
+        context += f"\nPrevious browser task: {last_task[:200]}"
+    if tail:
+        context += f"\nPrevious exchange with you:\n{tail}"
+    messages = [{"role": "system", "content": GATE_PROMPT}, {"role": "user", "content": context}]
+    try:
+        reply, _, tokens = await asyncio.wait_for(ask_ai(messages, None, model, on_note=on_note), GATE_TIMEOUT)
+    except Exception as err:  # includes the timeout: the gate is optional
+        log.warning("Gate skipped: %s", err or type(err).__name__)
+        return "task", "", 0
+    kind, answer = parse(reply.content)
+    log.info("Gate: %s", kind)
+    return kind, answer, tokens
