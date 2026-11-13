@@ -136,6 +136,8 @@ def fixture(name, **changes):
     return data
 
 
+# A live region that is only information (task 309 on Amazon's cart): it must not bounce a finished task.
+BANNER = "Your order is eligible for FREE Delivery. Choose FREE Delivery option at checkout. | Page 1 of 4 (below the screen)"
 CSV = 'Name,Age,Fee\nRahul,21,"1,200"\nAsha,22,15%\nRavi,23,900\n'
 SHOP_TEXT = ("Results for wireless mouse. Logitech M185 Wireless Mouse ₹699. HP X200 Wireless Mouse ₹549. "
              "Portronics Toad 23 ₹399. Apple iPhone 16e 256GB ₹69,900.")
@@ -158,6 +160,11 @@ def pages():
                     "text": "Add Activity. Contact is required."},
         "login": {"url": "https://id.example.com/login", "title": "Welcome back", "model": fixture("login_dialog"),
                   "text": "Welcome back. Sign in. Enter a valid email address."},
+        "cart": {"url": "https://www.amazon.in/gp/cart/view.html", "title": "Amazon.in Shopping Cart",
+                 "model": fixture("amazon_search", status=BANNER), "text": "Shopping Cart. 1 item. Subtotal ₹699."},
+        "cartwarn": {"url": "https://www.amazon.in/gp/cart/view.html", "title": "Amazon.in Shopping Cart",
+                     "model": fixture("amazon_search", status=f"{BANNER} | Payment failed – try another card"),
+                     "text": "Shopping Cart. 1 item. Subtotal ₹699."},
         "sheet": {"url": "https://docs.google.com/spreadsheets/d/abc/edit#gid=0", "title": "Students - Google Sheets",
                   "model": fixture("clickable_rows"), "text": "", "csv": CSV},
     }
@@ -262,6 +269,23 @@ def text_done_paths():
         text('done({"summary": "All good, 12345 users"})'),
         text('done({"summary": "All good, 12345 users"})'),
         text('done({"summary": "I clicked Continue and it shows Enter a valid email address"})'),
+    ])
+
+
+@scenario
+def harmless_status():
+    # A banner / pager in the page's status text is not an error: done goes out at once (no bounced call).
+    return Scenario("harmless_status", "cart", ["check the cart page please"], plans=[""], replies=[
+        tool("done", summary="The cart page is open and shows 1 item."),
+    ])
+
+
+@scenario
+def problem_among_harmless_status():
+    # The same banner plus a real problem: done is bounced once, quoting only the problem, then goes out.
+    return Scenario("problem_among_harmless_status", "cartwarn", ["check the cart page please"], plans=[""], replies=[
+        tool("done", summary="The cart page is open and shows 1 item."),
+        tool("done", summary="The cart page is open and shows 1 item."),
     ])
 
 

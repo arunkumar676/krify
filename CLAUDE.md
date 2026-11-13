@@ -91,6 +91,16 @@ kept for the newest 50 tasks (`report.prune`), numbers forever; deleting a task 
 this install's recorded calls only (History rows and their saved totals stay; the running task keeps its calls).
 `checks/llm_report_check.py` (run by `checks/run.py`) asserts the numbers, redaction and ownership.
 
+### System prompt by tool group (`backend/app/context/prompt.py`)
+
+The rules are category blocks. `ALWAYS` blocks (core, navigation with basic tools, dropdowns, filtered lists, answers,
+facts, safety) are always sent; a block about an optional tool group (`BY_GROUP`: forms, tabs, sheets, mouse, look,
+lists – same names and order as `TOOL_GROUPS`) is sent exactly when that group's tools are. `system_prompt(groups)`
+takes `Agent.tool_groups` (`None` = every block) and `Agent.refresh_system()` rebuilds `messages[0]` whenever
+`tool_groups` changes (in `run()`, when `page_groups()` adds one, and in `more_tools`) – the tool list changes at
+the same moment, so no extra prompt-cache miss. A rule must never name a tool that isn't sent: put a sentence that
+names a tool in that tool's group block. `checks/prompt_check.py` enforces this for all 64 group combinations.
+
 How the pieces fit:
 - **`TaskState`** (`agent/state.py`) holds everything about the task in progress and the page it's on
   (`task_text`, `plan`, `notes`, `seen`, `actions`, the `*_check_failed` flags, `elements`, `form`, …).
@@ -98,7 +108,7 @@ How the pieces fit:
   each `run()` – never replaced, because a message answering `ask_user` continues the same task (goal,
   plan, notes, `seen`, `actions` kept). Connection-level things stay on `Agent`: callbacks (`browser`,
   `ui`, `confirm`, `plan_review`), the chat (`messages`, `page_views`, `screen_reads`),
-  `sheet_tools`, `dev_mode`, `trace`, `tokens`, `task_id`, `model`, `last_task`, `last_status`.
+  `tool_groups` (which tool groups are sent – `TOOL_GROUPS` in `tools/schemas.py`: Basic always, others picked by the router, added by `page_groups()` or the `more_tools` tool; they only grow during a chat), `dev_mode`, `trace`, `tokens`, `task_id`, `model`, `last_task`, `last_status`.
 - **Sync checks are plain functions over the state**: `check_facts(state, summary)`,
   `wrong_element(state, n, label)`, `check_progress(state, name, changed)`, … – testable without an Agent.
 - **Methods that need the browser, the user or the chat are mixins** (`ToolsMixin`, `GuardrailsMixin`,
@@ -170,6 +180,12 @@ Key mechanics worth knowing before touching the loop (they live in the layer mod
   once; the agent's own `plan` call gets the same rule. Until a plan is approved, actions are refused with
   `PLAN_NOT_APPROVED`, which tells the model to call `plan`; `SAME_PLAN` ("you already have this plan") only applies
   to an approved plan, so re-sending the planner's steps still reaches the approval prompt.
+- **Page status**: `content.js` reports every live region (`role=alert/status`, `aria-live`) as the page's
+  status, so banners and pagers arrive with real errors. `blocking_status()` (`verification/ui_state.py`) keeps only
+  the problems (error/validation words, `Form error`, text it can't read as English); `check_ui_state()` bounces a
+  `done` once only for those, and the "you opened what was asked" shortcut in `run()` uses it too. The `⚠ ALERTS`
+  display and `state.page_status` still hold everything. A problem phrased without a listed word would get through:
+  add its word to `PROBLEM`.
 - **Fact check**: before a `done`, `check_facts()` (`verification/facts.py`) rejects the summary once if
   it contains a 3+ digit number that never appeared in anything read this task (`state.seen`); a second
   rejection is allowed through with a caveat appended.

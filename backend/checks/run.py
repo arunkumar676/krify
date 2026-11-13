@@ -20,7 +20,8 @@ JOBS = [  # (name, module, extra env)
     ("replay_sv1", "checks.replay", {"STRUCTURED_VIEW": "1"}),
     ("replay_sv0", "checks.replay", {"STRUCTURED_VIEW": "0"}),
 ]
-ASSERT_JOBS = [("llm_report", "checks.llm_report_check")]  # must exit 0; no golden file
+ASSERT_JOBS = [("llm_report", "checks.llm_report_check"),
+               ("prompt_groups", "checks.prompt_check")]  # must exit 0; no golden file
 
 
 def main():

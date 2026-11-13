@@ -136,6 +136,17 @@ for after, clicked, title, open_list in [
 for task, clicked in [("open agents", 'link "Agents"'), ("open agents and create one", 'link "Agents"'),
                       ("go to the billing settings page", 'link "Billing settings"'), ("open agents", 'link "People"')]:
     show("opened_what_asked", task, clicked, fn=changes.opened_what_asked)
+ui_state = mod("app.verification.ui_state", "app.agent.ui_state")
+for status in [
+    "",  # nothing showing
+    "Your order is eligible for FREE Delivery. Choose FREE Delivery option at checkout. | Page 1 of 4 (below the screen)",
+    "Learn to Code", "3 results found", "Your changes have been saved", "Added to cart",
+    "Enter a valid email address", "Form error – Contact is required | Saved draft", "Something went wrong",
+    "Invalid password", "Your session has expired. Please sign in again.", "Payment failed – try another card",
+    "Your order is eligible for FREE Delivery. | Payment failed – try another card",
+    "That item can’t be added", "Password is required", "Se ha producido un error", "पासवर्ड गलत है",
+]:
+    show("blocking_status", status, fn=ui_state.blocking_status)
 
 # ---------- guardrails: element matching / forms / safety ----------
 for label, names in [("Create Opportunity", ['link "Opportunities"']), ("Opportunities", ['link "Opportunities"']),

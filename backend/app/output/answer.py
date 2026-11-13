@@ -27,12 +27,13 @@ class OutputMixin:
         """The cheap-model gate (context/router.py): when the message needs no browser (chat, general
         knowledge) the cheap model's reply is the answer and the agent never starts. Returns True when it
         answered, False to carry on with the agent (also whenever the gate is off or has any problem)."""
+        self.router_groups = None  # unknown until the gate answers: then all tools are sent
         cheap = router.cheap_model()
         if not cheap:
             return False
         report.set_purpose("router")
         try:
-            kind, reply, tokens = await router.gate(task, self.last_task, self.gate_tail, cheap)
+            kind, reply, tokens, self.router_groups = await router.gate(task, self.last_task, self.gate_tail, cheap)
         finally:
             report.set_purpose(None)
         self.tokens += tokens

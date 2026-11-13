@@ -2,6 +2,7 @@
 purpose: they're sent with every request. The page (URL, title, numbered elements) is sent
 automatically after every action, so there are no "look at the page" tools."""
 
+import re
 
 def _tool(name, description, properties=None, required=None):
     parameters = {"type": "object", "properties": properties or {}}
@@ -88,6 +89,10 @@ TOOLS = [
     _tool("get_records", "A long list's items the page view left out (it says \"+N more items … get_records\"): "
           "search = words to find (a name, status…), or start = position to read on from. Not the site's next page.",
           {"list": TEXT, "search": TEXT, "start": {"type": "integer"}}, ["list"]),
+    _tool("more_tools", "Add a group of tools you need but don't have, e.g. tabs to open a second site. Groups: "
+          "forms (batch), tabs (new_tab, switch_tab, close_tab), sheets (sheet_query, read_cells, go_to_cell, "
+          "type_here), mouse (hover, click_at, drag), look (screenshot, inspect), lists (get_records).",
+          {"group": {"type": "string", "enum": ["forms", "tabs", "sheets", "mouse", "look", "lists"]}}, ["group"]),
     _tool("note", "Save a fact for later, e.g. 'Amazon: iPhone 16 128GB ₹69,900'.", {"text": TEXT}, ["text"]),
     _tool("done", "Task finished. summary: your answer to the user – a one-line direct answer in plain English "
           "(not JSON, not a line copied from the page), e.g. \"There are 33 people – the page lists 1–20 of 33.\" "
@@ -95,3 +100,44 @@ TOOLS = [
           {"summary": TEXT}, ["summary"]),
     _tool("ask_user", "Ask the user a question. Choices: one per line as \"- choice\".", {"question": TEXT}, ["question"]),
 ]
+
+
+# ---------- tool groups: only what the task needs is sent (context/router.py picks, the page adds) ----------
+# Basic always; the others when the cheap gate model asks for them, the page needs them, or the AI calls
+# more_tools. A group, once added, stays for the whole chat (a provider rejects a request whose history
+# calls a tool that isn't in the list). Fixed order, so a provider's prompt cache keeps working.
+TOOL_GROUPS = {
+    "basic": ["open_url", "go_back", "reload", "click", "type", "select_option", "scroll", "press_key", "wait",
+              "read_text", "find_text", "find_elements", "plan", "note", "ask_user", "done", "more_tools"],
+    "forms": ["batch"],
+    "tabs": ["new_tab", "switch_tab", "close_tab"],
+    "sheets": ["sheet_query", "read_cells", "go_to_cell", "type_here"],
+    "mouse": ["hover", "click_at", "drag"],
+    "look": ["screenshot", "inspect"],
+    "lists": ["get_records"],
+}
+GROUP_ORDER = list(TOOL_GROUPS)
+ALL_GROUPS = set(GROUP_ORDER)
+
+
+def tools_for(groups):
+    """The tool definitions of these groups, in the fixed order (every tool is in exactly one group)."""
+    names = [name for group in GROUP_ORDER if group in groups for name in TOOL_GROUPS[group]]
+    by_name = {t["function"]["name"]: t for t in TOOLS}
+    return [by_name[name] for name in names if name in by_name]
+
+
+# Words in the task that surely need a group – a free backup for the cheap gate model's choice.
+TASK_WORDS = {
+    "look": re.compile(r"\b(screenshot|picture|photo|image|chart|graph|map|what does it look like|see the screen)\b", re.I),
+    "lists": re.compile(r"\b(list|table|records?|rows|every|all the|how many)\b", re.I),
+    "tabs": re.compile(r"\b(compare|new tab|both sites|other tab|switch tab)\b", re.I),
+    "forms": re.compile(r"\b(fill|sign ?up|register|add an? |create an? |apply|checkout|submit)\b", re.I),
+    "sheets": re.compile(r"\b(google sheets?|spreadsheet|google docs?|sheet)\b", re.I),
+    "mouse": re.compile(r"\b(drag|drop|slider|hover|right[- ]click|double[- ]click)\b", re.I),
+}
+
+
+def task_groups(task):
+    """Groups the task's own words call for ('take a screenshot…' → look)."""
+    return {group for group, words in TASK_WORDS.items() if words.search(task or "")}
