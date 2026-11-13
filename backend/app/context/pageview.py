@@ -49,6 +49,7 @@ class View:
     form: dict | None = None
     full: bool = False  # Unrestricted mode: nothing was cut (the loop then lifts its own caps too)
     inline_text: bool = False  # the page's own text is already in the view, among the elements (Unrestricted)
+    records: dict | None = None  # long lists' left-out items (list name → item lines), for get_records
 
 
 @dataclass
@@ -156,7 +157,36 @@ SHORT_LABEL = 60  # in Unrestricted mode its full text is shown as a text block 
 SHORT_WORDS = 8
 
 
-def _tidy(text):
+# ---------- name finder: a clearer name than the site's developer label ----------
+_SHORTCUT = re.compile(r"\s*\((?:[a-z] then [a-z]|enter|esc|tab|/|(?:ctrl|shift|alt|cmd)[+-]\S+)\)\s*$", re.I)
+_GO_TO = re.compile(r"^go to (?:the )?(.+?)(?: page)?$", re.I)
+_KEBAB = re.compile(r"^[a-z0-9]+(?:[-_][a-z0-9]+)+$", re.I)
+_GENERIC_NAMES = {"image", "img", "picture", "photo", "banner", "link", "click here", "here", "icon", "thumbnail", "logo"}
+_ID_PART = re.compile(r"^(?:p|pr|dp|s|b|l|itm\w*|~cs-\w+|[0-9a-f]{8,}|\d+|[a-z]?\d+[a-z\d]*)$", re.I)
+
+
+def _slug_name(go):
+    """'/mivi-one-5g-green-128-gb/p/itm59…' → 'mivi one 5g green 128 gb' ('' if the address says nothing)."""
+    parts = [x for x in (go or "").split("?")[0].split("/") if x and not _ID_PART.match(x) and "-" in x]
+    best = max(parts, key=len, default="")
+    return best.replace("-", " ").replace("_", " ") if len(best.split("-")) >= 2 else ""
+
+
+def _better_label(label, go=""):
+    """'Homepage (g then d)' → 'Homepage', 'Go to Our Services page' → 'Our Services', 'call-us' → 'call us',
+    'next (icon)' → 'next', a link named 'Image' → 'Image: mivi one 5g green 128 gb' (from where it goes). The
+    label check matches words, so the AI's label still fits the element."""
+    name = re.sub(r"\s*\(icon\)\s*$", "", _SHORTCUT.sub("", label), flags=re.I).strip() or label
+    if found := _GO_TO.match(name):
+        name = found.group(1)
+    if _KEBAB.match(name):
+        name = re.sub(r"[-_]+", " ", name)
+    if name.lower() in _GENERIC_NAMES and (slug := _slug_name(go)):
+        name = f"{name}: {slug}"
+    return name
+
+
+def _tidy(text, go=""):
     """'input text "Search" (value: "mouse")' → ('input "Search" = "mouse"', []), plus the states the
     description itself carried ('submit', 'email', 'hover', 'checked'). Anything unexpected is
     returned unchanged."""
@@ -193,6 +223,7 @@ def _tidy(text):
             rest = rest[len(word):].strip()
             if word == "(checked)":
                 extra.append("checked")
+    label = _better_label(label, go)
     if len(label) > LONG_LABEL:
         label = " ".join(label.split()[:SHORT_WORDS])[:SHORT_LABEL].rstrip() + "…"
     line = f'{role} "{label}"'
@@ -243,7 +274,7 @@ def _destination(text, go):
 
 
 def _element_line(el, in_card=False):
-    text, extra = _tidy(el["text"])
+    text, extra = _tidy(el["text"], el.get("go") or "")
     states = []
     for s in extra + _states(el.get("states")):
         if s not in states:
@@ -534,7 +565,33 @@ def _same_line(texts):
     return out
 
 
-def _section_lines(sec, group, shown, cards, sub, texts=()):
+MAX_ITEMS = 10  # items of a list shown in the view; the rest: a count, and get_records on demand
+_STOP = {"with", "from", "that", "this", "show", "find", "open", "click", "list", "page", "what", "which", "where",
+         "their", "about", "please", "items", "records", "there", "have", "into", "only", "first", "last", "next"}
+
+
+def focus_words(task):
+    """Words of the task worth matching against list items ('activities assigned to Geetha' → geetha, …)."""
+    return {w for w in re.findall(r"[a-z0-9]{4,}", (task or "").lower()) if w not in _STOP}
+
+
+def get_records(records, name, search="", start=0):
+    """The items of a long list that the view left out (records: list name → item lines), by search words or
+    from position `start` – what the get_records tool answers. Never the whole list at once."""
+    items = records.get(name) or next((v for k, v in records.items() if name and name.lower() in k.lower()), None)
+    if items is None:
+        return f"No such list. Lists with more items: {', '.join(records) or 'none'}."
+    words = [w for w in re.findall(r"\w+", (search or "").lower())]
+    found = [line for line in items if all(w in line.lower() for w in words)] if words else items
+    start = max(0, int(start or 0))
+    page = found[start:start + 2 * MAX_ITEMS]
+    more = len(found) - start - len(page)
+    tail = f"\n(+{more} more – get_records again with start={start + len(page)})" if more > 0 else ""
+    return (f"{len(found)} item(s) in \"{name}\"{' matching ' + repr(search) if words else ''}:\n" + "\n".join(page) + tail
+            if page else f"Nothing in \"{name}\" matches {search!r}.")
+
+
+def _section_lines(sec, group, shown, cards, sub, texts=(), focus=(), records=None):
     """One section, in place: its heading line, then its elements and (Unrestricted mode) its text
     blocks together in page order – cards with their own elements and text indented – or a one-line
     note when nothing of it is shown."""
@@ -582,6 +639,22 @@ def _section_lines(sec, group, shown, cards, sub, texts=()):
             suffix.setdefault(owner.order, []).append(t["t"])
             texts.remove(t)
     paging = any(re.match(r'link "Page \d+"', e.el["text"]) for e in visible)
+    # A long list: the first MAX_ITEMS items plus every item the task names; the rest is counted and kept
+    # for get_records, so a 1,000-row table doesn't go to the AI at every step.
+    order = list(dict.fromkeys(e.card for e in visible if e.card))
+    left_out = []
+    if len(order) > MAX_ITEMS:
+        def named(card):
+            words = " ".join([(cards.get(card) or {}).get("title", "")] + [e.el["text"] for e in per_card.get(card, [])]).lower()
+            return any(w in words for w in focus)
+        keep = set(order[:MAX_ITEMS]) | {c for c in order if named(c)}
+        left_out = [c for c in order if c not in keep]
+        if records is not None:
+            records[sub or f"list {len(records) + 1}"] = [
+                " · ".join([_card_line(cards.get(c), 0)] + [_element_line(e.el, True) for e in per_card.get(c, [])]
+                           + [t["t"] for t in texts if t["card"] == c]) for c in left_out]
+        visible = [e for e in visible if e.card not in left_out]
+        texts = [t for t in texts if t["card"] not in left_out]
 
     def enter(card, pos):
         card = None if card in solo else card
@@ -650,7 +723,11 @@ def _section_lines(sec, group, shown, cards, sub, texts=()):
             show(e)
         for t in texts[i:]:
             say(t)
-    lines = _join_values(lines)
+    lines = [line for line in _join_values(lines) if line.strip() not in ("+", "%")]  # (a "+" with no number)
+    if left_out:
+        name = sub or f"list {len(records or {})}"
+        lines.append(f'(+{len(left_out)} more items in this list on this page – get_records(list="{name}", search="…") '
+                     "finds them; this is not the site's next page)")
     # A ### heading with nothing under it (its content was only pictures, now left out).
     lines = [line for n, line in enumerate(lines)
              if not (line.lstrip().startswith("### ") and (n + 1 == len(lines) or lines[n + 1].lstrip().startswith(("### ", "## "))))]
@@ -675,7 +752,7 @@ def _row_counts(page):
             "not included.]")
 
 
-def render(model):
+def render(model, focus=""):
     """→ View: the outline the AI reads, the flat list, the status line and an ambiguity hint."""
     pages = model.get("pages") or []
     full = bool(model.get("full"))
@@ -724,6 +801,8 @@ def render(model):
     # A form field's name is its visible label ("Full Name" above its box): already on the field's line.
     said |= {_label(e.el["text"]).strip().lower() for e in entries
              if e.el["text"].startswith(("input", "textarea", "select", "dropdown"))}
+    focus = focus_words(focus)
+    records = {}
     texts_by_section = {}
     titled = {}  # section → y of its own heading: shown as a ## line even with nothing else in it
     for p, page in enumerate(pages):
@@ -809,7 +888,7 @@ def render(model):
                 title = f"🔲 OPEN {kind.upper()} – {root}"
             lines.append(title)
         lines += _section_lines(sec, group, shown, cards, _sub_name(inner) if inner else "",
-                                texts_by_section.get(key, ()))
+                                texts_by_section.get(key, ()), focus, records)
     for (_, page_index, region), members in sorted(regions.items(), key=lambda item: item[0]):
         name = f'EMBEDDED PAGE "{pages[page_index].get("frame")}"' if region == "EMBEDDED" else region
         group_all = [e for _, group in members for e in group]
@@ -833,7 +912,7 @@ def render(model):
         body = []
         for key, group in members:
             body += _section_lines(sections[key], group, shown, cards, _sub_name(sections[key]["name"]),
-                                   texts_by_section.get(key, ()))
+                                   texts_by_section.get(key, ()), focus, records)
         if body:  # (a part whose only text was already said elsewhere: no empty ┌ line)
             lines += [f"┌ {name}", *body]
     if full and (counts := _row_counts(pages[0])):
@@ -842,7 +921,7 @@ def render(model):
         lines.append("(very large page: far-off parts weren't listed – scroll there to see them)")
     return View("\n".join(lines), flat_lines(model), statuses[0] if statuses else "",
                 _ambiguity(entries, shown - behind), open_list, form, full,
-                inline_text=any(page.get("texts") for page in pages))
+                inline_text=any(page.get("texts") for page in pages), records=records)
 
 
 # ---------- Unrestricted mode: the page's text, without what the view already says ----------

@@ -1111,10 +1111,13 @@ if (!window.__krify) {
     if (role === "search" || tag === "SEARCH") return { kind: "search" };
     if (role === "main" || tag === "MAIN") return { kind: "main" };
     if (role === "complementary" || tag === "ASIDE") return { kind: "aside" };
-    if (role === "form" || tag === "FORM") return { kind: "form" };
+    if ((role === "form" || tag === "FORM") && node.querySelector("input:not([type=hidden]):not([type=submit]):not([type=button]), select, textarea, [contenteditable=true]")) {
+      return { kind: "form" };
+    }
     if (role === "toolbar") return { kind: "toolbar" };
     if (role === "menubar") return { kind: "menubar" };
-    if ((role === "region" || tag === "SECTION") && (node.getAttribute("aria-label") || node.getAttribute("aria-labelledby"))) {
+    if ((role === "region" || tag === "SECTION") && (node.getAttribute("aria-label") || node.getAttribute("aria-labelledby")) &&
+      !/\b\d+(?:[-_]\d+)+\s*$/.test(node.getAttribute("aria-label") || "")) {
       return { kind: "region" };
     }
     return null;
@@ -1589,10 +1592,9 @@ if (!window.__krify) {
     const fieldLabels = new Set(); // visible labels of numbered fields: not repeated as text
     // Labels used by more than one element: each of those gets an owner (what it belongs to).
     const labelCount = new Map();
-    for (const n of info) {
-      const label = labelOf(n.el).trim().toLowerCase();
-      if (label) labelCount.set(label, (labelCount.get(label) || 0) + 1);
-    }
+    // (Same role, label AND destination: a search button and box, or two links to different pages, aren't look-alikes.)
+    const alikeKey = (n) => `${n.text.split(" ")[0]}|${labelOf(n.el).trim().toLowerCase()}|${n.el.closest?.("a[href]")?.href || ""}`;
+    for (const n of info) if (labelOf(n.el).trim()) labelCount.set(alikeKey(n), (labelCount.get(alikeKey(n)) || 0) + 1);
     // The section a node at screen height `top` belongs to: its landmark chain, and inside main (or
     // a page with no landmarks) the heading above it. Used for elements and, in full mode, text.
     const placeOf = (chain, top) => {
@@ -1634,7 +1636,7 @@ if (!window.__krify) {
       const field = fieldInfo(n.el);
       const go = destinationOf(n.el);
       // (Inside a card the ▸ line already says what it belongs to.)
-      const of = n.card ? "" : ownerOf(n.el, labelOf(n.el), (labelCount.get(labelOf(n.el).trim().toLowerCase()) || 0) > 1);
+      const of = n.card ? "" : ownerOf(n.el, labelOf(n.el), (labelCount.get(alikeKey(n)) || 0) > 1);
       if (field.label) fieldLabels.add(field.label.toLowerCase());
       elements.push({
         id: n.id, text: n.text, states: statesOf(n.el, field), hint: hintOf(n.el, field),
@@ -1975,6 +1977,7 @@ if (!window.__krify) {
     [/modal|dialog|popup|pop-up|lightbox/i, "pop-up"],
     [/video|player|youtube|vimeo/i, "video"],
   ];
+  const MACHINE_NAME = new RegExp(String.raw`\d+(?:[-_]\d+)+\s*$`);
   function ownerOf(el, label, duplicated = false) {
     label = (label || "").trim();
     const bare = label.replace(/\s*\(icon\)\s*$/i, "").trim(); // "next (icon)" is a vague "next"
@@ -2006,7 +2009,13 @@ if (!window.__krify) {
       if (!slot && box.parentElement && box.parentElement.children.length >= 2) {
         const key = itemKeys(box)[0];
         const same = [...box.parentElement.children].filter((kid) => itemKeys(kid)[0] === key);
-        if (same.length >= 2) slot = `${same.indexOf(box) + 1} of ${same.length}`;
+        if (same.length >= 2) {
+          slot = `${same.indexOf(box) + 1} of ${same.length}`;
+          const title = [...box.querySelectorAll("a[href][data-krify-id]")].filter((a) => a !== el)
+            .map((a) => labelOf(a).trim()).filter((t) => t.length >= 4 && !own.has(t.toLowerCase()))
+            .sort((a, b) => b.length - a.length)[0];
+          if (title && !name) name = keep(title, 40);
+        }
       }
       // A box that also holds a look-alike (the other "Play Video") is the list, not this item: its
       // name or heading would be the same for both, so naming stops here – with "1 of 2" (which
@@ -2022,19 +2031,24 @@ if (!window.__krify) {
         const controls = controlsIn(box);
         const busy = controls.size >= 3;
         const usable = (t) => t && !own.has(t.toLowerCase()) && !(busy && controls.has(t.toLowerCase())) &&
-          !(label.length >= 3 && t.toLowerCase().includes(label.toLowerCase()));
+          !(label.length >= 3 && t.toLowerCase().includes(label.toLowerCase())) &&
+          !MACHINE_NAME.test(t); // not "repository body 0-0"
         // The box's own label or (visible) heading, even for a big box; its first line of text only
         // for a small one.
         name = [box.getAttribute("aria-label"), textOfIds(box, "aria-labelledby"), firstTextLine(visibleHeading(box)?.innerText)]
           .map((t) => (t || "").trim()).find(usable) || "";
         if (!name && level >= 2 && text.length <= 300) {
-          name = text.split(String.fromCharCode(10)).map((line) => line.trim()).find(usable) || "";
+          // The box's title link (a repo / product name) before its loose text lines.
+          const links = [...box.querySelectorAll("a[href][data-krify-id]")].filter((a) => a !== el)
+            .map((a) => labelOf(a).trim()).filter((t) => t.length >= 4 && !own.has(t.toLowerCase()) && !t.startsWith("@"));
+          name = links.sort((a, b) => b.length - a.length)[0] ||
+            text.split(String.fromCharCode(10)).map((line) => line.trim()).find(usable) || "";
         }
         name = keep(name, 40);
       }
     }
     if (name) return kind ? `${kind} "${name}"` : `"${name}"`;
-    if (slot) return `${kind || "item"} ${slot}`;
+    if (slot && (kind || duplicated)) return `${kind || "item"} ${slot}`;
     return kind;
   }
 

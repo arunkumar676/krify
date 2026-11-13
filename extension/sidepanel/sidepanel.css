@@ -154,3 +154,8 @@ button.small { font-size: 12px; padding: 4px 8px; }
   overflow: auto;
 }
 #output.error { color: #c93c3c; }
+.output-tools { display: flex; gap: 6px; align-items: center; margin: 6px 0 4px; }
+.output-tools input { flex: 1; min-width: 0; padding: 4px 6px; }
+.output-tools .hint { white-space: nowrap; font-size: 11px; }
+#output mark { background: #ffe58a; color: inherit; border-radius: 2px; }
+#output mark.current { background: #ff9f43; }

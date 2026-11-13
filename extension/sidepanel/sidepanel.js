@@ -656,6 +656,82 @@ sameTabToggle.addEventListener("change", () => {
 
 const output = $("output");
 
+// ---------- the output box: search (highlight, count, ↑/↓) and copy ----------
+const outputSearch = $("outputSearch");
+const outputCount = $("outputCount");
+let marks = [];
+let markAt = -1;
+let marking = false; // our own highlight rewrite, not a new result
+
+function escapeHtml(s) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function goToMark(i) {
+  if (!marks.length) return;
+  marks[markAt]?.classList.remove("current");
+  markAt = (i + marks.length) % marks.length;
+  marks[markAt].classList.add("current");
+  marks[markAt].scrollIntoView({ block: "center" });
+  outputCount.textContent = `${markAt + 1} of ${marks.length}`;
+}
+
+function searchOutput() {
+  if (output.querySelector("img")) return; // a screenshot: nothing to search
+  const text = output.textContent;
+  const query = outputSearch.value.trim();
+  marking = true;
+  if (!query) {
+    output.textContent = text;
+    marks = [];
+    outputCount.textContent = "";
+  } else {
+    const low = text.toLowerCase();
+    const q = query.toLowerCase();
+    let html = "";
+    let from = 0;
+    for (let at = low.indexOf(q); at !== -1; at = low.indexOf(q, at + q.length)) {
+      html += `${escapeHtml(text.slice(from, at))}<mark>${escapeHtml(text.slice(at, at + q.length))}</mark>`;
+      from = at + q.length;
+    }
+    output.innerHTML = html + escapeHtml(text.slice(from));
+    marks = [...output.querySelectorAll("mark")];
+    outputCount.textContent = marks.length ? "" : "no match";
+  }
+  marking = false;
+  // Our own rewrite isn't a new result: drop its notices, or the watcher below would search again,
+  // rewrite again… for ever (the panel froze).
+  outputWatch.takeRecords();
+  markAt = -1;
+  if (marks.length) goToMark(0);
+}
+
+let searchTimer = null; // search once typing pauses, not on every key (big views stay fast)
+outputSearch.addEventListener("input", () => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(searchOutput, 200);
+});
+outputSearch.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") goToMark(markAt + (e.shiftKey ? -1 : 1));
+});
+$("outputNext").addEventListener("click", () => goToMark(markAt + 1));
+$("outputPrev").addEventListener("click", () => goToMark(markAt - 1));
+$("outputCopy").addEventListener("click", async () => {
+  const button = $("outputCopy");
+  try {
+    await navigator.clipboard.writeText(output.textContent);
+    button.textContent = "✓ Copied";
+  } catch {
+    button.textContent = "Copy failed";
+  }
+  setTimeout(() => (button.textContent = "📋 Copy"), 1500);
+});
+// A new result in the box (AI view, Elements…): search it again for the same words.
+const outputWatch = new MutationObserver(() => {
+  if (!marking && outputSearch.value.trim()) searchOutput();
+});
+outputWatch.observe(output, { childList: true });
+
 function argsFor(btn) {
   const element = Number($("elementInput").value);
   const text = $("textInput").value;

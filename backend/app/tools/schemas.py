@@ -92,6 +92,9 @@ TOOLS = [
     _tool("plan", "Write/update your checklist; start finished steps with ✔. done_when: a new finish "
           "check, only when the site turned out different from what you planned.",
           {"steps": {"type": "array", "items": TEXT}, "done_when": TEXT}, ["steps"]),
+    _tool("get_records", "A long list's items the page view left out (it says \"+N more items … get_records\"): "
+          "search = words to find (a name, status…), or start = position to read on from. Not the site's next page.",
+          {"list": TEXT, "search": TEXT, "start": {"type": "integer"}}, ["list"]),
     _tool("note", "Save a fact for later, e.g. 'Amazon: iPhone 16 128GB ₹69,900'.", {"text": TEXT}, ["text"]),
     _tool("done", "Task finished. summary: your answer to the user – a one-line direct answer in plain English "
           "(not JSON, not a line copied from the page), e.g. \"There are 33 people – the page lists 1–20 of 33.\" "

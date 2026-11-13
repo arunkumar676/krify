@@ -8,6 +8,7 @@ from app import history
 from app.agent.state import TaskState
 from app.config import MAX_STEPS
 from app.context.element_list import element_label, layout, merge_elements
+from app.context.pageview import get_records
 from app.context.prompt import system_prompt, where_line
 from app.context.sites import is_sheet
 from app.context.view import ContextMixin
@@ -307,6 +308,13 @@ class Agent(ToolsMixin, GuardrailsMixin, ContextMixin, MemoryMixin, OutputMixin)
                         await self.ui("step", f"📝 {text}")
                         self.state.notes.append(text[:200])
                         self.messages.append({**tool_msg, "content": "Saved."})
+                    check_progress(self.state, name, False)
+                elif name == "get_records":  # a long list's left-out items, from the last page view (no browser)
+                    await self.ui("step", f"📋 More of “{args.get('list', '')}” {args.get('search') or ''}".strip())
+                    result = get_records(self.state.records, str(args.get("list", "")), str(args.get("search", "")),
+                                         args.get("start", 0))
+                    self.state.seen.append(result)
+                    self.messages.append({**tool_msg, "content": result})
                     check_progress(self.state, name, False)
                 elif name in READ_OPS:
                     on_sheet = name in SHEET_OPS | {"read_text"} and is_sheet(self.state.current_url)

@@ -53,7 +53,8 @@ class ContextMixin:
         open_list = form = None
         full = inline_text = False
         if STRUCTURED_VIEW:
-            view = pageview.render(await self.browser("get_page_model", {}))
+            view = pageview.render(await self.browser("get_page_model", {}), focus=self.state.task_text)
+            self.state.records = view.records or {}
             elements, shown, status, hint = view.flat, view.text, view.status, view.hint
             open_list, form, full, inline_text = view.open_list, view.form, view.full, view.inline_text
         else:
