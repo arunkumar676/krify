@@ -451,6 +451,7 @@ export const operations = {
     elementFrame.clear();
     return callInPage("findElements", [query], null, 0);
   },
+  video: ({ action, value } = {}) => callInPage("videoControl", [action, value ?? ""], null, 0),
   find_text: ({ query } = {}) => {
     elementFrame.clear();
     return callInPage("findText", [query], null, 0);
@@ -583,7 +584,14 @@ export const operations = {
   },
   async type({ element, text, submit = false }) {
     const tab = await currentTab();
-    if (!needsRealInput(tab.url)) return act("type", [element, text, Boolean(submit)]);
+    if (!needsRealInput(tab.url)) {
+      try {
+        return await act("type", [element, text, Boolean(submit)]);
+      } catch (e) {
+        // A rich-text editor that ignored the in-page insert: type with the real keyboard instead.
+        if (!/didn't register/.test(String(e?.message || e))) throw e;
+      }
+    }
     // Google Sheets/Docs ignore JavaScript typing: click the box for real, check the cursor is
     // really in it (never Ctrl+A: in Sheets that selects every cell), then type for real.
     const spot = await spotIn("pointAt", element);

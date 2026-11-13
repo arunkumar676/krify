@@ -2,7 +2,7 @@
 
 import json
 
-READ_OPS = {"get_page_info", "get_elements", "find_elements", "find_text", "read_text", "sheet_query", "read_cells", "inspect"}
+READ_OPS = {"video", "get_page_info", "get_elements", "find_elements", "find_text", "read_text", "sheet_query", "read_cells", "inspect"}
 SHEET_OPS = {"sheet_query", "read_cells"}
 SHEET_ONLY_TOOLS = SHEET_OPS | {"go_to_cell"}  # left out of the tool list until a Sheet is open (saves tokens)
 
