@@ -266,3 +266,11 @@ for text in [
     show("router.parse", text, fn=router.parse)
 show("router.tail_of", "hi", "hello", fn=router.tail_of)
 show("router.tail_of", "q" * 400, "a" * 50, fn=router.tail_of)
+
+# ---------- prompt topics: which extra rule blocks a task / a page calls for ----------
+prompt = mod("app.context.prompt")
+for task in ["search for wireless mouse", "cheapest iphone 16 on amazon", "go to the cart", "open the contact page",
+             "what is the price of ₹5", "buy shoes", "order status", "fill the form", "", None]:
+    show("task_topics", task, fn=prompt.task_topics)
+for view in ['[1] link "Logitech M185" ₹699', "total $ 25", "price: 12", "no prices here", "€5 off", "", None]:
+    show("page_topics", view, fn=prompt.page_topics)

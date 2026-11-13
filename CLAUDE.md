@@ -99,7 +99,12 @@ lists – same names and order as `TOOL_GROUPS`) is sent exactly when that group
 takes `Agent.tool_groups` (`None` = every block) and `Agent.refresh_system()` rebuilds `messages[0]` whenever
 `tool_groups` changes (in `run()`, when `page_groups()` adds one, and in `more_tools`) – the tool list changes at
 the same moment, so no extra prompt-cache miss. A rule must never name a tool that isn't sent: put a sentence that
-names a tool in that tool's group block. `checks/prompt_check.py` enforces this for all 64 group combinations.
+names a tool in that tool's group block. `checks/prompt_check.py` enforces this for all 64 group combinations (×2 for topics).
+Besides tool groups there are **topic blocks** (`TOPICS` in `prompt.py`; today only `shopping`: the exact-product,
+versions-and-prices and listed-price rules inside the Facts section). `system_prompt(groups, topics)` sends one
+when the task's words (`task_topics`) or the page (`page_topics`: a currency sign + number) call for it; `Agent.topics`
+only grows during a chat, is all topics when the gate gave no answer (fail-open, like tool groups), and `loop.py` calls
+`refresh_system()` when it grows. A new topic needs entries in `TOPIC_WORDS` and `PAGE_WORDS` (checked by `prompt_check.py`).
 
 How the pieces fit:
 - **`TaskState`** (`agent/state.py`) holds everything about the task in progress and the page it's on
@@ -177,9 +182,12 @@ Key mechanics worth knowing before touching the loop (they live in the layer mod
   `plan_needs_approval()` (`guardrails/safety.py`) says so: 3+ steps, or the task/steps mention something with side
   effects (send/post/delete/pay/sign in – `RISKY_WORDS` – or message/edit/update/add/save/fill/type…). A 1–2 step
   look-up or "go to this page" plan is shown but pre-approved (`state.plan_approved = True`), so the agent acts at
-  once; the agent's own `plan` call gets the same rule. Until a plan is approved, actions are refused with
-  `PLAN_NOT_APPROVED`, which tells the model to call `plan`; `SAME_PLAN` ("you already have this plan") only applies
-  to an approved plan, so re-sending the planner's steps still reaches the approval prompt.
+  once; the agent's own `plan` call gets the same rule. A plan that needs approval is put to the user right after the
+  planner (`review_plan` in `loop.py`, called from `run()` before the first agent call – no LLM call is spent on
+  getting asked): Approve → the agent starts with an approved plan; Reject → the task ends; Update → the edited plan
+  stays unapproved and the agent is told to re-propose it with `plan`. Until a plan is approved, actions are refused
+  with `PLAN_NOT_APPROVED`, which tells the model to call `plan`; `SAME_PLAN` ("you already have this plan") only
+  applies to an approved plan, so re-sending the planner's steps still reaches the approval prompt.
 - **Page status**: `content.js` reports every live region (`role=alert/status`, `aria-live`) as the page's
   status, so banners and pagers arrive with real errors. `blocking_status()` (`verification/ui_state.py`) keeps only
   the problems (error/validation words, `Form error`, text it can't read as English); `check_ui_state()` bounces a
@@ -190,7 +198,8 @@ Key mechanics worth knowing before touching the loop (they live in the layer mod
   it contains a 3+ digit number that never appeared in anything read this task (`state.seen`); a second
   rejection is allowed through with a caveat appended.
 - **Known gap (kept as-is, pinned by `checks/replay.py`)**: a plain-text `done({...})` reply runs
-  ui_state → filters → facts but not `check_claims`, and plain-text replies skip the plan-approval gate;
+  ui_state → filters → facts but not `check_claims`, and plain-text replies skip the plan-approval gate (only matters
+  after an Update, since an Approve/Reject happens before the first agent call);
   the `done` tool runs ui_state → claims → filters → facts. Each check rejects only once, so their order
   matters.
 - **Safety is enforced in code, not just prompted**: `guardrails/safety.py#check()` inspects the action and

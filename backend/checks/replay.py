@@ -262,8 +262,8 @@ def scenario(fn):
 
 @scenario
 def text_done_paths():
-    # A text "done" runs ui_state → filters → facts but NOT claims (known gap, pinned here);
-    # text replies also skip the plan-approval gate.
+    # A text "done" runs ui_state → filters → facts but NOT claims (known gap, pinned here).
+    # The plan is approved before the first agent call (plan_review right after the planner).
     return Scenario("text_done_paths", "login", ["check the login page status please"], plans=[PLAN], replies=[
         text("The page says hello"),
         text('done({"summary": "All good, 12345 users"})'),
@@ -297,8 +297,7 @@ def done_tool_checks():
         tool("done", summary="There is no pink unicorn mouse here."),
         tool("done", summary="No pink unicorn; cheapest is 777"),
         tool("done", summary="No pink unicorn; cheapest is Portronics Toad 23 at 399"),
-        # second task: has a plan that isn't approved – the done tool is gated, a text reply isn't
-        tool("done", summary="Nothing on flipkart."),
+        # second task: its plan is approved up front (plan_review) – a done goes through the checks at once
         text('done({"summary": "Flipkart has none."})'),
         text('done({"summary": "Flipkart has none."})'),
     ])
@@ -306,12 +305,13 @@ def done_tool_checks():
 
 @scenario
 def ask_user_paths():
+    # The first plan_review (right after the planner) is an edit, so the plan stays unapproved.
     return Scenario("ask_user_paths", "login", ["sign in to my account", "it is hunter2"], plans=[PLAN], reviews=[
         ("update", ["Type the email", "Type the password", "Click Continue"]), ("approve", None),
     ], replies=[
         tool("click", element=9, label="Continue"),  # gated: plan not approved
-        tool("plan", steps=["Type the email", "Type the password"]),
-        tool("plan", steps=["Type the email", "Type the password", "Click Continue"]),  # same plan
+        tool("plan", steps=["Type the email", "Type the password"]),  # re-proposed: approved
+        tool("plan", steps=["Type the email", "Type the password"]),  # same plan
         tool("plan", steps=["Fill email", "Fill password", "Continue"], done_when="The account page is open"),
         tool("ask_user", question="I have entered your email, what is the password?"),
         tool("ask_user", question="Please sign in to the page and tell me when done"),
@@ -325,8 +325,18 @@ def ask_user_paths():
 
 @scenario
 def plan_rejected():
+    # Rejected right after the planner: the agent is never asked anything.
     return Scenario("plan_rejected", "shop", ["compare mouse prices on two sites"], plans=[PLAN],
-                    reviews=[("reject", None)], replies=[tool("plan", steps=["Open amazon", "Open flipkart", "Compare"])])
+                    reviews=[("reject", None)], replies=[])
+
+
+@scenario
+def plan_rejected_via_tool():
+    # Edited first, then the agent re-proposes the plan with `plan` and the user rejects that.
+    return Scenario("plan_rejected_via_tool", "shop", ["compare mouse prices on two sites"], plans=[PLAN],
+                    reviews=[("update", ["Open amazon", "Open flipkart", "Compare"]), ("reject", None)], replies=[
+        tool("plan", steps=["Open amazon", "Open flipkart", "Compare"]),
+    ])
 
 
 @scenario
@@ -699,6 +709,41 @@ def gate_skipped_when_answering_ask():
         tool("ask_user", question="What is the password?"),
         tool("done", summary="Signed in."),
         tool("done", summary="Signed in."),  # the login page still shows an error: the done is sent back once
+    ])
+
+
+async def probe_topics(agent):
+    """Session operation: which prompt topics the agent holds and whether the shopping rules are in its system prompt."""
+    emit("topics", {"topics": sorted(agent.topics or ()), "shopping_rules": "Only the exact product" in agent.messages[0]["content"]})
+
+
+@scenario
+def topics_not_shopping():
+    """The gate says task, no extra tool groups: a task that isn't about shopping, on a page without prices,
+    doesn't get the shopping rules in its system prompt."""
+    return Scenario("topics_not_shopping", "login", ["sign in to my account", probe_topics],
+                    gates=['{"kind": "task", "reply": "", "groups": []}'], plans=[""], replies=[
+        tool("done", summary="Signed in."),
+        tool("done", summary="Signed in."),
+    ])
+
+
+@scenario
+def topics_from_page():
+    """No shopping word in the task, but the page shows prices: the shopping rules are added before the first agent call."""
+    return Scenario("topics_from_page", "shop", ["open a page about cats please", probe_topics],
+                    gates=['{"kind": "task", "reply": "", "groups": []}'], plans=[""], replies=[
+        tool("done", summary="Opened."),
+    ])
+
+
+@scenario
+def topics_from_task():
+    """A shopping word in the task sends the shopping rules even on a page without prices."""
+    return Scenario("topics_from_task", "login", ["what is the cheapest laptop", probe_topics],
+                    gates=['{"kind": "task", "reply": "", "groups": []}'], plans=[""], replies=[
+        tool("done", summary="Not on this page."),
+        tool("done", summary="Not on this page."),
     ])
 
 

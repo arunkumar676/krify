@@ -22,6 +22,8 @@ print(prompt.system_prompt())
 for groups in ("basic", "forms", "tabs", "sheets", "mouse", "look", "lists"):  # what each tool group adds
     print(f"===== system_prompt({{'basic', {groups!r}}})" if groups != "basic" else "===== system_prompt({'basic'})")
     print(prompt.system_prompt({"basic", groups}))
+print("===== system_prompt({'basic'}, topics=set())")  # no topic blocks (a task that isn't about shopping)
+print(prompt.system_prompt({"basic"}, set()))
 for location in (None, {}, {"country": "India"}, {"country": "India", "place": "Hyderabad, Telangana, India"}):
     print(f"===== where_line({location!r})")
     print(prompt.where_line(location))

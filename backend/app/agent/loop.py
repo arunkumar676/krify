@@ -10,7 +10,7 @@ from app.config import MAX_STEPS
 from app.context.element_list import element_label, layout, merge_elements
 from app.context.pageview import get_records
 from app.tools.schemas import ALL_GROUPS, GROUP_ORDER, TOOL_GROUPS, task_groups, tools_for
-from app.context.prompt import system_prompt, where_line
+from app.context.prompt import TOPICS, page_topics, system_prompt, task_topics, where_line
 from app.context.sites import is_sheet
 from app.context.view import ContextMixin
 from app.guardrails import safety
@@ -76,6 +76,9 @@ class Agent(ToolsMixin, GuardrailsMixin, ContextMixin, MemoryMixin, OutputMixin)
         # during a chat (its history may hold calls to any of them). router_groups: what the gate picked.
         self.tool_groups = None
         self.router_groups = None
+        # Prompt topics sent (context/prompt.py TOPICS, e.g. the shopping rules): None until the first task, then
+        # only grow, like tool groups.
+        self.topics = None
         self.dev_mode = False  # debug trace (tools used + what they found) appended to the answer
         self.trace = []  # this task's trace, built only while dev_mode is on
 
@@ -123,7 +126,7 @@ class Agent(ToolsMixin, GuardrailsMixin, ContextMixin, MemoryMixin, OutputMixin)
         out exactly when its tools do. Called whenever tool_groups changes, i.e. when the tool list the
         provider caches against changes anyway."""
         where = where_line(self.location)
-        prompt = system_prompt(self.tool_groups)
+        prompt = system_prompt(self.tool_groups, self.topics)
         self.messages[0]["content"] = f"{prompt}\n\n{where}" if where else prompt
 
     async def stop_looping(self):
@@ -131,6 +134,21 @@ class Agent(ToolsMixin, GuardrailsMixin, ContextMixin, MemoryMixin, OutputMixin)
         question, self.state.loop_question = self.state.loop_question, ""
         await self.ui("step", "🔁 Going in circles – stopping to ask you")
         await self.finish("ask", question)
+
+    async def review_plan(self, steps):
+        """Ask the user to Approve / Update / Reject `steps`. Returns (decision, text for the AI)."""
+        decision, edited = await self.plan_review(steps)
+        self.state.plan = edited
+        shown = "\n".join(f"{i}. {s}" for i, s in enumerate(edited, 1))
+        if decision == "approve":
+            self.state.plan_approved = True
+            await self.ui("step", f"✅ Plan approved:\n{shown}")
+            return decision, f"Plan approved by the user:\n{shown}\nProceed with it."
+        if decision == "reject":
+            return decision, "Plan rejected by the user."
+        await self.ui("step", f"✏️ You edited the plan – checking it with Krify:\n{shown}")
+        return "update", (f"The user edited your plan to:\n{shown}\nReview it, adjust "
+                          "if needed, and call plan again to re-propose it.")
 
     async def run(self, task, model, location=None):
         self.location = location
@@ -147,22 +165,37 @@ class Agent(ToolsMixin, GuardrailsMixin, ContextMixin, MemoryMixin, OutputMixin)
         if not continuing or self.tool_groups is None:
             wanted = ALL_GROUPS if self.router_groups is None else self.router_groups
             self.tool_groups = (self.tool_groups or set()) | {"basic"} | set(wanted) | task_groups(task)
+            # (No gate answer = unknown task: every topic's rules are sent, as with the tool groups.)
+            wanted_topics = set(TOPICS) if self.router_groups is None else task_topics(task)
+            self.topics = (self.topics or set()) | wanted_topics
         self.refresh_system()
         self.notes_at_last_read = 0
         nudged = False
         empty_replies = 0
         page = await self.page_view()
         start_trail(self.state, page)
+        plan_note = ""
         if not continuing:
             await self.make_plan(task, page, model)
+            if self.state.plan and not self.state.plan_approved:
+                # Ask now, instead of letting the agent try an action (refused) and call `plan` just to get asked.
+                decision, plan_note = await self.review_plan(self.state.plan)
+                if decision == "reject":
+                    await self.finish("stopped", "You rejected the plan.")
+                    return
         self.last_task = self.state.task_text
         self.add_with_page({"role": "user"}, task, page)
+        if plan_note:  # the user edited the plan: the agent re-proposes it with `plan`
+            self.messages.append({"role": "user", "content": plan_note})
 
         for step in range(MAX_STEPS):
             report.set_step(step + 1)
             if MAX_STEPS - step == WRAP_UP_AT:
                 await self.ui("step", "⏰ Few steps left – asking Krify to wrap up")
                 self.messages.append({"role": "user", "content": WRAP_UP})
+            if more_topics := page_topics(self.state.view_text) - self.topics:  # the page shows prices: shop rules
+                self.topics |= more_topics
+                self.refresh_system()
             added = self.page_groups() - self.tool_groups
             if added:
                 self.tool_groups |= added
@@ -288,23 +321,11 @@ class Agent(ToolsMixin, GuardrailsMixin, ContextMixin, MemoryMixin, OutputMixin)
                     if not self.state.plan_approved and not safety.plan_needs_approval(steps, self.state.task_text):
                         self.state.plan_approved = True  # short and harmless: saved below, no approval needed
                     if not self.state.plan_approved:
-                        decision, edited = await self.plan_review(steps)
-                        self.state.plan = edited
-                        shown = "\n".join(f"{i}. {s}" for i, s in enumerate(self.state.plan, 1))
-                        if decision == "approve":
-                            self.state.plan_approved = True
-                            await self.ui("step", f"✅ Plan approved:\n{shown}")
-                            self.messages.append({**tool_msg, "content": f"Plan approved by the user:\n{shown}\nProceed with it."})
-                        elif decision == "reject":
-                            self.messages.append({**tool_msg, "content": "Plan rejected by the user."})
+                        decision, text = await self.review_plan(steps)
+                        self.messages.append({**tool_msg, "content": text})
+                        if decision == "reject":
                             await self.finish("stopped", "You rejected the plan.")
                             finished = True
-                        else:  # "update"
-                            await self.ui("step", f"✏️ You edited the plan – checking it with Krify:\n{shown}")
-                            self.messages.append(
-                                {**tool_msg, "content": f"The user edited your plan to:\n{shown}\nReview it, adjust "
-                                                        "if needed, and call plan again to re-propose it."}
-                            )
                     else:
                         title = "📋 Plan updated:" if self.state.plan else "📋 Plan:"
                         self.state.plan = steps
