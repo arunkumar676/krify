@@ -9,6 +9,7 @@ from app.agent.state import TaskState
 from app.config import MAX_STEPS
 from app.context.element_list import element_label, layout, merge_elements
 from app.context.pageview import get_records
+from app.tools.schemas import ALL_GROUPS, GROUP_ORDER, TOOL_GROUPS, task_groups, tools_for
 from app.context.prompt import system_prompt, where_line
 from app.context.sites import is_sheet
 from app.context.view import ContextMixin
@@ -39,13 +40,11 @@ from app.tools.ops import (
     MAX_BATCH,
     PAGE_MOVED,
     READ_OPS,
-    SHEET_ONLY_TOOLS,
     SHEET_OPS,
     STEP_FAILED,
     _args_of,
     uses_element,
 )
-from app.tools.schemas import TOOLS
 from app.verification.changes import click_result, opened_what_asked
 from app.verification.claims import check_claims, check_handoff
 from app.verification.facts import WRONG_PAGE, WRONG_PRODUCT, check_facts, missing_models, missing_words
@@ -73,7 +72,10 @@ class Agent(ToolsMixin, GuardrailsMixin, ContextMixin, MemoryMixin, OutputMixin)
         self.state = TaskState()  # the task in progress and the page it's on (agent/state.py)
         # Sheets-only tools are sent only once a Google Sheet has been open (then always, since the
         # chat history may hold calls to them, and a call to a tool not sent is rejected by the API).
-        self.sheet_tools = False
+        # Tool groups sent to the model (tools/schemas.py TOOL_GROUPS): None until the first task; only grow
+        # during a chat (its history may hold calls to any of them). router_groups: what the gate picked.
+        self.tool_groups = None
+        self.router_groups = None
         self.dev_mode = False  # debug trace (tools used + what they found) appended to the answer
         self.trace = []  # this task's trace, built only while dev_mode is on
 
@@ -99,6 +101,24 @@ class Agent(ToolsMixin, GuardrailsMixin, ContextMixin, MemoryMixin, OutputMixin)
         self.last_status = ""  # how the previous task ended ("ask" = the next message is an answer)
         self.gate_tail = ""  # the gate's last chat exchange, so its follow-ups make sense (context/router.py)
 
+    def page_groups(self):
+        """Tool groups the current page needs, whatever the gate picked: a Sheet/Doc, a form, a long list,
+        hover-only buttons, more than one tab."""
+        url = self.state.current_url or ""
+        view = self.state.view_text or ""
+        groups = set()
+        if is_sheet(url) or "docs.google.com/document" in url:
+            groups.add("sheets")
+        if self.state.form:
+            groups.add("forms")
+        if "get_records(" in view:
+            groups.add("lists")
+        if "(hover" in view or ", hover" in view:
+            groups.add("mouse")
+        if "[Tabs]" in view:
+            groups.add("tabs")
+        return groups
+
     async def stop_looping(self):
         """Still going in circles after a warning: stop and ask the user instead of burning steps."""
         question, self.state.loop_question = self.state.loop_question, ""
@@ -119,6 +139,9 @@ class Agent(ToolsMixin, GuardrailsMixin, ContextMixin, MemoryMixin, OutputMixin)
         report.set_task(self.task_id)
         if not continuing and await self.try_gate(task):  # chat / general knowledge: no agent needed
             return
+        if not continuing or self.tool_groups is None:
+            wanted = ALL_GROUPS if self.router_groups is None else self.router_groups
+            self.tool_groups = (self.tool_groups or set()) | {"basic"} | set(wanted) | task_groups(task)
         self.notes_at_last_read = 0
         nudged = False
         empty_replies = 0
@@ -134,8 +157,11 @@ class Agent(ToolsMixin, GuardrailsMixin, ContextMixin, MemoryMixin, OutputMixin)
             if MAX_STEPS - step == WRAP_UP_AT:
                 await self.ui("step", "⏰ Few steps left – asking Krify to wrap up")
                 self.messages.append({"role": "user", "content": WRAP_UP})
-            self.sheet_tools = self.sheet_tools or is_sheet(self.state.current_url)
-            tools = TOOLS if self.sheet_tools else [t for t in TOOLS if t["function"]["name"] not in SHEET_ONLY_TOOLS]
+            added = self.page_groups() - self.tool_groups
+            if added:
+                self.tool_groups |= added
+                await self.ui("step", f"🧰 Tools added for this page: {', '.join(sorted(added))}")
+            tools = tools_for(self.tool_groups)
             reply, used_model, tokens = await ask_ai(
                 self.messages, tools, model, on_note=lambda t: self.ui("step", t),
                 need_vision=bool(self.screenshot_msgs), boost=self.state.boost_next,
@@ -308,6 +334,16 @@ class Agent(ToolsMixin, GuardrailsMixin, ContextMixin, MemoryMixin, OutputMixin)
                         await self.ui("step", f"📝 {text}")
                         self.state.notes.append(text[:200])
                         self.messages.append({**tool_msg, "content": "Saved."})
+                    check_progress(self.state, name, False)
+                elif name == "more_tools":  # the AI needs a group that wasn't sent: add it, one step lost, not the task
+                    group = str(args.get("group", "")).strip().lower()
+                    if group in TOOL_GROUPS and group != "basic":
+                        self.tool_groups.add(group)
+                        await self.ui("step", f"🧰 Tools added: {group}")
+                        content = f"Added the {group} tools: {', '.join(TOOL_GROUPS[group])}. Use them from your next step."
+                    else:
+                        content = f"No such group. Groups: {', '.join(g for g in GROUP_ORDER if g != 'basic')}."
+                    self.messages.append({**tool_msg, "content": content})
                     check_progress(self.state, name, False)
                 elif name == "get_records":  # a long list's left-out items, from the last page view (no browser)
                     await self.ui("step", f"📋 More of “{args.get('list', '')}” {args.get('search') or ''}".strip())

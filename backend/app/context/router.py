@@ -30,7 +30,7 @@ GATE_PROMPT = """You are the front desk of Krify, a browser agent that opens sit
 forms and works with Google Sheets in the user's own browser. Decide whether you can reply yourself or
 whether the browser agent must handle the message. Users may write casually. Always reply in English.
 Reply with ONLY this JSON, nothing else:
-{"kind": "chat" | "answer" | "task", "reply": "..."}
+{"kind": "chat" | "answer" | "task", "reply": "...", "groups": []}
 
 - chat: greetings, thanks, goodbyes, "who are you", "what can you do" (answer from the description above).
   Reply briefly and warmly, in English.
@@ -41,7 +41,14 @@ Reply with ONLY this JSON, nothing else:
   scroll, compare); live or current facts (prices, weather, news, scores, "today", "latest"); the user's
   own accounts, files or data; a follow-up to the previous browser task ("it", "that", "again", "now on
   flipkart", "the same"); and any message you are not sure about.
-When in doubt, choose task. Never claim to have done something in the browser."""
+When in doubt, choose task. Never claim to have done something in the browser.
+For a task, "groups" lists the extra tool groups it will need (basic browsing is always there; [] if none):
+- forms: fill in a form – sign up, add a contact, checkout, apply
+- tabs: compare sites or open something in a new tab
+- sheets: work in Google Sheets or Google Docs
+- mouse: hover menus, drag and drop, sliders, clicking on pictures or maps
+- look: looking at images, charts or the screen itself
+- lists: long lists or tables – count, search or go through many records"""
 
 
 def cheap_model():
@@ -73,13 +80,30 @@ def parse(text):
     return kind, reply
 
 
+GROUPS = ("forms", "tabs", "sheets", "mouse", "look", "lists")
+
+
+def parse_groups(text):
+    """The tool groups the gate asked for, or None when its reply has no usable list (then all are sent)."""
+    match = re.search(r"\{.*\}", text or "", re.DOTALL)
+    try:
+        data = json.loads(match.group(0)) if match else None
+    except json.JSONDecodeError:
+        return None
+    groups = data.get("groups") if isinstance(data, dict) else None
+    if not isinstance(groups, list):
+        return None
+    return {str(g).strip().lower() for g in groups} & set(GROUPS)
+
+
 def tail_of(question, reply):
     """What the next gate call is shown about this exchange (kept short)."""
     return f"User: {question}\nYou: {reply}"[-TAIL_CHARS:]
 
 
 async def gate(text, last_task, tail, model, on_note=None):
-    """Return (kind, reply, tokens). kind "task" (reply "") = hand the message to the agent."""
+    """Return (kind, reply, tokens, groups). kind "task" (reply "") = hand the message to the agent; groups =
+    the extra tool groups it needs (None = unknown: send them all)."""
     context = f"Message: {text}"
     if last_task:
         context += f"\nPrevious browser task: {last_task[:200]}"
@@ -90,7 +114,8 @@ async def gate(text, last_task, tail, model, on_note=None):
         reply, _, tokens = await asyncio.wait_for(ask_ai(messages, None, model, on_note=on_note), GATE_TIMEOUT)
     except Exception as err:  # includes the timeout: the gate is optional
         log.warning("Gate skipped: %s", err or type(err).__name__)
-        return "task", "", 0
+        return "task", "", 0, None
     kind, answer = parse(reply.content)
-    log.info("Gate: %s", kind)
-    return kind, answer, tokens
+    groups = parse_groups(reply.content)
+    log.info("Gate: %s %s", kind, sorted(groups) if groups is not None else "(all tools)")
+    return kind, answer, tokens, groups

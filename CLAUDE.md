@@ -98,7 +98,7 @@ How the pieces fit:
   each `run()` – never replaced, because a message answering `ask_user` continues the same task (goal,
   plan, notes, `seen`, `actions` kept). Connection-level things stay on `Agent`: callbacks (`browser`,
   `ui`, `confirm`, `plan_review`), the chat (`messages`, `page_views`, `screen_reads`, `screenshot_msgs`),
-  `sheet_tools`, `dev_mode`, `trace`, `tokens`, `task_id`, `model`, `last_task`, `last_status`.
+  `tool_groups` (which tool groups are sent – `TOOL_GROUPS` in `tools/schemas.py`: Basic always, others picked by the router, added by `page_groups()` or the `more_tools` tool; they only grow during a chat), `dev_mode`, `trace`, `tokens`, `task_id`, `model`, `last_task`, `last_status`.
 - **Sync checks are plain functions over the state**: `check_facts(state, summary)`,
   `wrong_element(state, n, label)`, `check_progress(state, name, changed)`, … – testable without an Agent.
 - **Methods that need the browser, the user or the chat are mixins** (`ToolsMixin`, `GuardrailsMixin`,
