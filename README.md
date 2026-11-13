@@ -23,9 +23,8 @@ Krify is an AI agent that works inside your browser. You tell it what to do in p
 - 📝 **Notes and screen reading**: Krify reads the text visible on screen and saves key facts (like prices) as notes, so it doesn't guess
 - 📊 **Google Sheets**: Krify downloads the open sheet as CSV (your own login, private sheets too, nothing saved) and answers questions with SQL in a small in-memory database (DuckDB). Only the answer rows go to the AI. Read-only
 - ⌨️ **Real keyboard when needed**: on Google Sheets/Docs and for shortcuts (Ctrl+Z, Ctrl+End…) Krify presses real keys through Chrome's debugger (Chrome shows a yellow bar while it works). It can jump to a cell, type into it, check the result and undo. Editing a sheet asks Allow / Block first
-- 🖱️ **Real mouse when needed**: right-click, double/triple-click, drag and drop, and clicking a spot on a screenshot (what's under the spot gets the usual safety check)
+- 🖱️ **Real mouse when needed**: right-click, double/triple-click, and drag and drop between elements
 - 🔁 **Repeat detector**: the same step 3 times with nothing changing → Krify is told to try another way
-- 📸 **Screenshots**: when text isn't enough (pictures, colours, icons, maps), Krify takes a screenshot with element numbers drawn on it and switches to a model that can see images
 - 📋 **Plans and fact check**: for longer tasks Krify writes a checklist first; every number in its final answer must have appeared on a page it read
 - ⛔ **Stop anytime**: ends the task instantly
 - 💬 **Follow-ups**: "now sort it", "open the second one"
@@ -116,11 +115,11 @@ Type a task in the side panel and press **▶ Start**, for example:
 
 ### Models (auto-switch order)
 
-| Provider | Models (👁 = can read screenshots) |
+| Provider | Models |
 |---|---|
-| Groq | GPT-OSS 120B, Qwen 3.8 27B 👁, GPT-OSS 20B |
-| Gemini | Gemini 3.8 Flash 👁, Gemini 3.5 Flash 👁, Gemini Flash Lite 👁 |
-| OpenRouter | Nemotron Ultra, Nemotron Super 👁 |
+| Groq | GPT-OSS 120B, Qwen 3.8 27B, GPT-OSS 20B |
+| Gemini | Gemini 3.8 Flash, Gemini 3.5 Flash, Gemini Flash Lite |
+| OpenRouter | Nemotron Ultra, Nemotron Super |
 
 A provider without a key in `.env` is skipped. Models are configured in [backend/app/config.py](backend/app/config.py).
 
@@ -172,7 +171,7 @@ krify/
 - [x] Task history and per-model usage (SQLite database)
 - [x] Reliability on long tasks: plan checklist, goal shown at every step, scroll limit, wrap-up warning, fact check
 - [x] Hover menus
-- [x] Screenshots (let the AI see the page as an image)
+- [x] ~~Screenshots~~ (removed: text view only, no image models needed)
 - [x] Read Google Sheets (private too)
 
 See [TODO.md](TODO.md) for the detailed checklist.

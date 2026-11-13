@@ -25,7 +25,7 @@ WRAP_UP = (
 )
 REPEAT_NOTE = (
     "\nWarning: you've done this same step 3 times and nothing changed. Don't do it again: try a "
-    "different way (another element, read_text, a fresh screenshot), or call ask_user."
+    "different way (another element, find_elements, read_text), or call ask_user."
 )
 LOOP_TRAIL = 8  # pages remembered (after each action) to spot going back and forth
 
@@ -123,7 +123,7 @@ def check_loop(state, page, changed, dev_mode, trace):
 def check_progress(state, name, page_changed):
     """Stuck detector: count steps that don't move the task forward."""
     progress = name in PROGRESS_OPS or (
-        name in ("click", "click_at", "drag", "hover", "press_key", "go_back", "screenshot", "scroll") and page_changed
+        name in ("click", "drag", "hover", "press_key", "go_back", "scroll") and page_changed
     )
     state.idle_steps = 0 if progress else state.idle_steps + 1
     if state.idle_steps >= IDLE_LIMIT:

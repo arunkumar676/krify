@@ -129,7 +129,7 @@ def opened_what_asked(task, clicked):
 def click_result(before, after, clicked, title="", open_list=None):
     """One sentence for the AI after a click, or '' if nothing clear changed.
     before/after: (url, flat element list). clicked: the clicked element's line ('div "Knowledge"'),
-    or '' for click_at. title: the page title after the click. open_list: (field name, [option
+    or ''. title: the page title after the click. open_list: (field name, [option
     labels]) of a custom dropdown list that was open before the click, or None.
     A new button that would undo the click ("Open sidebar" after "Collapse sidebar") is never offered
     as a next step: it's named with a warning instead (the AI clicked it and undid its own work)."""

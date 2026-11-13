@@ -5,16 +5,13 @@ def describe(name, args):
     """Readable step text for the side panel, e.g. 'click [12]'."""
     match name:
         case "open_url": return f"🌐 Open {args.get('url')}"
-        case "click" | "click_at":
-            where = (f"cell {args['cell']}" if args.get("cell") else f"[{args.get('element')}]") if name == "click" \
-                else f"at ({args.get('x')}, {args.get('y')})"
+        case "click":
+            where = f"cell {args['cell']}" if args.get("cell") else f"[{args.get('element')}]"
             count = str(args.get("count") or 1)
             word = "Right-click" if args.get("button") == "right" else {"2": "Double-click", "3": "Triple-click"}.get(count, "Click")
             return f"🖱️ {word} {where}"
         case "drag":
-            a = f"[{args['from_element']}]" if args.get("from_element") is not None else f"({args.get('from_x')}, {args.get('from_y')})"
-            b = f"[{args['to_element']}]" if args.get("to_element") is not None else f"({args.get('to_x')}, {args.get('to_y')})"
-            return f"✋ Drag {a} → {b}"
+            return f"✋ Drag [{args.get('from_element')}] → [{args.get('to_element')}]"
         case "hover": return f"👆 Hover over [{args.get('element')}]"
         case "type":
             enter = " + Enter" if args.get("submit") else ""

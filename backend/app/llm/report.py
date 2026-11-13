@@ -61,7 +61,7 @@ def _chars(value):
     return len(json.dumps(value, ensure_ascii=False, default=str))
 
 
-def record_call(model, provider, attempt, messages, tools, extra, boost, need_vision, duration_ms,
+def record_call(model, provider, attempt, messages, tools, extra, boost, duration_ms,
                 response=None, status="ok", error=""):
     """Save one request. `response` is the provider's reply object (None when the request failed)."""
     ctx = _ctx.get()
@@ -74,7 +74,7 @@ def record_call(model, provider, attempt, messages, tools, extra, boost, need_vi
     row = LlmCall(
         task_id=ctx["task_id"], step=ctx["step"], purpose=ctx.get("purpose") or ("agent_step" if tools else "planner"),
         duration_ms=duration_ms, model=model, provider=provider, attempt=attempt, boost=bool(boost),
-        need_vision=bool(need_vision), status=status, error=str(error)[:500],
+        status=status, error=str(error)[:500],
         message_count=len(messages), request_chars=_chars(request["messages"]) + request["tools_chars"],
         request_json=json.dumps(request, ensure_ascii=False, default=str),
     )
@@ -144,7 +144,7 @@ def _call_dict(c):
         sent[m.get("role", "?")]["chars"] += _chars(m)
     return {
         "seq": c.seq, "step": c.step, "purpose": c.purpose, "model": c.model, "attempt": c.attempt,
-        "boost": c.boost, "need_vision": c.need_vision, "status": c.status, "error": c.error,
+        "boost": c.boost, "status": c.status, "error": c.error,
         "duration_ms": c.duration_ms, "created_at": c.created_at.replace(tzinfo=datetime.timezone.utc).isoformat(),
         "prompt_tokens": c.prompt_tokens, "completion_tokens": c.completion_tokens,
         "total_tokens": c.total_tokens, "reasoning_tokens": c.reasoning_tokens,

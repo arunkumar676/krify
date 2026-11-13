@@ -67,7 +67,7 @@
 
 ## Later
 - [x] Hover (works on Amazon "Account & Lists"; CSS-only menus may need the real mouse)
-- [x] Screenshots (with element numbers drawn on; auto-switch to a model that can see images)
+- [x] ~~Screenshots (with element numbers drawn on; auto-switch to a model that can see images)~~ – removed (vision models and coordinate clicks dropped)
 
 ## 10. Quick wins (no new permissions)
 - [x] Read Google Sheets, private too (download as CSV → DuckDB answers the AI's SQL; ties kept)
@@ -82,7 +82,7 @@
 - [x] Real keys and shortcuts (Tab, Enter, Ctrl+Z, Ctrl+C/V, Ctrl+End)
 - [x] Drag and drop (both kinds; tested on the-internet drag_and_drop)
 - [x] Right, double, triple click (Sheets cells by address: `click(cell="B22")`)
-- [x] Click by position (x, y) from a screenshot (spots outside the picture are refused)
+- [x] ~~Click by position (x, y) from a screenshot~~ – removed with screenshots
 
 ## 12. Google Sheets editing
 - [x] Jump to a cell with the Name box (`go_to_cell`, checked before typing)

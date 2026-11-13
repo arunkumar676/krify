@@ -26,7 +26,7 @@ def completion(prompt, out, content="hi", tool=None):
 
 def call(response=None, status="ok", tools=TOOLS, model="groq:a", messages=None, attempt=0):
     messages = messages or [{"role": "system", "content": "sys"}, {"role": "user", "content": "task"}]
-    report.record_call(model, "groq", attempt, messages, tools, {"reasoning_effort": "low"}, False, False, 120,
+    report.record_call(model, "groq", attempt, messages, tools, {"reasoning_effort": "low"}, False, 120,
                        response, status, "boom" if status != "ok" else "")
 
 

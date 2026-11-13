@@ -43,7 +43,7 @@ CONSTANTS = """READ_OPS SHEET_OPS SHEET_ONLY_TOOLS OLD_PAGE OLD_SCREEN MAX_READ_
 MAX_BATCH BATCH_LIMIT PAGE_MOVED STEP_FAILED OVERWRITE_BLOCKED BLOCKED DONE_TOO_EARLY PLAN_NOT_APPROVED _ELEMENT_KEY
 SUBMIT_WORDS FORM_ERROR FORM_NOT_SENT NOT_IN_VIEW CHANGED_IN_BATCH BATCH_REFUSED WRONG_ELEMENT LEAVE_FORM ELEMENT_FIELDS
 _CLAIMS _FIRST_PERSON _TYPE_OPS _CLICK_OPS CLAIM_REJECTED HANDOFF USER_ONLY HANDOFF_REJECTED FILTER_HINT FILTER_CHECK
-NOT_FOUND _DROPDOWN_LINE _KIND_WORDS _ELEMENT_ID _STATUS_LINE _ELEMENT_LINE PROGRESS_OPS OLD_SCREENSHOT IDLE_LIMIT
+NOT_FOUND _DROPDOWN_LINE _KIND_WORDS _ELEMENT_ID _STATUS_LINE _ELEMENT_LINE PROGRESS_OPS IDLE_LIMIT
 MAX_IDLE_SCROLLS MAX_SCROLLS_PER_PAGE SCROLL_REFUSED WRAP_UP_AT WRAP_UP REPEAT_NOTE LOOP_TRAIL REQUIRED_EMPTY FILL_ANY
 ASK_ONCE DUMMY LOOP_NOTE LOOP_ASK NEW_SITE SAME_READ WRONG_PRODUCT PRODUCT_REJECTED WRONG_PAGE SAME_PLAN STUCK_NOTE
 UNNOTED_READ _NUMBER _TOKEN _SAFE_OPS _PHRASE PHRASE_STOPWORDS NUDGE""".split()
@@ -158,7 +158,7 @@ ELEMENTS = ('[1] button "Buy Now"\n[2] input password "Password" (empty)\n[3] in
 SHEET = "https://docs.google.com/spreadsheets/d/abc/edit"
 for name, args, last, url in [
     ("click", {"element": 1}, "", ""), ("click", {"element": 4}, "", ""), ("click", {"element": 5}, "", ""),
-    ("select_option", {"element": 4, "option": "Delete"}, "", ""), ("click_at", {"_under": 'button "Place order"'}, "", ""),
+    ("select_option", {"element": 4, "option": "Delete"}, "", ""),
     ("type", {"element": 2, "text": "x"}, "", ""), ("type", {"element": 7, "text": "4111"}, "", ""),
     ("type", {"element": 3, "text": "hi", "submit": True}, "", ""), ("type", {"element": 6, "text": "q", "submit": True}, "", ""),
     ("type", {"element": 6, "text": "q", "submit": True, "_enter": {"inForm": True, "submitter": 'button "Place order"'}}, "", ""),
@@ -195,14 +195,11 @@ for args in [{"element": 0}, {"to_element": 3}, {"cell": "A1"}, {"element": None
     show("uses_element", args)
 show("preview", "  lots   of\n space  " + "x" * 200)
 show("preview", None)
-show("image_size", "data:image/jpeg;base64,/9j/wAARCAMABAADASIA")
-show("image_size", "not a data url")
 
 # ---------- tools: describe ----------
 for name, args in [
     ("open_url", {"url": "https://a.test"}), ("click", {"element": 3}), ("click", {"cell": "B2", "count": 2}),
-    ("click", {"element": 3, "button": "right"}), ("click_at", {"x": 10, "y": 20, "count": 3}),
-    ("drag", {"from_element": 1, "to_x": 5, "to_y": 6}), ("drag", {"from_x": 1, "from_y": 2, "to_element": 4}),
+    ("click", {"element": 3, "button": "right"}), ("drag", {"from_element": 1, "to_element": 4}),
     ("hover", {"element": 7}), ("type", {"element": 2, "text": "hi", "submit": True}), ("type", {"element": 2, "text": "hi"}),
     ("press_key", {"key": "Tab", "repeat": 3}), ("press_key", {"key": "Enter", "repeat": 1}), ("press_key", {"key": "Esc"}),
     ("type_here", {"text": "x"}), ("go_to_cell", {"cell": "A1"}), ("read_cells", {"cells": "A1:B2"}),
@@ -210,7 +207,7 @@ for name, args in [
     ("new_tab", {"url": "https://b.test"}), ("switch_tab", {"tab": 2}), ("close_tab", {"tab": 2}), ("go_back", {}), ("reload", {}),
     ("wait", {"seconds": 2}), ("get_page_info", {}), ("get_elements", {}), ("find_elements", {"query": "cart"}),
     ("find_text", {"query": "price"}), ("read_text", {"scope": "page"}), ("read_text", {}), ("inspect", {"ref": 4}),
-    ("inspect", {}), ("sheet_query", {"sql": "SELECT 1"}), ("note", {"text": "x"}), ("screenshot", {}),
+    ("inspect", {}), ("sheet_query", {"sql": "SELECT 1"}), ("note", {"text": "x"}),
 ]:
     show("describe", name, args)
 

@@ -8,7 +8,7 @@ SHEET_ONLY_TOOLS = SHEET_OPS | {"go_to_cell"}  # left out of the tool list until
 
 # Batches: actions the AI may send several of in one reply.
 ACTION_OPS = {"open_url", "go_back", "reload", "new_tab", "switch_tab", "close_tab", "click", "hover", "type",
-              "type_here", "go_to_cell", "press_key", "scroll", "select_option", "wait", "click_at", "drag"}
+              "type_here", "go_to_cell", "press_key", "scroll", "select_option", "wait", "drag"}
 MAX_BATCH = 5
 BATCH_LIMIT = "Skipped: at most 5 steps at once. Look at the page and continue."
 PAGE_MOVED = ("Skipped: the page changed after an earlier step, so element numbers may be different. "

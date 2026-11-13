@@ -932,7 +932,7 @@ if (!window.__krify) {
     return roots;
   }
 
-  // Clears and reassigns data-krify-id (and the id → element map `find()` and showLabels() use)
+  // Clears and reassigns data-krify-id (and the id → element map `find()` uses)
   // on every qualifying visible/interactive element, in visual reading order (popups first) – so
   // get_elements, find_elements and inspect() always agree on what [12] means. `start`: embedded
   // pages continue the main page's numbering instead of restarting at 1. `max`: how many elements
@@ -2355,28 +2355,6 @@ if (!window.__krify) {
     // defaults. Set by operations.js on every call, from a side-panel toggle (sidepanel.js).
     unrestricted: false,
 
-    // For screenshots: draw each listed element's number on the page (and hide Krify's own
-    // border/badge/cursor so they don't cover the content). on=false removes the labels again.
-    showLabels(on) {
-      const root = overlay();
-      root.querySelector(".labels")?.remove();
-      for (const part of root.querySelectorAll(".working, .cursor")) part.style.visibility = on ? "hidden" : "";
-      if (!on) return "ok";
-      const layer = document.createElement("div");
-      layer.className = "labels";
-      for (const [id, el] of listed) {
-        const r = el.getBoundingClientRect();
-        if (r.bottom < 0 || r.top > innerHeight || r.width < 2) continue;
-        const tag = document.createElement("div");
-        tag.className = "num";
-        tag.textContent = id;
-        Object.assign(tag.style, { left: `${Math.max(0, r.left)}px`, top: `${Math.max(0, r.top)}px` });
-        layer.append(tag);
-      }
-      root.append(layer);
-      return "ok";
-    },
-
     // Glowing border around the page while a task runs.
     setWorking(on) {
       if (window !== top) return "ok"; // only around the main page, not each embedded page
@@ -2509,24 +2487,6 @@ if (!window.__krify) {
       return waitActionable(el, id);
     },
 
-    viewport() {
-      return { width: innerWidth, height: innerHeight, scrollX: Math.round(scrollX), scrollY: Math.round(scrollY) };
-    },
-
-    // What's at a spot, e.g. 'button "Delete"' – so a click by position gets the same safety check.
-    elementAt(x, y) {
-      let hit = document.elementFromPoint(x, y); // Krify's own overlay ignores the mouse, so it's skipped
-      if (!hit) return "";
-      // Inside a component, the page only reports the component: look inside it.
-      for (let shadow = shadowOf(hit); shadow; shadow = shadowOf(hit)) {
-        const inner = shadow.elementFromPoint(x, y);
-        if (!inner || inner === hit) break;
-        hit = inner;
-      }
-      const row = hit.closest?.("tr, [role=row]");
-      return describe(closestDeep(hit, SELECTOR) || (isClickableRow(row) ? row : hit));
-    },
-
     // Live description of a numbered element right now, or "" if it's gone – lets the backend check
     // an id still means what it meant when the model looked, before acting on it.
     // Wait until the page stops changing: no elements added/removed or text changed for `quietMs`
@@ -2605,13 +2565,13 @@ if (!window.__krify) {
       const parts = [...document.querySelectorAll(".active-cell-border")]
         .map((el) => el.getBoundingClientRect())
         .filter((r) => r.width || r.height);
-      if (!parts.length) throw new Error("Can't see the selected cell on screen – take a screenshot and use click_at.");
+      if (!parts.length) throw new Error("Can't see the selected cell on screen – scroll it into view with go_to_cell.");
       const left = Math.min(...parts.map((r) => r.left));
       const right = Math.max(...parts.map((r) => r.right));
       const top = Math.min(...parts.map((r) => r.top));
       const bottom = Math.max(...parts.map((r) => r.bottom));
       if (right - left < 4 || bottom - top < 4) {
-        throw new Error("Can't see the selected cell on screen – take a screenshot and use click_at.");
+        throw new Error("Can't see the selected cell on screen – scroll it into view with go_to_cell.");
       }
       return { x: (left + right) / 2, y: (top + bottom) / 2 };
     },
@@ -3179,9 +3139,6 @@ if (!window.__krify) {
           padding: 4px 14px; border-radius: 999px; color: #fff; font: 600 12px/20px system-ui, sans-serif;
           background: linear-gradient(90deg, #7c5cff, #3ea8ff, #ff5ca8, #7c5cff); background-size: 300% 100%;
           animation: flow 3s linear infinite; box-shadow: 0 4px 18px rgba(124,92,255,.5); }
-        /* element numbers drawn for screenshots */
-        .num { position: fixed; padding: 0 4px; border-radius: 3px; background: #ffd400; color: #000;
-          border: 1px solid #000; font: 700 11px/14px system-ui, sans-serif; }
         @keyframes flow { to { background-position: 300% 0; } }
         @keyframes flow-v { to { background-position: 0 300%; } }
         @keyframes breathe { from { opacity: .55; } to { opacity: 1; } }

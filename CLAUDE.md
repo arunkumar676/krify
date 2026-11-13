@@ -67,7 +67,7 @@ The agent is split by what each part does; extension files mirror the same names
 | Folder | What it holds |
 |---|---|
 | `agent/` | `loop.py`: `Agent` (`__init__`, `run()`'s dispatch, `stop_looping`); `state.py`: `TaskState` |
-| `context/` | what the AI sees: `prompt.py`, `pageview.py`, `understand.py` (planner), `router.py` (cheap-model gate), `view.py` (`look`/`page_view`/screenshots/`make_plan`), `header.py`, `element_list.py`, `sites.py` |
+| `context/` | what the AI sees: `prompt.py`, `pageview.py`, `understand.py` (planner), `router.py` (cheap-model gate), `view.py` (`look`/`page_view`/`make_plan`), `header.py`, `element_list.py`, `sites.py` |
 | `tools/` | `schemas.py` (`TOOLS`), `ops.py` (op-name sets, batch rules), `describe.py`, `actions.py` (`do_action`, `run_batch`, sheet reads), `sheets.py` (CSV → DuckDB) |
 | `guardrails/` | before a step runs: `safety.py`, `element_match.py` (`wrong_element`), `forms.py` (`required_empty`, `track_form_edit`, `form_not_sent`), `permission.py` (`ask_permission`, `leave_guard`, `cells_in_the_way`), `progress.py` (stuck/repeat/loop detection, scroll limits) |
 | `verification/` | before an answer goes out: `facts.py`, `claims.py` (claims + handoff), `filters.py`, `ui_state.py`, `changes.py` (did a click work) |
@@ -81,10 +81,10 @@ The agent is split by what each part does; extension files mirror the same names
 
 Every real request to an AI model – including rate-limit/broken-reply retries and switches to another
 model – is saved as an `LlmCall` row by `_try_model` in `llm/client.py`: the exact messages sent
-(screenshots redacted to `[image ~N KB]`), tool names, the reply (text + tool calls), the provider's
+(any image data redacted to `[image ~N KB]`), tool names, the reply (text + tool calls), the provider's
 prompt/completion/total/reasoning token counts, duration and status. Which task/step a call belongs to
 comes from a `ContextVar` (`report.set_task` in `Agent.run()`, `set_step` per loop step), so `ask_ai`'s
-signature must stay `(messages, tools, preferred, on_note, need_vision, boost)` (`checks/replay.py`
+signature must stay `(messages, tools, preferred, on_note, boost)` (`checks/replay.py`
 fakes it). `task_report()`/`task_report_markdown()` feed the side panel's **📊 Report** view
 (`llm_report` message; per-task button in History; .md/.json download). Full request/response text is
 kept for the newest 50 tasks (`report.prune`), numbers forever; deleting a task deletes its calls. The report's **🗑 Clear** button (`llm_report_clear` → `report.clear`) deletes
@@ -97,7 +97,7 @@ How the pieces fit:
   `Agent.state` is created once and reset **in place** by `state.start(task, continuing)` at the start of
   each `run()` – never replaced, because a message answering `ask_user` continues the same task (goal,
   plan, notes, `seen`, `actions` kept). Connection-level things stay on `Agent`: callbacks (`browser`,
-  `ui`, `confirm`, `plan_review`), the chat (`messages`, `page_views`, `screen_reads`, `screenshot_msgs`),
+  `ui`, `confirm`, `plan_review`), the chat (`messages`, `page_views`, `screen_reads`),
   `sheet_tools`, `dev_mode`, `trace`, `tokens`, `task_id`, `model`, `last_task`, `last_status`.
 - **Sync checks are plain functions over the state**: `check_facts(state, summary)`,
   `wrong_element(state, n, label)`, `check_progress(state, name, changed)`, … – testable without an Agent.
@@ -130,9 +130,8 @@ Key mechanics worth knowing before touching the loop (they live in the layer mod
   `batch` tool, `run_batch` in `tools/actions.py`), up to `MAX_BATCH` (5). The loop stops a batch early if
   the page's *layout* changed (`layout()` strips typed values before comparing) and a later queued step
   references an element number — because numbers may have shifted.
-- **Token trimming** (`memory/transcript.py`): only the newest page view / screen read / screenshot is
-  kept in full in `messages`; older ones are replaced with a short placeholder (`OLD_PAGE`, `OLD_SCREEN`,
-  `OLD_SCREENSHOT`). `state.notes` (from the `note` tool) are what survive long-term and get
+- **Token trimming** (`memory/transcript.py`): only the newest page view / screen read is
+  kept in full in `messages`; older ones are replaced with a short placeholder (`OLD_PAGE`, `OLD_SCREEN`). `state.notes` (from the `note` tool) are what survive long-term and get
   re-injected via `header()` (`context/header.py`) on every page view.
 - **Stuck/repeat detection** (`guardrails/progress.py`): `check_progress` (5 non-progress steps → nudge) and `check_repeat`
   (same op+args 3× in 6 steps with no page change → nudge) inject warning text into the tool result
@@ -196,8 +195,7 @@ object and looked up by `runOperation()`). Risky new actions should also be taug
 
 ### Model routing (`backend/app/llm/client.py`, `backend/app/config.py`)
 
-`config.py` lists all known models with a `tier` (`strong` vs `backup`) and whether they support
-`vision`; a provider is silently dropped if its API key env var isn't set. `ask_ai()` prefers the
+`config.py` lists all known models with a `tier` (`strong` vs `backup`); a provider is silently dropped if its API key env var isn't set. `ask_ai()` prefers the
 caller's chosen model, falls back through other `strong` models, waits briefly for a model that's
 only short-term rate-limited, and only reaches for `backup` models once strong ones are out for a
 while. `_blocked_until`/`_blocked_why` (in-memory, per-process) track cooldowns learned from
@@ -239,8 +237,7 @@ when clicked (`isClickableRow()`: own pointer cursor or a tabindex, not a header
 already a link). Such a row is one `row link "cell | cell | …"` element. Its own buttons/links stay listed,
 a click on it aims at a cell with nothing clickable in it (`rowSpots()`), and `safety.py` doesn't read
 its cell text as a risky label. The same script also owns
-the shadow-DOM overlay used for the visible cursor, the "Krify is working" glowing border, and the
-element-number labels drawn on screenshots.
+the shadow-DOM overlay used for the visible cursor and the "Krify is working" glowing border.
 
 **Structured page view (default, `STRUCTURED_VIEW=1`).** Instead of the flat list, each step the
 extension's `get_page_model` returns the *whole* page as JSON (`buildPageModel()` in `content.js`):

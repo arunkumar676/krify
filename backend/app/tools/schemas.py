@@ -37,8 +37,6 @@ TOOLS = [
     _tool("sheet_query", "Google Sheets: one SQL SELECT (DuckDB) on table sheet; quote column names, e.g. "
           "SELECT \"First Name\", \"Math Score\" FROM sheet WHERE \"Math Score\" = (SELECT MAX(\"Math Score\") FROM sheet)",
           {"sql": TEXT}, ["sql"]),
-    _tool("screenshot", "See the screen as an image with element numbers. Costs more: only when text isn't "
-          "enough (pictures, icons, colours, maps, charts)."),
     _tool("open_url", "Open a URL in this tab.", {"url": URL}, ["url"]),
     _tool("go_back", "Go back."),
     _tool("reload", "Reload the page."),
@@ -50,13 +48,8 @@ TOOLS = [
           "With element, always give its label.",
           {"element": ELEMENT, "label": LABEL, "cell": TEXT, "button": {"type": "string", "enum": ["left", "right"]},
            "count": {"type": "integer"}, "real": {"type": "boolean"}}),
-    _tool("click_at", "Click a spot (x, y) on your latest screenshot, for things without an element number "
-          "(Sheets grid, charts, maps). Same button/count as click.",
-          {"x": {"type": "number"}, "y": {"type": "number"}, "button": {"type": "string", "enum": ["left", "right"]},
-           "count": {"type": "integer"}}, ["x", "y"]),
-    _tool("drag", "Drag from an element or screenshot spot to an element or spot (sliders, cards, columns).",
-          {"from_element": ELEMENT, "to_element": ELEMENT, "from_x": {"type": "number"}, "from_y": {"type": "number"},
-           "to_x": {"type": "number"}, "to_y": {"type": "number"}}),
+    _tool("drag", "Drag one element onto another (sliders, cards, columns).",
+          {"from_element": ELEMENT, "to_element": ELEMENT}, ["from_element", "to_element"]),
     _tool("hover", "Point at an element without clicking (opens hover menus). If no menu opened, try real=true.",
           {"element": ELEMENT, "label": LABEL, "real": {"type": "boolean"}}, ["element", "label"]),
     _tool("type", "Type into a box (replaces its text). submit=true presses Enter after.",

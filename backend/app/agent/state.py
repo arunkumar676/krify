@@ -46,8 +46,6 @@ class TaskState:
     scrolls: dict = field(default_factory=dict)  # url (+ " box") -> {"total", "idle" (scrolls that showed nothing new), "views" seen}
     edit_allowed: bool = False  # the user allowed editing a Google Sheet/Doc in this task
     recent_steps: list = field(default_factory=list)  # for the repeat detector
-    shot_size: tuple | None = None  # (width, height) of the last screenshot
-    shot_page: str | None = None  # the page when the last screenshot was taken
     last_cell: str = ""
     boost_next: bool = True  # the first reply (interpreting the raw task) gets more thought
     trail: list = field(default_factory=list)  # (page key, title) after each action that changed the page – loop detection
@@ -94,7 +92,5 @@ class TaskState:
         self.edit_allowed = False
         self.form, self.submit_guarded = None, set()
         self.recent_steps = []
-        self.shot_size = None
-        self.shot_page = None
         self.last_cell = ""
         self.boost_next = True

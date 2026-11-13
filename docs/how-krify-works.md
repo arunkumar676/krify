@@ -31,7 +31,6 @@ Code: [extension/context/content.js](../extension/context/content.js)
 - 📍 **Page address, title and scroll position**
 - 📂 **Open menus and popups**, which are listed first
 - 📊 **Google Sheets data**, read as a table (SQL)
-- 📸 **A screenshot**, only when the AI asks and the model supports images
 
 ### What it can't see
 
@@ -50,7 +49,6 @@ Code: [extension/context/content.js](../extension/context/content.js)
 3. **Most useful first**: sort elements by how well they match the task, so the important ones are never cut off.
 4. **Only send what changed** after an action, not the whole page again. Saves tokens.
 5. **Look inside iframes and shadow DOM**.
-6. **Take a screenshot automatically** when the page has almost no text (charts, maps, canvas).
 
 ---
 
@@ -91,7 +89,7 @@ It replies with **one action**, or a **batch of up to 5** when it's sure without
 
 ### Ideas to make it better
 
-1. **Send only the tools that are needed**: the Sheets tools only on Sheets; drag and click_at only after a screenshot. Saves tokens every step. ⭐ Top pick.
+1. **Send only the tools that are needed**: the Sheets tools only on Sheets; hide tools that don't apply (e.g. switch_tab with one tab). Saves tokens every step. ⭐ Top pick.
 2. **Think harder only when stuck**: low reasoning normally, high after a repeat or stuck warning.
 3. **Two models together**: a cheap one for easy steps (type, click), a smart one for hard steps (plan, compare, done).
 4. **More batches**: e.g. search, open the first result and read it, in one call.
@@ -113,7 +111,7 @@ The AI's choice goes to the extension, which does it in Chrome:
    - 🎬 **Animated cursor**: moves, ripples, types letter by letter
 2. **Real keyboard and mouse way** (Google Sheets, Docs and shortcuts):
    - 🎹 Uses Chrome's own input (chrome.debugger), so sites treat it like a real person
-   - Right-click, double-click, drag and drop, click on a screenshot spot
+   - Right-click, double-click, drag and drop between elements
    - Chrome shows a "started debugging" bar; only used when needed
 3. **Browser actions**: open a URL, go back, reload, open, switch or close tabs
 

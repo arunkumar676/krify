@@ -93,7 +93,6 @@ class Agent(ToolsMixin, GuardrailsMixin, ContextMixin, MemoryMixin, OutputMixin)
         self.last_page = None
         self.screen_reads = {}  # site -> its newest read_text result (older ones are trimmed)
         self.notes_at_last_read = 0  # len(state.notes) as of the last screen read – for the unnoted-read nudge
-        self.screenshot_msgs = []  # messages holding a screenshot – dropped when the page changes
         self.tokens = 0
         self.last_task = ""  # previous task, so the planner understands follow-ups
         self.last_status = ""  # how the previous task ended ("ask" = the next message is an answer)
@@ -138,7 +137,7 @@ class Agent(ToolsMixin, GuardrailsMixin, ContextMixin, MemoryMixin, OutputMixin)
             tools = TOOLS if self.sheet_tools else [t for t in TOOLS if t["function"]["name"] not in SHEET_ONLY_TOOLS]
             reply, used_model, tokens = await ask_ai(
                 self.messages, tools, model, on_note=lambda t: self.ui("step", t),
-                need_vision=bool(self.screenshot_msgs), boost=self.state.boost_next,
+                boost=self.state.boost_next,
             )
             self.state.boost_next = False
             self.tokens += tokens
@@ -291,11 +290,6 @@ class Agent(ToolsMixin, GuardrailsMixin, ContextMixin, MemoryMixin, OutputMixin)
                     self.messages.append({**tool_msg, "content": "Question shown. The user's answer comes next."})
                     await self.finish("ask", args.get("question", "Can you tell me more?"))
                     finished = True
-                elif name == "screenshot":
-                    await self.ui("step", "📸 Screenshot")
-                    await self.add_screenshot(tool_msg)
-                    check_progress(self.state, name, self.last_page != self.state.shot_page)
-                    self.state.shot_page = self.last_page
                 elif name == "note":
                     text = str(args.get("text", ""))
                     missing = missing_models(self.state.product_text, text)
@@ -386,7 +380,7 @@ class Agent(ToolsMixin, GuardrailsMixin, ContextMixin, MemoryMixin, OutputMixin)
                     actions_done += 1
                     failed = result.startswith("Error")
                     page = await self.page_view()
-                    if name in ("click", "click_at") and not failed:
+                    if name == "click" and not failed:
                         if sentence := click_result(before, (self.state.current_url, self.state.elements), clicked, self.state.current_title,
                                                      open_list):
                             log.info("  told the AI: %s", sentence)

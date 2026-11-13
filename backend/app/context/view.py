@@ -1,6 +1,5 @@
 """The page view the AI reads at every step."""
 
-import base64
 import re
 
 from app.config import STRUCTURED_VIEW
@@ -9,7 +8,6 @@ from app.context.element_list import ambiguity_hint
 from app.context.sites import is_sheet
 from app.context.understand import understand
 from app.guardrails.safety import plan_needs_approval
-from app.llm.client import has_vision_model
 
 SHEET_HINT = "[Google Sheet] Call read_text first to see the columns, then sheet_query with SQL."
 # Unrestricted mode: the whole page's text rides along with every page view (it's trimmed with it).
@@ -19,25 +17,8 @@ PAGE_TEXT = ("\n[Page text] Unrestricted mode: all text on the page, top to bott
 _STATUS_LINE = re.compile(r"^\[Status\] (.*)$", re.MULTILINE)
 
 
-def image_size(data_url):
-    """(width, height) of a JPEG data URL, read from its header; None if unknown."""
-    try:
-        data = base64.b64decode(data_url.split(",", 1)[1])
-        i = 2
-        while i + 9 < len(data):
-            if data[i] != 0xFF:
-                i += 1
-                continue
-            if data[i + 1] in (0xC0, 0xC1, 0xC2):  # "start of frame": holds the size
-                return int.from_bytes(data[i + 7:i + 9], "big"), int.from_bytes(data[i + 5:i + 7], "big")
-            i += 2 + int.from_bytes(data[i + 2:i + 4], "big")
-    except Exception:
-        pass
-    return None
-
-
 class ContextMixin:
-    """What the AI sees: the page read into a view, screenshots, and the first plan.
+    """What the AI sees: the page read into a view, and the first plan.
 
     Mixed into Agent (agent/loop.py): uses its connection (browser, ui, confirm, messages, …), its
     TaskState (self.state) and the other layers' methods through self."""
@@ -98,31 +79,6 @@ class ContextMixin:
         if hint:
             self.state.boost_next = True
         return text
-
-    async def add_screenshot(self, tool_msg):
-        """Take a screenshot (with element numbers drawn on it) and attach it for the AI."""
-        if not has_vision_model():
-            self.messages.append({**tool_msg, "content": "Screenshots aren't available (no model that can see images)."})
-            return
-        result = await self.safe_run("screenshot", {})
-        if not str(result).startswith("data:image/"):
-            self.messages.append({**tool_msg, "content": f"Couldn't take a screenshot: {result}"})
-            return
-        self.drop_screenshots()
-        self.state.shot_size = image_size(result)
-        size = "{}×{}".format(*self.state.shot_size) if self.state.shot_size else "1024 wide"
-        # Tool results must be text for most providers, so the image goes in a user message after it.
-        self.messages.append({**tool_msg, "content": "Screenshot taken – it's in the next message."})
-        image_msg = {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": f"Screenshot of the current screen, {size} pixels (click_at uses these "
-                                         "pixels, x from the left, y from the top). Numbers in boxes = element numbers."},
-                {"type": "image_url", "image_url": {"url": result}},
-            ],
-        }
-        self.messages.append(image_msg)
-        self.screenshot_msgs.append(image_msg)
 
     async def make_plan(self, task, page, model):
         """Plan from the AI's own knowledge before the first action. It never asks the user anything:

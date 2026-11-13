@@ -71,9 +71,8 @@ def check(name, args, elements, last_typed_line="", url=""):
         return "Editing"
     if in_editor and name == "drag":
         return "Editing"  # dragging in a sheet/doc moves its content
-    if name in ("click", "select_option", "click_at"):
-        # click_at has no element number: the loop looks up what's under the spot ("_under").
-        line = args.get("_under", "") if name == "click_at" else element_line(elements, args.get("element"))
+    if name in ("click", "select_option"):
+        line = element_line(elements, args.get("element"))
         # A clickable table row only opens its record; its label is the row's cell text ("Payment
         # pending", "Deleted", "Sent" are statuses, not what the click does). The row's own buttons
         # ("Delete") are separate elements and are still checked.

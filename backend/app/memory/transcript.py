@@ -1,4 +1,4 @@
-"""Token trimming: only the newest page view, screen read and screenshot stay in the chat in full."""
+"""Token trimming: only the newest page view and screen read stay in the chat in full."""
 
 from app.context.header import header
 from app.context.sites import site_of
@@ -6,8 +6,6 @@ from app.context.sites import site_of
 OLD_PAGE = "\n[older page view removed to save space]"
 OLD_SCREEN = "[older screen text removed to save space – use your notes]"
 MAX_READ_SITES = 3  # newest page text is kept for this many sites
-
-OLD_SCREENSHOT = "[older screenshot removed to save space]"
 
 NEW_SITE = ("\n[New site: {}] Check your plan still fits this site. If not, call plan with the fixed "
             "steps (keep ✔ on finished ones).")
@@ -20,7 +18,7 @@ UNNOTED_READ = (
 
 class MemoryMixin:
     """The chat sent to the AI, kept small: only the newest page view, the newest screen read per site
-    (MAX_READ_SITES) and the newest screenshot stay in full; older ones become short placeholders.
+    (MAX_READ_SITES) stay in full; older ones become short placeholders.
 
     Mixed into Agent (agent/loop.py): uses its connection (browser, ui, confirm, messages, …), its
     TaskState (self.state) and the other layers' methods through self."""
@@ -30,7 +28,6 @@ class MemoryMixin:
         self.page_views = []
         self.last_page = None
         self.screen_reads = {}
-        self.screenshot_msgs = []
         self.last_task = self.last_status = self.gate_tail = ""
         self.notes_at_last_read = 0
 
@@ -62,16 +59,8 @@ class MemoryMixin:
                         self.messages.append({"role": "tool", "tool_call_id": call["id"], "content": "Stopped by the user."})
                 break
 
-    def drop_screenshots(self):
-        """Replace older screenshots with a short note: they cost tokens and need a vision model."""
-        for msg in self.screenshot_msgs:
-            msg["content"] = OLD_SCREENSHOT
-        self.screenshot_msgs = []
-
     def add_with_page(self, message, text, page):
         """Add a message that ends with a page view. Only the newest page view is kept in full."""
-        if page != self.last_page:
-            self.drop_screenshots()  # the screen changed, so the old picture is out of date
         if page == self.last_page:  # nothing changed: don't send the same list again
             message["content"] = f"{text}\n\n{header(self.state)}\n[Page unchanged since the last view.]"
             self.messages.append(message)

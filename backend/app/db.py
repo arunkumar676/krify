@@ -61,7 +61,7 @@ class LlmCall(SQLModel, table=True):
     provider: str = ""
     attempt: int = 0  # in-place retry number on this model (0-2)
     boost: bool = False
-    need_vision: bool = False
+    need_vision: bool = False  # legacy, always False: existing databases have this column as NOT NULL
     status: str = "ok"  # ok | rate_limit | broken_reply | rejected | unavailable | error
     error: str = ""
     prompt_tokens: int | None = None  # None = the provider didn't say

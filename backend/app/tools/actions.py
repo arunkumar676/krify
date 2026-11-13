@@ -57,21 +57,6 @@ class ToolsMixin:
                     return OVERWRITE_BLOCKED.format(in_the_way, empty_row or "last _row + 1"), "blocked"
                 self.state.edit_allowed = True  # they saw exactly what changes
 
-        # Safety check runs in code: risky actions always need the user's OK.
-        if name == "click_at" and self.state.shot_size:  # a spot outside the picture is a misread position
-            w, h = self.state.shot_size
-            try:
-                x, y = float(args.get("x")), float(args.get("y"))
-            except (TypeError, ValueError):
-                x = y = -1
-            if not (0 <= x <= w and 0 <= y <= h):
-                return (f"NOT clicked: ({args.get('x')}, {args.get('y')}) is outside the screenshot, which is "
-                        f"{w}×{h} pixels. Use pixel positions on the picture."), "refused"
-        if name == "click_at":  # no element number: check what's under the spot
-            under = await self.safe_run("element_at", {"x": args.get("x"), "y": args.get("y")})
-            if str(under).startswith("Error"):
-                return str(under), "refused"
-            args = {**args, "_under": str(under)}
         for field in ELEMENT_FIELDS:  # the page may have changed since the model looked – check first
             element_id = args.get(field)
             if element_id is None:
@@ -157,7 +142,7 @@ class ToolsMixin:
                 break
             ran += 1
             page = await self.page_view()
-            if op in ("click", "click_at") and not result.startswith("Error"):
+            if op == "click" and not result.startswith("Error"):
                 if sentence := click_result(before, (self.state.current_url, self.state.elements), clicked,
                                             self.state.current_title, open_list):
                     log.info("  told the AI: %s", sentence)

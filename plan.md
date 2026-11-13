@@ -186,12 +186,10 @@ I didn't change any code. Besides the code, I analysed the real session log in [
 **Disadvantages**
 - Hiding a tool the model needs leads to stuck or repeat loops.
 - A tool list that changes every step defeats provider prompt caching, because tools sit at the start of the request.
-- **Prompt rules and rejection messages name tools** ("use find_elements", "screenshot"), so the model can be told to use something it no longer has.
+- **Prompt rules and rejection messages name tools** ("use find_elements", "read_text"), so the model can be told to use something it no longer has.
 - The `batch` tool's list of allowed ops includes `go_to_cell` and `type_here`, so it must stay in sync.
 
 **Things to consider: decide from state, not from the prompt**
-- `click_at` / drag by coordinates: only after a screenshot exists.
-- `screenshot`: only when `has_vision_model()` is true. Today it's listed and then answers "not available".
 - `switch_tab` / `close_tab`: only when more than one tab is open.
 - Sheets tools and the Sheets prompt lines (about 200 tokens): only on a Sheet. Also fix the sticky `self.sheet_tools` ([loop.py:1072](backend/app/agent/loop.py#L1072)): once true, it stays true for the whole session.
 - Check that each provider accepts a history containing calls to tools that aren't in the current list.
@@ -223,7 +221,7 @@ I didn't change any code. Besides the code, I analysed the real session log in [
 ## 10. Context memory optimisation
 
 **Evidence:**
-- Follow-up tasks keep every earlier message; only page views, screen reads and screenshots are shortened.
+- Follow-up tasks keep every earlier message; only page views and screen reads are shortened.
 - Average requests went from 12.4k to 40k tokens over the session.
 - **Rough estimate:** if requests had stayed near the first task's size, the session would have used about 40% fewer input tokens. The exact figure depends on the pages visited.
 - You typed "please ignore all previous context, start a fresh session". A **New chat** button already exists ([sidepanel.js:376](extension/sidepanel/sidepanel.js#L376)), but nothing points users to it.

@@ -76,7 +76,7 @@ def tool(name, **args):
     return reply(call(name, **args))
 
 
-async def fake_ask_ai(messages, tools, preferred, on_note=None, need_vision=False, boost=False):
+async def fake_ask_ai(messages, tools, preferred, on_note=None, boost=False):
     sc = SCENARIO
     if tools is None and messages[0]["content"] == router.GATE_PROMPT:  # the cheap-model gate (router.py)
         emit("gate", {"model": preferred, "user": messages[1]["content"], "messages": len(messages)})
@@ -90,7 +90,7 @@ async def fake_ask_ai(messages, tools, preferred, on_note=None, need_vision=Fals
         emit("planner", {"model": preferred, "messages": messages})
         return ChatCompletionMessage(role="assistant", content=sc.plans.pop(0) if sc.plans else ""), preferred, 7
     whole = dump(messages)
-    info = {"model": preferred, "tools": [t["function"]["name"] for t in tools], "need_vision": need_vision,
+    info = {"model": preferred, "tools": [t["function"]["name"] for t in tools],
             "boost": boost, "count": len(messages), "hash": hashlib.sha256(whole.encode()).hexdigest()[:16]}
     if VERBOSE:
         info["messages"] = messages
@@ -108,14 +108,9 @@ def fake_skip_model(model, seconds=60):
     emit("skip_model", [model, seconds])
 
 
-def fake_has_vision_model():
-    return SCENARIO.vision
-
-
 # Patch before anything imports these names (loop.py / understand.py bind them at import time).
 client.ask_ai = fake_ask_ai
 client.skip_model = fake_skip_model
-client.has_vision_model = fake_has_vision_model
 
 from checks._find import mod  # noqa: E402
 
@@ -144,8 +139,6 @@ def fixture(name, **changes):
 CSV = 'Name,Age,Fee\nRahul,21,"1,200"\nAsha,22,15%\nRavi,23,900\n'
 SHOP_TEXT = ("Results for wireless mouse. Logitech M185 Wireless Mouse ₹699. HP X200 Wireless Mouse ₹549. "
              "Portronics Toad 23 ₹399. Apple iPhone 16e 256GB ₹69,900.")
-# A 1024×768 JPEG header (enough for image_size()).
-JPEG = "data:image/jpeg;base64,/9j/wAARCAMABAADASIA"
 
 
 def pages():
@@ -215,10 +208,6 @@ class Browser:
                         if args.get("query") == "cart" else f'(no elements matched "{args.get("query")}")')
             case "inspect":
                 return f'region "Results"\n  [{args.get("ref")}] (zoomed in)' if args.get("ref") else "main\n  heading"
-            case "element_at":
-                return 'button "Go"'
-            case "screenshot":
-                return JPEG
             case "sheet_csv":
                 return {"csv": page.get("csv", ""), "title": page["title"], "tab": "Sheet1"}
             case "sheet_active_cell":
@@ -250,7 +239,6 @@ class Scenario:
     moves: dict = dataclasses.field(default_factory=dict)
     handlers: dict = dataclasses.field(default_factory=dict)
     gates: list = None  # scripted replies of the cheap-model gate (None = gate off); an Exception is raised
-    vision: bool = False
     dev_mode: bool = False
     location: dict = None
     ids: object = None
@@ -341,7 +329,7 @@ def garbled_text():
 @scenario
 def reads_and_notes():
     return Scenario("reads_and_notes", "shop", ["price of iPhone 16e 256GB on amazon"], plans=['{"goal": "x"}'],
-                    vision=True, dev_mode=True, replies=[
+                    dev_mode=True, replies=[
         tool("note", text="iPhone 16 costs ₹69,900"),
         tool("note", text="iPhone 16 costs ₹69,900"),
         tool("read_text"),
@@ -356,8 +344,6 @@ def reads_and_notes():
         tool("get_elements"),
         tool("sheet_query", sql="SELECT 1"),
         tool("get_page_info"),
-        tool("screenshot"),
-        tool("screenshot"),
         tool("done", summary="Apple iPhone 16e 256GB costs ₹69,900"),
     ])
 
@@ -575,20 +561,12 @@ def sheets():
 
 @scenario
 def pointer_and_keys():
-    def element_at(browser, args):
-        return Exception("nothing there") if args.get("x") == 5 else 'button "Go"'
-
     def describe(browser, args):  # [29] changed on the page since the AI looked
         return 'button "Remove"' if args.get("element") == 29 else browser.default("describe_element", args)
-    return Scenario("pointer_and_keys", "shop", ["click the go button"], plans=[""], vision=True,
-                    handlers={"element_at": element_at, "describe_element": describe,
+    return Scenario("pointer_and_keys", "shop", ["click the go button"], plans=[""],
+                    handlers={"describe_element": describe,
                               "enter_target": lambda b, a: {"inForm": True, "submitter": 'input submit "Go"',
                                                             "field": 'input text "Search Amazon.in"'}}, replies=[
-        tool("click_at", x=10, y=10),
-        tool("screenshot"),
-        tool("click_at", x=2000, y=10),
-        tool("click_at", x="abc", y=1),
-        tool("click_at", x=5, y=5),
         tool("drag", from_element=26, to_element=28),
         tool("press_key", key="Enter"),
         tool("type", element=3, text="mouse", submit=True, label="Search Amazon.in"),
@@ -597,12 +575,6 @@ def pointer_and_keys():
         tool("done", summary="Clicked Go."),
         tool("done", summary="Clicked Go."),
     ])
-
-
-@scenario
-def no_vision():
-    return Scenario("no_vision", "shop", ["take a screenshot"], replies=[tool("screenshot"), tool("done", summary="No."),
-                                                                         tool("done", summary="No.")])
 
 
 @scenario
@@ -708,7 +680,7 @@ def gate_skipped_when_answering_ask():
 
 # ---------- running ----------
 
-SKIP = {"browser", "ui", "confirm", "plan_review", "messages", "page_views", "screen_reads", "screenshot_msgs", "state"}
+SKIP = {"browser", "ui", "confirm", "plan_review", "messages", "page_views", "screen_reads", "state"}
 
 
 def fields(agent):
@@ -718,7 +690,6 @@ def fields(agent):
         out.update({f.name: getattr(state, f.name) for f in dataclasses.fields(state)})
     out["_page_views"] = [t for _, t in agent.page_views]
     out["_screen_reads"] = list(agent.screen_reads)
-    out["_screenshots"] = len(agent.screenshot_msgs)
     return out
 
 

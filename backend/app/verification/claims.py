@@ -12,7 +12,7 @@ _CLAIMS = [
 # "I entered", "I have entered", "I've just entered", "I have now successfully entered" – the claim's subject.
 _FIRST_PERSON = re.compile(r"\bi('ve| have| had)?(\s+(now|already|successfully|just|also))*\s+$", re.I)
 _TYPE_OPS = {"type", "type_here", "go_to_cell"}
-_CLICK_OPS = {"click", "click_at", "press_key", "select_option", "type", "drag", "open_url", "new_tab", "go_back"}
+_CLICK_OPS = {"click", "press_key", "select_option", "type", "drag", "open_url", "new_tab", "go_back"}
 CLAIM_REJECTED = (
     "REJECTED – not sent to the user: {}. Don't say you did something you didn't. Do it now with the right "
     "tool (e.g. type the value into the field, then click its button) and check the page – or, if you can't, "
