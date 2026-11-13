@@ -48,7 +48,8 @@ For a task, "groups" lists the extra tool groups it will need (basic browsing is
 - sheets: work in Google Sheets or Google Docs
 - mouse: hover menus, drag and drop, sliders, clicking on pictures or maps
 - look: looking at images, charts or the screen itself
-- lists: long lists or tables – count, search or go through many records"""
+- lists: long lists or tables – count, search or go through many records
+- media: play, pause, change speed of, mute or jump in a video"""
 
 
 def cheap_model():
@@ -80,7 +81,7 @@ def parse(text):
     return kind, reply
 
 
-GROUPS = ("forms", "tabs", "sheets", "mouse", "look", "lists")
+GROUPS = ("forms", "tabs", "sheets", "mouse", "look", "lists", "media")
 
 
 def parse_groups(text):

@@ -116,6 +116,8 @@ class Agent(ToolsMixin, GuardrailsMixin, ContextMixin, MemoryMixin, OutputMixin)
             groups.add("mouse")
         if "[Tabs]" in view:
             groups.add("tabs")
+        if re.search(r"youtube\.com/(watch|shorts)|vimeo\.com/\d|/learn/lecture/|netflix\.com/watch|hotstar\.com", url):
+            groups.add("media")  # a video page: the video tool works even when the player hides its buttons
         return groups
 
     def refresh_system(self):

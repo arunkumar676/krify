@@ -451,6 +451,7 @@ export const operations = {
     elementFrame.clear();
     return callInPage("findElements", [query], null, 0);
   },
+  video: ({ action, value } = {}) => callInPage("videoControl", [action, value ?? ""], null, 0),
   find_text: ({ query } = {}) => {
     elementFrame.clear();
     return callInPage("findText", [query], null, 0);

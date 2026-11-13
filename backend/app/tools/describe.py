@@ -35,6 +35,7 @@ def describe(name, args):
         case "get_page_info" | "get_elements": return "👀 Look at the page"
         case "find_elements": return f"🔎 Looking for \"{args.get('query')}\""
         case "find_text": return f"🔎 Searching the page for \"{args.get('query')}\""
+        case "video": return f"🎬 Video: {args.get('action')} {args.get('value') or ''}".rstrip()
         case "read_text": return "📖 Read the whole page" if args.get("scope") == "page" else "📖 Read the screen"
         case "inspect": return f"🔍 Looking closer at [{args['ref']}]" if args.get("ref") else "🔍 Looking at the page structure"
         case "sheet_query": return f"📊 Ask the sheet: {args.get('sql')}"

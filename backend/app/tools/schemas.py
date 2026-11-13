@@ -89,10 +89,14 @@ TOOLS = [
     _tool("get_records", "A long list's items the page view left out (it says \"+N more items … get_records\"): "
           "search = words to find (a name, status…), or start = position to read on from. Not the site's next page.",
           {"list": TEXT, "search": TEXT, "start": {"type": "integer"}}, ["list"]),
+    _tool("video", "Control the page's video directly – works even when the player hides its buttons: "
+          "play, pause, speed (value e.g. 1.25), seek (value e.g. 3:05, 90, +10, -10), mute, unmute, status.",
+          {"action": {"type": "string", "enum": ["play", "pause", "speed", "seek", "mute", "unmute", "status"]},
+           "value": TEXT}, ["action"]),
     _tool("more_tools", "Add a group of tools you need but don't have, e.g. tabs to open a second site. Groups: "
           "forms (batch), tabs (new_tab, switch_tab, close_tab), sheets (sheet_query, read_cells, go_to_cell, "
-          "type_here), mouse (hover, click_at, drag), look (screenshot, inspect), lists (get_records).",
-          {"group": {"type": "string", "enum": ["forms", "tabs", "sheets", "mouse", "look", "lists"]}}, ["group"]),
+          "type_here), mouse (hover, click_at, drag), look (screenshot, inspect), lists (get_records), media (video).",
+          {"group": {"type": "string", "enum": ["forms", "tabs", "sheets", "mouse", "look", "lists", "media"]}}, ["group"]),
     _tool("note", "Save a fact for later, e.g. 'Amazon: iPhone 16 128GB ₹69,900'.", {"text": TEXT}, ["text"]),
     _tool("done", "Task finished. summary: your answer to the user – a one-line direct answer in plain English "
           "(not JSON, not a line copied from the page), e.g. \"There are 33 people – the page lists 1–20 of 33.\" "
@@ -115,6 +119,7 @@ TOOL_GROUPS = {
     "mouse": ["hover", "click_at", "drag"],
     "look": ["screenshot", "inspect"],
     "lists": ["get_records"],
+    "media": ["video"],
 }
 GROUP_ORDER = list(TOOL_GROUPS)
 ALL_GROUPS = set(GROUP_ORDER)
@@ -135,6 +140,7 @@ TASK_WORDS = {
     "forms": re.compile(r"\b(fill|sign ?up|register|add an? |create an? |apply|checkout|submit)\b", re.I),
     "sheets": re.compile(r"\b(google sheets?|spreadsheet|google docs?|sheet)\b", re.I),
     "mouse": re.compile(r"\b(drag|drop|slider|hover|right[- ]click|double[- ]click)\b", re.I),
+    "media": re.compile(r"\b(video|playback|speed|pause|play(ing)?|mute|unmute|seek|rewind|forward|lecture)\b", re.I),
 }
 
 

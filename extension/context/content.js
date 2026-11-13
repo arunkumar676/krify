@@ -2243,6 +2243,58 @@ if (!window.__krify) {
     // something we control: window.find()'s matching depends on hidden selection/anchor state and
     // can miss a phrase split across sibling elements (e.g. a styled heading like "Testimonial" +
     // "s" in separate spans) even when it's plainly on the page.
+    // Control the page's main video directly (the biggest one on screen): play, pause, speed, seek,
+    // mute – players like Udemy's hide their buttons until the mouse moves over them, so clicking
+    // isn't reliable. → the video's state afterwards, e.g. "playing at 1.25x, 3:05 / 11:35, sound on".
+    async videoControl(action = "status", value = "") {
+      const videos = deepAll("video").filter((v) => v.getBoundingClientRect().width > 50);
+      const video = videos.sort((a, b) => {
+        const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
+        return rb.width * rb.height - ra.width * ra.height;
+      })[0];
+      if (!video) return "No video on this page (it may be inside an embedded player – try clicking its play button).";
+      const clock = (s) => (Number.isFinite(s) ? `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}` : "?");
+      const seconds = (text) => {
+        const t = String(text).trim();
+        const sign = /^[+-]/.test(t) ? t[0] : "";
+        const parts = t.replace(/^[+-]/, "").split(":").map(Number);
+        if (parts.some((n) => !Number.isFinite(n))) throw new Error(`"${text}" isn't a time – use e.g. 3:05, 90, +10 or -10.`);
+        const total = parts.reduce((sum, n) => sum * 60 + n, 0);
+        return sign === "+" ? video.currentTime + total : sign === "-" ? video.currentTime - total : total;
+      };
+      switch (String(action).toLowerCase()) {
+        case "play":
+          await video.play();
+          break;
+        case "pause":
+          video.pause();
+          break;
+        case "speed": {
+          const rate = parseFloat(String(value).replace(/x$/i, ""));
+          if (!(rate >= 0.25 && rate <= 4)) throw new Error("speed must be between 0.25 and 4, e.g. 1.25");
+          video.playbackRate = rate;
+          break;
+        }
+        case "seek":
+          video.currentTime = Math.max(0, Math.min(video.duration || Infinity, seconds(value)));
+          break;
+        case "mute":
+          video.muted = true;
+          break;
+        case "unmute":
+          video.muted = false;
+          break;
+        case "status":
+          break;
+        default:
+          throw new Error("action must be play, pause, speed, seek, mute, unmute or status");
+      }
+      await sleep(300); // let the player apply it (some players reset the speed: the state below says what stuck)
+      const state = video.paused ? "paused" : "playing";
+      return `Video: ${state} at ${video.playbackRate}x, ${clock(video.currentTime)} / ${clock(video.duration)}, ` +
+        `sound ${video.muted || video.volume === 0 ? "off" : "on"}`;
+    },
+
     async findText(query) {
       const q = clean(query || "", 200).toLowerCase();
       if (!q) return "(empty query)";
