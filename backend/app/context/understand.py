@@ -1,7 +1,7 @@
 """Before acting: turn the user's words into a clear goal, a short plan and a "done when" check.
 
-Planned from the AI's own knowledge (cheap: no page elements are sent). The agent fixes the plan
-later, when it sees each site.
+Planned from the AI's own knowledge plus the full view of the page that is open now (the same view
+the agent gets). Other sites haven't been seen yet: the agent fixes the plan later, when it sees each one.
 """
 
 import json
@@ -25,7 +25,8 @@ Reply with ONLY this JSON, nothing else:
   A request that makes sense on its own is a new task: don't carry anything over from the previous one.
   "This page/site/app" means the current page, not the previous task.
 - steps: 2-6 short steps (sites to open, what to search, what to read and note). Plan from what you know;
-  you haven't seen the sites yet, so don't name buttons. Don't invent details the user didn't give
+  you haven't seen other sites yet, so don't name their buttons. The current page is shown below the task:
+  for a task about that page you may use what it really shows (its fields, buttons, text). Don't invent details the user didn't give
   (price limits, currency, models, shops). If the task is about the current page, don't plan to open it.
   Current page is a Google Sheet: read_text to see the columns, then sheet_query (SQL) for the answer.
 - done_when: how to tell the task is finished, as something visible (e.g. "both prices are noted from
@@ -66,11 +67,7 @@ async def understand(task, page, last_task, model, location=None, on_note=None):
     """Return ({goal, steps, done_when} or None, tokens used). None = carry on without a plan."""
     if len(task.split()) < MIN_WORDS:
         return None, 0
-    where = page.splitlines()[0] if page else ""
-    for line in page.splitlines():
-        if line.startswith("[Current page]"):
-            where = line
-    context = f"User's task: {task}\n{where}"
+    context = f"User's task: {task}\n{page}"
     if where := where_line(location):
         context += f"\n{where}"
     if last_task:
