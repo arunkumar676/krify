@@ -1424,6 +1424,9 @@ if (!window.__krify) {
     return "page";
   }
 
+  let clickedButton = null; // the element Krify just clicked, while settle() may still wait for it
+  const BUSY_WAIT_MS = 8000;
+
   // ---------- what changed since the last look (the AI gets + / - / ~ lines) ----------
   // After every page model the watch starts over: it remembers each numbered element's line (by the
   // element itself, so "Cart (0)" → "Cart (1)" is one change even though its text changed) and a
@@ -2523,6 +2526,8 @@ if (!window.__krify) {
 
     async click(id) {
       const el = find(id);
+      // A button that turns grey right after Krify clicks it is busy (a search, a save): settle() waits for it.
+      clickedButton = isDisabled(el) ? null : el;
       const blocked = await clickElement(el, id);
       if (blocked) {
         return `Clicked [${id}] ${describe(el)} – but the browser did NOT send the form: ${blocked}. ` +
@@ -2675,9 +2680,18 @@ if (!window.__krify) {
     // (at most `maxMs`) – content loaded by XHR after a click or scroll, a list filling in. Attribute
     // changes don't count: carousels and animations change styles all the time.
     settle(quietMs = 250, maxMs = 2500) {
+      const started = Date.now();
       return new Promise((resolve) => {
         let quiet = null;
         const done = () => {
+          // The button Krify just clicked went grey: the site is still working on it (the page is
+          // quiet while it waits for its server) – keep waiting, at most BUSY_WAIT_MS.
+          if (clickedButton?.isConnected && isDisabled(clickedButton) && Date.now() - started < BUSY_WAIT_MS) {
+            clearTimeout(quiet);
+            quiet = setTimeout(done, quietMs);
+            return;
+          }
+          clickedButton = null;
           observer.disconnect();
           clearTimeout(quiet);
           clearTimeout(cap);

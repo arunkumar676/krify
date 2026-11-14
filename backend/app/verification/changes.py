@@ -198,8 +198,8 @@ def click_result(before, after, clicked, title="", open_list=None):
         # One panel swapped for another: say both, not just "it HID things".
         return (f"Your click on {label} closed {_names(gone_others or gone)} and opened {_names(brand_new)}."
                 f"{undo_note} Use what's open now, or call done if this is what the task asked for.")
-    if gone:
-        return (f"⚠️ Your click on {label} HID things that were on screen ({_names(gone)}). {label} probably "
+    if gone_others:  # (only the clicked button gone = it went grey while the site works: not "hid")
+        return (f"⚠️ Your click on {label} HID things that were on screen ({_names(gone_others)}). {label} probably "
                 "opens/closes a panel, so your previous click had already done the job. Don't keep clicking "
                 f"{label}: if you need those back, click it once more, then use them or call done.")
     return ""
