@@ -689,8 +689,12 @@ export const operations = {
   },
 };
 
+// Actions whose page changes the AI is told about (+ / - / ~ lines, content.js watchDiff).
+const MARKED_OPS = new Set(["click", "type", "press_key", "select_option", "hover", "drag", "type_here", "scroll"]);
+
 export async function runOperation(name, args = {}) {
   const op = operations[name];
   if (!op) throw new Error(`Unknown operation: ${name}`);
+  if (MARKED_OPS.has(name)) await callInPage("changeMark", [name], null, 0).catch(() => {});
   return op(args);
 }

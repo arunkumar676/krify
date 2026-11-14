@@ -126,6 +126,23 @@ def opened_what_asked(task, clicked):
     return 0 < len(target) <= MAX_TARGET_WORDS and target == _words(_full_name(clicked))
 
 
+def change_lines(changes):
+    """The page's own diff after an action (content.js watchDiff) as + / - / ~ lines, '' if nothing
+    changed or there's no diff (new page, scroll, no action)."""
+    if not isinstance(changes, dict):
+        return ""
+    lines = []
+    for key, sign in (("added", "+"), ("changed", "~"), ("removed", "-"), ("texts", "+ text:")):
+        part = changes.get(key) or {}
+        shown = part.get("shown") or []
+        lines += [f"{sign} {line}" if key != "texts" else f'{sign} "{line}"' for line in shown]
+        if part.get("more"):
+            lines.append(f"{sign} (+{part['more']} more)")
+    if not lines:
+        return "Page changes after your action: none (nothing on the page changed)."
+    return "Page changes after your action (+ new, ~ changed, - gone):\n" + "\n".join(lines)
+
+
 def click_result(before, after, clicked, title="", open_list=None):
     """One sentence for the AI after a click, or '' if nothing clear changed.
     before/after: (url, flat element list). clicked: the clicked element's line ('div "Knowledge"'),

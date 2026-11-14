@@ -1424,6 +1424,103 @@ if (!window.__krify) {
     return "page";
   }
 
+  // ---------- what changed since the last look (the AI gets + / - / ~ lines) ----------
+  // After every page model the watch starts over: it remembers each numbered element's line (by the
+  // element itself, so "Cart (0)" → "Cart (1)" is one change even though its text changed) and a
+  // MutationObserver records which nodes change. Changes BEFORE Krify's next action (while the AI
+  // thinks) are the page's own churn – timers, carousels, ads – and are ignored afterwards; changes
+  // after changeMark() are the action's. A new page means a fresh script: no diff ("new page" is said
+  // elsewhere). A scroll isn't diffed: it only brings in what was already there.
+  const watch = { snap: null, noise: new Set(), after: new Set(), marked: "", obs: null };
+  const WATCH_CAP = 300; // nodes remembered per list
+  const WATCH_SHOW = 8; // lines per kind sent to the AI
+  const WATCH_ATTRS = ["class", "style", "hidden", "aria-hidden", "aria-expanded", "aria-checked", "aria-selected", "aria-pressed", "disabled", "open"];
+  function watchRestart(elements) {
+    watch.obs?.disconnect();
+    watch.snap = new Map();
+    for (const e of elements) {
+      const el = listed.get(String(e.id));
+      if (el?.nodeType === 1 && el !== document.documentElement) {
+        watch.snap.set(el, { text: e.text, states: (e.states || []).join(", "), parent: el.parentElement });
+      }
+    }
+    watch.noise = new Set();
+    watch.after = new Set();
+    watch.marked = "";
+    watch.obs = new MutationObserver((records) => {
+      const into = watch.marked ? watch.after : watch.noise;
+      for (const r of records) {
+        if (into.size >= WATCH_CAP) break;
+        const node = r.target.nodeType === 1 ? r.target : r.target.parentElement;
+        if (!node || node.closest?.("krify-overlay")) continue;
+        // Churn: the box where it happens. The action's: what it added or rewrote (not the box an
+        // element was taken out of – that one's "- gone" line says it).
+        if (into === watch.after && r.type === "attributes" && !/^(class|style|hidden|open)$/.test(r.attributeName)) continue; // states: the element lines
+        if (into === watch.noise || r.type !== "childList") into.add(node);
+        else for (const added of r.addedNodes) into.add(added.nodeType === 1 ? added : node);
+      }
+    });
+    watch.obs.observe(document.documentElement, {
+      childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: WATCH_ATTRS,
+    });
+  }
+  function watchDiff(elements) {
+    if (!watch.snap || !watch.marked || watch.marked === "scroll") return null;
+    const screen = innerWidth * innerHeight;
+    const tooBig = (n) => {
+      if (n === document.body || n === document.documentElement) return true;
+      const r = n.getBoundingClientRect();
+      return r.width * r.height > screen * 0.6;
+    };
+    const noisy = [...watch.noise].filter((n) => n.isConnected && !tooBig(n));
+    const isNoise = (node) => noisy.some((n) => n.contains(node));
+    const both = (x) => (x.states ? `${x.text} (${x.states})` : x.text);
+    const now = new Map();
+    const added = [], changed = [], removed = [];
+    for (const e of elements) {
+      const el = listed.get(String(e.id));
+      if (el?.nodeType !== 1) continue;
+      const cur = { text: e.text, states: (e.states || []).join(", ") };
+      now.set(el, cur);
+      const old = watch.snap.get(el);
+      if (isNoise(el)) continue;
+      if (!old) {
+        if (e.pos === 0) added.push(`[${e.id}] ${both(cur)}`);
+      } else if (old.text !== cur.text) {
+        changed.push(`[${e.id}] ${both(old)} → ${both(cur)}`);
+      } else if (old.states !== cur.states) {
+        changed.push(`[${e.id}] ${cur.text}: ${old.states || "no states"} → ${cur.states || "no states"}`);
+      }
+    }
+    for (const [el, old] of watch.snap) {
+      // (A node taken out of a churning box – a carousel slide – is checked by the box it was in.)
+      if (now.has(el) || isNoise(el) || (old.parent && isNoise(old.parent))) continue;
+      if (el.isConnected && isRendered(el)) {
+        // Still there but no longer listed: disabled buttons aren't numbered.
+        if (isDisabled(el)) changed.push(`${old.text}: ${old.states || "no states"} → disabled`);
+        continue;
+      }
+      removed.push(both(old));
+    }
+    // Plain text the action brought (a toast, "Added to cart", an error under a field): short,
+    // visible, not inside a numbered element (its line above already says it), not a ticking clock.
+    const texts = [];
+    for (const node of watch.after) {
+      if (!node.isConnected || node.nodeType !== 1 || isNoise(node) || node.closest("[data-krify-id]")) continue;
+      // A whole region's text is not "what appeared": its own elements' lines say that.
+      if (tooBig(node) || node.querySelectorAll("[data-krify-id]").length > 2 || !isRendered(node)) continue;
+      let text = node.innerText || "";
+      for (const el of node.querySelectorAll("[data-krify-id]")) if (el.innerText) text = text.replace(el.innerText, " ");
+      text = text.replace(/\s+/g, " ").trim();
+      if (text.length < 2 || text.length > 120 || /^[\d:.\s/]+$/.test(text)) continue;
+      if (texts.some((t) => t.includes(text))) continue;
+      for (let i = texts.length - 1; i >= 0; i--) if (text.includes(texts[i])) texts.splice(i, 1);
+      texts.push(text);
+    }
+    const cut = (list) => ({ shown: list.slice(0, WATCH_SHOW), more: Math.max(0, list.length - WATCH_SHOW) });
+    return { action: watch.marked, added: cut(added), changed: cut(changed), removed: cut(removed), texts: cut(texts.slice(0, 20)) };
+  }
+
   function buildPageModel(start, max) {
     const { numbered, hasPopup, lastId, partial } = numberElements(start, max, true);
 
@@ -1688,7 +1785,10 @@ if (!window.__krify) {
     const mainCards = cards.filter((_, i) => elements.some((e) => e.c === i && /main|page/.test(sections[e.s].kind))).length;
     const h1 = deepAll("h1, [role=heading][aria-level='1']").find(isRendered);
     const results = window === top ? resultCount() : "";
+    const changes = start === 0 ? watchDiff(elements) : null;
+    if (start === 0) watchRestart(elements);
     return {
+      changes,
       page: {
         type: window === top ? pageType(mainCards || cards.length, numbered, results) : "",
         h1: h1 ? keep(h1.innerText, 80) : "",
@@ -2178,6 +2278,12 @@ if (!window.__krify) {
     // see buildPageModel(). The server (pageview.py) decides how much of it the AI sees.
     getPageModel(start = 0, max = MODEL_MAX) {
       return buildPageModel(start, max);
+    },
+
+    // Krify is about to act: page changes from now on are the action's (see watchDiff).
+    changeMark(op = "action") {
+      watch.marked = String(op);
+      return true;
     },
 
     // ---------- embedded pages (iframes) ----------
