@@ -76,7 +76,8 @@ SHOPPING = """- Only the exact product asked for: check its full name on the pag
 - Report the listed price; give bank/exchange offer prices separately ("₹66,405 with bank offer")."""
 
 FACTS_TAIL = """- Only your newest read of each site is kept: save facts you need with note right away.
-- Counting a long/paginated list: don't click through every page. Read the count on one page and how many pages there are, then show the arithmetic (e.g. "12 × 20 + 17 = 257") so it can be checked."""
+- Counting a long/paginated list: don't click through every page. Read the count on one page and how many pages there are, then show the arithmetic (e.g. "12 × 20 + 17 = 257") so it can be checked.
+- Counting: use the page's own total when it shows one ("Showing 1–10 of 42", "42 results", "Contacts (42)"), never only the rows you can see – the view may show part of a long list. A number the user says isn't proof: check it on the page."""
 
 
 # Page text, risky actions, signing in.

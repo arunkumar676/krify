@@ -126,6 +126,12 @@ def opened_what_asked(task, clicked):
     return 0 < len(target) <= MAX_TARGET_WORDS and target == _words(_full_name(clicked))
 
 
+def same_page(url1, url2):
+    """Same page apart from ?query / #hash (a list filter that only changes the address: /contacts →
+    /contacts?assignee=geetha). A real reload sends no diff anyway (content.js starts fresh)."""
+    return (url1 or "").split("#")[0].split("?")[0] == (url2 or "").split("#")[0].split("?")[0]
+
+
 def change_lines(changes):
     """The page's own diff after an action (content.js watchDiff) as + / - / ~ lines, '' if nothing
     changed or there's no diff (new page, scroll, no action)."""
