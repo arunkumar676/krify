@@ -20,7 +20,7 @@ from app.guardrails.progress import (
 from app.tools import sheets
 from app.tools.describe import describe
 from app.tools.ops import ACTION_OPS, ELEMENT_FIELDS, MAX_BATCH, uses_element
-from app.verification.changes import click_result
+from app.verification.changes import change_lines, click_result
 
 log = logging.getLogger("krify")
 
@@ -147,6 +147,9 @@ class ToolsMixin:
                                             self.state.current_title, open_list):
                     log.info("  told the AI: %s", sentence)
                     result = f"{result}\n{sentence}"
+            if not result.startswith("Error") and before[0] == self.state.current_url and (diff := change_lines(self.state.page_changes)):
+                log.info("  %s", diff.replace("\n", "\n    "))
+                result = f"{result}\n{diff}"
             if not_sent := form_not_sent(op, args, label, self.state.page_status):
                 report.append(f"{n}. {result}{not_sent} – stopped here.")
                 break

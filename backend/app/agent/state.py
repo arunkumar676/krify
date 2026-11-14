@@ -55,7 +55,8 @@ class TaskState:
     # ---- The latest page view: overwritten by every page view, never reset between tasks.
     elements: str = ""  # latest numbered element list, used by the safety check
     view_text: str = ""  # the latest page view as the AI reads it (structured lines with field hints)
-    records: dict = field(default_factory=dict)  # long lists' items the view left out (pageview.get_records)
+    records: dict = field(default_factory=dict)
+    page_changes: dict | None = None  # what the last action changed on the page (+ / - / ~, verification/changes.py)  # long lists' items the view left out (pageview.get_records)
     open_list: tuple | None = None  # the open custom dropdown list in the latest view (pageview.View.open_list)
     unrestricted: bool = False  # the side panel's Unrestricted switch, as of the latest page view
     current_title: str = ""

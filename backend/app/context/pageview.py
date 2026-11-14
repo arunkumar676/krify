@@ -50,6 +50,7 @@ class View:
     full: bool = False  # Unrestricted mode: nothing was cut (the loop then lifts its own caps too)
     inline_text: bool = False  # the page's own text is already in the view, among the elements (Unrestricted)
     records: dict | None = None  # long lists' left-out items (list name → item lines), for get_records
+    changes: dict | None = None  # what Krify's last action changed on the page (content.js watchDiff)
 
 
 @dataclass
@@ -921,7 +922,8 @@ def render(model, focus=""):
         lines.append("(very large page: far-off parts weren't listed – scroll there to see them)")
     return View("\n".join(lines), flat_lines(model), statuses[0] if statuses else "",
                 _ambiguity(entries, shown - behind), open_list, form, full,
-                inline_text=any(page.get("texts") for page in pages), records=records)
+                inline_text=any(page.get("texts") for page in pages), records=records,
+                changes=pages[0].get("changes"))
 
 
 # ---------- Unrestricted mode: the page's text, without what the view already says ----------
