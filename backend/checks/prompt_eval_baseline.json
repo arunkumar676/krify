@@ -1,0 +1,404 @@
+{
+ "1": [
+  {
+   "case": 1,
+   "task": "pick Krishna as the contact",
+   "tool": "select_option",
+   "args": {
+    "element": 4,
+    "label": "Select a contact ▾",
+    "option": "Krishna"
+   },
+   "ok": true,
+   "model": "groq:openai/gpt-oss-120b",
+   "tokens": 4546
+  }
+ ],
+ "2": [
+  {
+   "case": 2,
+   "task": "set the channel to Email",
+   "tool": "select_option",
+   "args": {
+    "element": 5,
+    "label": "Select a channel",
+    "option": "Email"
+   },
+   "ok": true,
+   "model": "groq:openai/gpt-oss-120b",
+   "tokens": 4524
+  }
+ ],
+ "3": [
+  {
+   "case": 3,
+   "task": "save this activity with contact Ravi and channel Phone",
+   "tool": "click",
+   "args": {
+    "element": 4,
+    "label": "Select a contact ▾"
+   },
+   "ok": false,
+   "model": "groq:openai/gpt-oss-120b",
+   "tokens": 4541
+  }
+ ],
+ "4": [
+  {
+   "case": 4,
+   "task": "set the activity type to Call",
+   "tool": "select_option",
+   "args": {
+    "element": 5,
+    "label": "Select a channel",
+    "option": "Phone"
+   },
+   "ok": true,
+   "model": "groq:openai/gpt-oss-120b",
+   "tokens": 4619
+  }
+ ],
+ "5": [
+  {
+   "case": 5,
+   "task": "write 'follow up next week' in the description",
+   "tool": "type",
+   "args": {
+    "element": 9,
+    "label": "field: Description",
+    "text": "follow up next week"
+   },
+   "ok": true,
+   "model": "groq:openai/gpt-oss-120b",
+   "tokens": 4552
+  }
+ ],
+ "6": [
+  {
+   "case": 6,
+   "task": "search for gaming keyboard",
+   "tool": "type",
+   "args": {
+    "element": 3,
+    "label": "Search Amazon.in",
+    "submit": true,
+    "text": "gaming keyboard"
+   },
+   "ok": true,
+   "model": "groq:openai/gpt-oss-120b",
+   "tokens": 4733
+  }
+ ],
+ "7": [
+  {
+   "case": 7,
+   "task": "search for harry potter only in Books",
+   "tool": "plan",
+   "args": {
+    "done_when": "Search results page shows Harry Potter books",
+    "steps": [
+     "Select option Books in \"Search in\" dropdown",
+     "Type \"harry potter\" into search box and submit"
+    ]
+   },
+   "ok": true,
+   "model": "groq:openai/gpt-oss-120b",
+   "tokens": 4730
+  }
+ ],
+ "8": [
+  {
+   "case": 8,
+   "task": "what is the price of the first result",
+   "tool": "done",
+   "args": {
+    "summary": "The first result costs ₹699."
+   },
+   "ok": true,
+   "model": "groq:openai/gpt-oss-120b",
+   "tokens": 4708
+  }
+ ],
+ "9": [
+  {
+   "case": 9,
+   "task": "open my cart",
+   "tool": "click",
+   "args": {
+    "element": 6,
+    "label": "Cart 0 items"
+   },
+   "ok": true,
+   "model": "groq:openai/gpt-oss-120b",
+   "tokens": 4695
+  }
+ ],
+ "10": [
+  {
+   "case": 10,
+   "task": "how many results are there",
+   "tool": "text",
+   "args": {
+    "text": ""
+   },
+   "ok": false,
+   "model": "groq:openai/gpt-oss-120b",
+   "tokens": 4724
+  }
+ ],
+ "11": [
+  {
+   "case": 11,
+   "task": "what is krify's phone number",
+   "tool": "text",
+   "args": {
+    "text": "Krify's phone number is **+91 7901322222**."
+   },
+   "ok": false,
+   "model": "groq:openai/gpt-oss-120b",
+   "tokens": 4596
+  }
+ ],
+ "12": [
+  {
+   "case": 12,
+   "task": "show me the services menu",
+   "tool": "click",
+   "args": {
+    "element": 6,
+    "label": "Our Services"
+   },
+   "ok": true,
+   "model": "groq:openai/gpt-oss-120b",
+   "tokens": 4620
+  }
+ ],
+ "13": [
+  {
+   "case": 13,
+   "task": "open the careers page",
+   "tool": "find_elements",
+   "args": {
+    "query": "Careers"
+   },
+   "ok": true,
+   "model": "groq:openai/gpt-oss-120b",
+   "tokens": 4597
+  }
+ ],
+ "14": [
+  {
+   "case": 14,
+   "task": "how many happy clients does krify have",
+   "tool": "text",
+   "args": {
+    "text": ""
+   },
+   "ok": false,
+   "model": "groq:openai/gpt-oss-120b",
+   "tokens": 4734
+  }
+ ],
+ "15": [
+  {
+   "case": 15,
+   "task": "send krify an email",
+   "tool": "click",
+   "args": {
+    "element": 3,
+    "label": "mail us"
+   },
+   "ok": true,
+   "model": "groq:openai/gpt-oss-120b",
+   "tokens": 4749
+  }
+ ],
+ "16": [
+  {
+   "case": 16,
+   "task": "summarise this page",
+   "tool": "done",
+   "args": {
+    "summary": "Krify is a top AI, web, and mobile app development company in India with over 20 years of experience, 1500+ happy clients, and 2000+ projects. It offers services in mobile apps, UX/UI design, and digital marketing, and provides a free consultation form."
+   },
+   "ok": true,
+   "model": "groq:openai/gpt-oss-120b",
+   "tokens": 4768
+  }
+ ],
+ "17": [
+  {
+   "case": 17,
+   "task": "open the Globex opportunity",
+   "tool": "click",
+   "args": {
+    "element": 7,
+    "label": "Globex CRM rollout"
+   },
+   "ok": true,
+   "model": "groq:openai/gpt-oss-120b",
+   "tokens": 4531
+  }
+ ],
+ "18": [
+  {
+   "case": 18,
+   "task": "what's the amount for Initech",
+   "tool": "done",
+   "args": {
+    "summary": "The amount for Initech is ₹3,75,000."
+   },
+   "ok": true,
+   "model": "groq:openai/gpt-oss-120b",
+   "tokens": 4515
+  }
+ ],
+ "19": [
+  {
+   "case": 19,
+   "task": "how many opportunities are there",
+   "tool": "done",
+   "args": {
+    "summary": "There are 5 opportunities."
+   },
+   "ok": true,
+   "model": "groq:openai/gpt-oss-120b",
+   "tokens": 4481
+  }
+ ],
+ "20": [
+  {
+   "case": 20,
+   "task": "delete the Acme opportunity",
+   "tool": "click",
+   "args": {
+    "element": 5,
+    "label": "More actions"
+   },
+   "ok": true,
+   "model": "groq:openai/gpt-oss-120b",
+   "tokens": 4501
+  }
+ ],
+ "21": [
+  {
+   "case": 21,
+   "task": "sign in with santhosh@gmail.com",
+   "tool": "type",
+   "args": {
+    "element": 6,
+    "label": "Email",
+    "text": "santhosh@gmail.com"
+   },
+   "ok": true,
+   "model": "groq:openai/gpt-oss-120b",
+   "tokens": 4352
+  }
+ ],
+ "22": [
+  {
+   "case": 22,
+   "task": "log in",
+   "tool": "ask_user",
+   "args": {
+    "question": "Please provide the full email address to log in."
+   },
+   "ok": true,
+   "model": "groq:openai/gpt-oss-120b",
+   "tokens": 4303
+  }
+ ],
+ "23": [
+  {
+   "case": 23,
+   "task": "close this popup",
+   "tool": "click",
+   "args": {
+    "element": 1,
+    "label": "Close"
+   },
+   "ok": true,
+   "model": "groq:openai/gpt-oss-120b",
+   "tokens": 4290
+  }
+ ],
+ "24": [
+  {
+   "case": 24,
+   "task": "I forgot my password",
+   "tool": "click",
+   "args": {
+    "element": 2,
+    "label": "Forgot password?"
+   },
+   "ok": true,
+   "model": "groq:openai/gpt-oss-120b",
+   "tokens": 4289
+  }
+ ],
+ "25": [
+  {
+   "case": 25,
+   "task": "donate to the cause",
+   "tool": "click",
+   "args": {
+    "element": 48,
+    "label": "Donate"
+   },
+   "ok": true,
+   "model": "groq:openai/gpt-oss-120b",
+   "tokens": 5424
+  }
+ ],
+ "26": [
+  {
+   "case": 26,
+   "task": "search amazon for headphones in Fashion",
+   "tool": "type",
+   "args": {
+    "element": 1,
+    "label": "Search Amazon.in",
+    "submit": false,
+    "text": "headphones"
+   },
+   "ok": false,
+   "model": "groq:openai/gpt-oss-120b",
+   "tokens": 5458
+  }
+ ],
+ "27": [
+  {
+   "case": 27,
+   "task": "go to flipkart.com",
+   "tool": "open_url",
+   "args": {
+    "url": "https://www.flipkart.com"
+   },
+   "ok": true,
+   "model": "groq:openai/gpt-oss-120b",
+   "tokens": 4722
+  }
+ ],
+ "28": [
+  {
+   "case": 28,
+   "task": "compare the iPhone 16 price on amazon and flipkart",
+   "tool": "plan",
+   "args": {
+    "done_when": "Both Amazon and Flipkart pages showing iPhone 16 product with price have been read",
+    "steps": [
+     "Open Amazon.in homepage",
+     "Search for \"iPhone 16\" on Amazon",
+     "Read the price of the iPhone 16 listing (choose the standard model if multiple)",
+     "Open Flipkart.com homepage",
+     "Search for \"iPhone 16\" on Flipkart",
+     "Read the price of the iPhone 16 listing (choose the standard model if multiple)",
+     "Compare the two prices and summarize"
+    ]
+   },
+   "ok": true,
+   "model": "groq:openai/gpt-oss-120b",
+   "tokens": 4834
+  }
+ ]
+}
