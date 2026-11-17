@@ -6,7 +6,7 @@ import re
 
 from app import history
 from app.agent.state import TaskState
-from app.config import MAX_STEPS
+from app.config import MAX_STEPS, MODELS
 from app.context.element_list import element_label, layout, merge_elements
 from app.context.pageview import get_records
 from app.tools.schemas import GROUP_ORDER, TOOL_GROUPS, task_groups, tools_for
@@ -30,7 +30,7 @@ from app.llm import report
 from app.llm.client import ask_ai, skip_model
 from app.memory.transcript import MemoryMixin
 from app.output.answer import OutputMixin, preview
-from app.output.text_reply import clean_text_reply, reads_as_answer
+from app.output.text_reply import clean_text_reply, plain_answer, reads_as_answer
 from app.tools.actions import ToolsMixin
 from app.tools.describe import describe
 from app.tools.ops import (
@@ -239,11 +239,16 @@ class Agent(ToolsMixin, GuardrailsMixin, ContextMixin, MemoryMixin, OutputMixin)
             if not reply.tool_calls:  # plain text instead of an operation
                 self.messages.append({"role": "assistant", "content": reply.content or ""})
                 kind, text, clear = clean_text_reply(reply.content)
-                # A plain sentence right after this turn's actions that reads as the answer IS the answer:
-                # asking for a done call only got the same words back, a whole request later (8.6k tokens
-                # on YouTube). It gets every check the done tool gets.
-                answered = (not clear and bool(self.state.actions[self.state.turn_start:]) and reads_as_answer(text))
-                if not clear and not answered and not nudged:
+                if not clear:
+                    # A real answer in plain words is taken as it is instead of asking again – a whole AI
+                    # request saved. Two ways in: a strong model's answer or question (plain_answer), or any
+                    # model's statement right after this turn's own actions (reads_as_answer). Every check
+                    # below still runs on it.
+                    if MODELS.get(model, {}).get("tier") == "strong" and (plain := plain_answer(text)):
+                        kind, clear = plain, True
+                    elif self.state.actions[self.state.turn_start:] and reads_as_answer(text):
+                        clear = True
+                if not clear and not nudged:
                     # Might be nonsense (weak models do this). Ask once for a proper operation.
                     self.messages.append({"role": "user", "content": NUDGE})
                     nudged = True
@@ -255,7 +260,7 @@ class Agent(ToolsMixin, GuardrailsMixin, ContextMixin, MemoryMixin, OutputMixin)
                     await self.ui("step", "🔍 Checking the page isn't showing an error before finishing")
                     self.messages.append({"role": "user", "content": rejection})
                     continue
-                if answered and (rejection := check_claims(self.state, text)):
+                if rejection := check_claims(self.state, text):  # same check as the done / ask_user tools
                     await self.ui("step", "🔍 Claim check: Krify said it did something it didn't – sent back")
                     self.messages.append({"role": "user", "content": rejection})
                     continue

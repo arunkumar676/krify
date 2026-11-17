@@ -262,13 +262,15 @@ def scenario(fn):
 
 @scenario
 def text_done_paths():
-    # A text "done" runs ui_state → filters → facts but NOT claims (known gap, pinned here).
+    # A text "done" runs ui_state → claims → filters → facts, like the done tool. "test:model" isn't a strong
+    # model, so the free-text first reply is asked again (plain_answer() is only trusted from strong models).
     # The plan is approved before the first agent call (plan_review right after the planner).
     return Scenario("text_done_paths", "login", ["check the login page status please"], plans=[PLAN], replies=[
         text("The page says hello"),
         text('done({"summary": "All good, 12345 users"})'),
         text('done({"summary": "All good, 12345 users"})'),
         text('done({"summary": "I clicked Continue and it shows Enter a valid email address"})'),
+        text('done({"summary": "The page shows Enter a valid email address"})'),
     ])
 
 

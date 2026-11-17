@@ -87,14 +87,17 @@ def record_call(model, provider, attempt, messages, tools, extra, boost, duratio
             # Groq (and some OpenRouter providers) say how much of the prompt came from their cache.
             row.cached_tokens = getattr(getattr(u, "prompt_tokens_details", None), "cached_tokens", None)
         choice = response.choices[0]
-        row.response_json = json.dumps(
-            {
-                "content": choice.message.content,
-                "tool_calls": [c.model_dump(exclude_none=True) for c in (choice.message.tool_calls or [])],
-                "finish_reason": choice.finish_reason,
-            },
-            ensure_ascii=False, default=str,
-        )
+        reply = {
+            "content": choice.message.content,
+            "tool_calls": [c.model_dump(exclude_none=True) for c in (choice.message.tool_calls or [])],
+            "finish_reason": choice.finish_reason,
+        }
+        # The model's thinking text, when the provider sends it (Groq: "reasoning", others: "reasoning_content"),
+        # to see why a reply came back empty. Not sent back to the model.
+        extra = getattr(choice.message, "model_extra", None) or {}
+        if thinking := extra.get("reasoning") or extra.get("reasoning_content"):
+            reply["reasoning"] = str(thinking)
+        row.response_json = json.dumps(reply, ensure_ascii=False, default=str)
     with session() as s:
         if row.task_id:
             row.seq = (s.exec(select(func.count()).where(LlmCall.task_id == row.task_id)).one() or 0) + 1

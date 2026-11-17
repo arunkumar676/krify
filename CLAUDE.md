@@ -203,18 +203,17 @@ Key mechanics worth knowing before touching the loop (they live in the layer mod
 - **Fact check**: before a `done`, `check_facts()` (`verification/facts.py`) rejects the summary once if
   it contains a 3+ digit number that never appeared in anything read this task (`state.seen`); a second
   rejection is allowed through with a caveat appended.
-- **A plain-text answer**: a reply with no tool call normally gets the `NUDGE` reminder once. Not when it comes
-  right after this turn's own actions (`state.actions[turn_start:]`) and `reads_as_answer()` (`output/text_reply.py`:
-  a statement – no "I'll …", no question, no JSON) says it is the answer: then it is taken as `done` at once, after
-  ui_state → claims → filters → facts.
+- **Plain-text replies**: a `done({...})` written as text and the `done` tool both run ui_state → claims → filters →
+  facts. Each check rejects only once, so their order matters. Free text (no `done(...)`) is asked again once (one
+  extra AI call, the `NUDGE` reminder), except when it is taken as the answer at once – two ways in: from a `strong`
+  model when `plain_answer()` (`output/text_reply.py`) reads it as a finished answer (→ done) or a question ending in
+  "?" (→ ask); or from any model when it comes right after this turn's own actions (`state.actions[turn_start:]`) and
+  `reads_as_answer()` says it is a statement (→ done). "I will…/Let me…/Next…", `[n]` and code-like text are always
+  asked again. **Known gap (pinned by `checks/replay.py`)**: plain-text replies skip the plan-approval gate (only
+  matters after an Update, since an Approve/Reject happens before the first agent call).
 - **Navigation waits for the page to settle**: `open_url`, `go_back`, `reload` and `new_tab` use `waitForPage`
   (`extension/tools/operations.js`): tab loaded, then `settle` until the DOM is quiet (≤3 s). Without it the first view
   of a site that fills itself in after loading (YouTube) was half-built and the next step was refused as "changed".
-- **Known gap (kept as-is, pinned by `checks/replay.py`)**: a plain-text `done({...})` reply runs
-  ui_state → filters → facts but not `check_claims`, and plain-text replies skip the plan-approval gate (only matters
-  after an Update, since an Approve/Reject happens before the first agent call);
-  the `done` tool runs ui_state → claims → filters → facts. Each check rejects only once, so their order
-  matters.
 - **Safety is enforced in code, not just prompted**: `guardrails/safety.py#check()` inspects the action and
   the *element's own label text* (never arbitrary page content) to decide if it's risky (money,
   sending, deleting, account actions, private-data fields) and forces an Allow/Block round trip via
