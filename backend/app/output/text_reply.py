@@ -42,3 +42,25 @@ def clean_text_reply(text):
                 except json.JSONDecodeError:
                     return kind, found.group(1), True
     return "done", text or "Done.", False
+
+
+# A sentence that starts like a step the model is about to take, not an answer ("I will scroll down…").
+INTENT = re.compile(
+    r"(?:^|[.!:\n]\s*)(?:okay|ok|sure|alright)?[,\s]*"
+    r"(?:i will|i'll|i am going to|i'm going to|i need to|i should|i must|i can now|let me|let's|"
+    r"next|now i|first|then,? i will|then,? i'll|to do this|step \d)\b",
+    re.I,
+)
+# Signs of a tool call or page notes written as text.
+CODE_LIKE = re.compile(r"\b(?:done|ask_user|click|type|select_option)\s*\(|\"(?:op|name|element|summary)\"\s*:|\[\d+\]")
+
+
+def plain_answer(text):
+    """Free text that reads as a finished answer ("done") or a question to the user ("ask"); None when it
+    may be thinking out loud, code or nonsense (then the model is asked again for a proper call)."""
+    text = (text or "").strip()
+    if len(text) < 3 or not re.search(r"[^\W\d_]{2}", text) or text.startswith(("{", "[", "```", "<")):
+        return None
+    if CODE_LIKE.search(text) or INTENT.search(text):
+        return None
+    return "ask" if text.rstrip(" *_)\"'").endswith("?") else "done"

@@ -197,11 +197,12 @@ Key mechanics worth knowing before touching the loop (they live in the layer mod
 - **Fact check**: before a `done`, `check_facts()` (`verification/facts.py`) rejects the summary once if
   it contains a 3+ digit number that never appeared in anything read this task (`state.seen`); a second
   rejection is allowed through with a caveat appended.
-- **Known gap (kept as-is, pinned by `checks/replay.py`)**: a plain-text `done({...})` reply runs
-  ui_state → filters → facts but not `check_claims`, and plain-text replies skip the plan-approval gate (only matters
-  after an Update, since an Approve/Reject happens before the first agent call);
-  the `done` tool runs ui_state → claims → filters → facts. Each check rejects only once, so their order
-  matters.
+- **Plain-text replies**: a `done({...})` written as text and the `done` tool both run ui_state → claims → filters →
+  facts. Each check rejects only once, so their order matters. Free text (no `done(...)`) is asked again once (one
+  extra AI call), except from a `strong` model when `plain_answer()` (`output/text_reply.py`) reads it as a finished
+  answer (→ done) or a question ending in "?" (→ ask); "I will…/Let me…/Next…", `[n]` and code-like text are always
+  asked again. **Known gap (pinned by `checks/replay.py`)**: plain-text replies skip the plan-approval gate (only
+  matters after an Update, since an Approve/Reject happens before the first agent call).
 - **Safety is enforced in code, not just prompted**: `guardrails/safety.py#check()` inspects the action and
   the *element's own label text* (never arbitrary page content) to decide if it's risky (money,
   sending, deleting, account actions, private-data fields) and forces an Allow/Block round trip via

@@ -6,7 +6,7 @@ import re
 
 from app import history
 from app.agent.state import TaskState
-from app.config import MAX_STEPS
+from app.config import MAX_STEPS, MODELS
 from app.context.element_list import element_label, layout, merge_elements
 from app.context.pageview import get_records
 from app.tools.schemas import ALL_GROUPS, GROUP_ORDER, TOOL_GROUPS, task_groups, tools_for
@@ -30,7 +30,7 @@ from app.llm import report
 from app.llm.client import ask_ai, skip_model
 from app.memory.transcript import MemoryMixin
 from app.output.answer import OutputMixin, preview
-from app.output.text_reply import clean_text_reply
+from app.output.text_reply import clean_text_reply, plain_answer
 from app.tools.actions import ToolsMixin
 from app.tools.describe import describe
 from app.tools.ops import (
@@ -230,6 +230,10 @@ class Agent(ToolsMixin, GuardrailsMixin, ContextMixin, MemoryMixin, OutputMixin)
             if not reply.tool_calls:  # plain text instead of an operation
                 self.messages.append({"role": "assistant", "content": reply.content or ""})
                 kind, text, clear = clean_text_reply(reply.content)
+                if not clear and MODELS.get(model, {}).get("tier") == "strong" and (plain := plain_answer(text)):
+                    # A real answer or question in plain words (not "I will…", code or nonsense): take it as
+                    # it is instead of asking again – saves a whole AI call. Weak models still get asked.
+                    kind, clear = plain, True
                 if not clear and not nudged:
                     # Might be nonsense (weak models do this). Ask once for a proper operation.
                     self.messages.append({"role": "user", "content": NUDGE})
@@ -240,6 +244,10 @@ class Agent(ToolsMixin, GuardrailsMixin, ContextMixin, MemoryMixin, OutputMixin)
                     text = "I finished, but my answer came out garbled. Please ask again."
                 if kind == "done" and (rejection := check_ui_state(self.state)):
                     await self.ui("step", "🔍 Checking the page isn't showing an error before finishing")
+                    self.messages.append({"role": "user", "content": rejection})
+                    continue
+                if rejection := check_claims(self.state, text):  # same check as the done / ask_user tools
+                    await self.ui("step", "🔍 Claim check: Krify said it did something it didn't – sent back")
                     self.messages.append({"role": "user", "content": rejection})
                     continue
                 if kind == "done" and (rejection := check_filters(self.state, text)):

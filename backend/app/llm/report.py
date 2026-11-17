@@ -85,14 +85,17 @@ def record_call(model, provider, attempt, messages, tools, extra, boost, duratio
             details = getattr(u, "completion_tokens_details", None)
             row.reasoning_tokens = getattr(details, "reasoning_tokens", None)
         choice = response.choices[0]
-        row.response_json = json.dumps(
-            {
-                "content": choice.message.content,
-                "tool_calls": [c.model_dump(exclude_none=True) for c in (choice.message.tool_calls or [])],
-                "finish_reason": choice.finish_reason,
-            },
-            ensure_ascii=False, default=str,
-        )
+        reply = {
+            "content": choice.message.content,
+            "tool_calls": [c.model_dump(exclude_none=True) for c in (choice.message.tool_calls or [])],
+            "finish_reason": choice.finish_reason,
+        }
+        # The model's thinking text, when the provider sends it (Groq: "reasoning", others: "reasoning_content"),
+        # to see why a reply came back empty. Not sent back to the model.
+        extra = getattr(choice.message, "model_extra", None) or {}
+        if thinking := extra.get("reasoning") or extra.get("reasoning_content"):
+            reply["reasoning"] = str(thinking)
+        row.response_json = json.dumps(reply, ensure_ascii=False, default=str)
     with session() as s:
         if row.task_id:
             row.seq = (s.exec(select(func.count()).where(LlmCall.task_id == row.task_id)).one() or 0) + 1

@@ -74,10 +74,20 @@ def first_step(msg):
 
 
 def judge(case, name, args):
+    """True = right first step. "text" = a readable plain-text answer where done was right: the app shows
+    it too, but only after asking once more (one extra AI call), so it is counted apart."""
     _, _, tools, elements = case
+    if name == "text":
+        text = (args.get("text") or "").strip()
+        readable = text and not text.startswith(("{", "[", "```"))
+        return "text" if readable and "done" in tools else False
     if name not in tools:
         return False
     return elements is None or args.get("element") in elements
+
+
+def label(ok):
+    return "PASS (text, +1 ask)" if ok == "text" else ("PASS" if ok else "FAIL")
 
 
 async def run_case(i, case, model):
@@ -105,7 +115,18 @@ async def main():
     p.add_argument("--only", default="")
     p.add_argument("--runs", type=int, default=1)
     p.add_argument("--model", default="groq:openai/gpt-oss-120b")
+    p.add_argument("--rescore", action="store_true", help="re-judge the saved baseline, no AI calls")
     a = p.parse_args()
+    if a.rescore:
+        scores = []
+        for k, runs in json.loads(BASELINE.read_text(encoding="utf-8")).items():
+            for r in runs:
+                ok = judge(CASES[int(k) - 1], r["tool"], r["args"])
+                scores.append(ok)
+                print(f"{label(ok):19} {int(k):2} {r['task'][:45]:45} -> {r['tool']} {r['args'].get('element', '')}")
+        print(f"\n{sum(s is True for s in scores)} pass + {scores.count('text')} plain-text answers (+1 ask each) "
+              f"+ {scores.count(False)} fail, of {len(scores)}")
+        return
     pick = {int(x) for x in a.only.split(",") if x} or set(range(1, len(CASES) + 1))
     base = json.loads(BASELINE.read_text(encoding="utf-8")) if BASELINE.exists() and not a.record else {}
     results, passed, total, tokens = {}, 0, 0, 0
@@ -116,11 +137,11 @@ async def main():
             r = await run_case(i, case, a.model)
             results.setdefault(str(i), []).append(r)
             total += 1
-            passed += r["ok"]
+            passed += bool(r["ok"])
             tokens += r["tokens"] if isinstance(r["tokens"], int) else 0
             was = base.get(str(i), [{}])[0]
             diff = "" if not was else ("" if (was.get("tool"), was.get("args", {}).get("element")) == (r["tool"], r["args"].get("element")) else f"  (baseline: {was.get('tool')} {was.get('args', {}).get('element')})")
-            print(f"{'PASS' if r['ok'] else 'FAIL'} {i:2} {case[1][:45]:45} -> {r['tool']} {r['args'].get('element', '')}{diff}", flush=True)
+            print(f"{label(r['ok'])} {i:2} {case[1][:45]:45} -> {r['tool']} {r['args'].get('element', '')}{diff}", flush=True)
             if a.record:  # save as we go, so a crash keeps what was done
                 BASELINE.write_text(json.dumps(results, ensure_ascii=False, indent=1), encoding="utf-8")
     print(f"\n{passed}/{total} passed · {tokens} tokens")
