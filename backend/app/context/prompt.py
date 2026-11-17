@@ -54,6 +54,9 @@ LOOK = """- Look-alike elements, unclear which is which (repeated "Add to cart")
 # lists: get_records (a structured-view line, so it is only sent with the structured view)
 RECORDS = """- "(+N more items in this list … get_records)" = a list cut short (your task's items are kept): get_records with a search word or start= – don't scroll; it isn't the site's next page."""
 
+# media: the video tool
+MEDIA = """- A video on the page (play, pause, speed, seek, mute): use video – not the player's Settings menu or buttons. Then check its reply (e.g. "playing at 2x")."""
+
 # Filtered lists.
 LISTS = """- Lists are often FILTERED by a dropdown ("My Activities", "All Statuses") that shows only its current choice. For items of a person/type/status, first select_option on that filter (option="Geetha"), then read the list. Never say something doesn't exist while a filter could be hiding it."""
 
@@ -101,6 +104,7 @@ PAGE_FORMAT = """Page view (top to bottom, left to right):
 BY_GROUP = {"forms": FORMS, "tabs": TABS, "sheets": SHEETS, "mouse": MOUSE, "look": LOOK}
 if STRUCTURED_VIEW:
     BY_GROUP["lists"] = RECORDS
+BY_GROUP["media"] = MEDIA
 # Always sent: the start of the "Rules:" list (CORE has the heading, the rest continue it).
 ALWAYS = [CORE, NAVIGATION, DROPDOWNS, LISTS, ANSWERS]
 
