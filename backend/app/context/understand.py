@@ -29,6 +29,8 @@ Reply with ONLY this JSON, nothing else:
   for a task about that page you may use what it really shows (its fields, buttons, text). Don't invent details the user didn't give
   (price limits, currency, models, shops). If the task is about the current page, don't plan to open it.
   Current page is a Google Sheet: read_text to see the columns, then sheet_query (SQL) for the answer.
+  A video on the page (play, pause, speed, seek, mute): ONE step with the video tool, e.g. "Set the video
+  speed to 2x with the video tool" – never plan the player's menus (Settings › Playback speed).
 - done_when: how to tell the task is finished, as something visible (e.g. "both prices are noted from
   real pages"). Going to / opening a page: just that page being open (its title or URL, or its menu item
   marked current/selected) – don't require content you only assume that page has.
