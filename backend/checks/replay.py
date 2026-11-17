@@ -618,6 +618,19 @@ def open_shortcut():
 
 
 @scenario
+def open_url_shortcut():
+    """"open flipkart" + open_url landing on Flipkart: finished without asking the model again. A page that
+    isn't the one named (here: asked for youtube) still goes back to the model."""
+    return Scenario("open_url_shortcut", "shop", ["open flipkart", "open youtube"],
+                    moves={("open_url", "https://www.flipkart.com/search?q=mouse"): "flip",
+                           ("open_url", "https://www.amazon.in/s?k=wireless+mouse"): "shop"}, replies=[
+        tool("open_url", url="https://www.flipkart.com/search?q=mouse"),
+        tool("open_url", url="https://www.amazon.in/s?k=wireless+mouse"),
+        tool("done", summary="That opened Amazon, not YouTube."),
+    ])
+
+
+@scenario
 def new_site_and_location():
     return Scenario("new_site_and_location", "shop", ["compare mouse prices on amazon and flipkart"], plans=[PLAN],
                     location={"country": "India", "place": "Hyderabad, Telangana, India"},
@@ -674,6 +687,41 @@ def session():
         text('done({"summary": "Portronics Toad 23 Wireless Optical Mouse at ₹399."})'),
         tool("plan", steps=["Look", "Answer"]),
         tool("done", summary="Portronics Toad 23 Wireless Optical Mouse at ₹399."),
+    ])
+
+
+@scenario
+def plain_answer():
+    """A plain sentence right after the task's own action that reads as the answer ends the task (no reminder,
+    no extra request). One that says what it will do next – or one with no action before it – still gets
+    the reminder."""
+    return Scenario("plain_answer", "shop",
+                    ["click fresh and then tell me", "show best sellers and say what it is", "what is this page about"],
+                    plans=["", "", ""], moves={("click", 10): "list"}, replies=[
+        tool("click", element=7, label="Fresh"),
+        text("I'll now read the page to see what Fresh shows."),  # after an action, but not an answer: reminder
+        tool("done", summary="Fresh is open."),
+        tool("click", element=10, label="Best Sellers"),
+        text("Best Sellers is open and it shows the Opportunities list."),  # the answer: the task ends here
+        text("This page lists opportunities for the sales team."),  # no action this turn: reminder
+        tool("done", summary="This page lists opportunities."),
+    ])
+
+
+@scenario
+def long_chat():
+    """Three tasks in one chat, with searches and a look-closer in between: what the chat still holds when
+    the next task starts (checks/tokens.py shows what that costs)."""
+    return Scenario("long_chat", "shop", ["find add to cart", "open best sellers", "is acme listed"],
+                    moves={("click", 10): "list"}, replies=[
+        tool("find_elements", query="cart"),
+        tool("inspect", ref=27),
+        tool("find_text", query="Logitech"),
+        tool("click", element=27, label="Add to cart"),
+        tool("done", summary="The Logitech mouse has an Add to cart button."),
+        tool("click", element=10, label="Best Sellers"),
+        tool("find_text", query="Acme"),
+        tool("done", summary="Acme Website revamp is listed."),
     ])
 
 
@@ -749,7 +797,7 @@ def topics_from_task():
 
 # ---------- running ----------
 
-SKIP = {"browser", "ui", "confirm", "plan_review", "messages", "page_views", "screen_reads", "state"}
+SKIP = {"browser", "ui", "confirm", "plan_review", "messages", "page_views", "screen_reads", "state", "kept"}
 
 
 def fields(agent):
@@ -759,6 +807,7 @@ def fields(agent):
         out.update({f.name: getattr(state, f.name) for f in dataclasses.fields(state)})
     out["_page_views"] = [t for _, t in agent.page_views]
     out["_screen_reads"] = list(agent.screen_reads)
+    out["_kept"] = [t for _, t in agent.kept]
     return out
 
 

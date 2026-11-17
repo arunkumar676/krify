@@ -29,10 +29,12 @@ uv run python checks/run.py --record   # on known-good code first: records check
 uv run python checks/run.py            # after the change: everything must be identical
 ```
 It runs static checks (compile, `ruff --select F`, every module importable on its own, empty layer
-`__init__.py`s, every `self.X`/`state.X` a real attribute), the pageview CLI on every fixture + the
+`__init__.py`s, every `self.X`/`state.X` a real attribute – set in `loop.py`), the pageview CLI on every fixture + the
 system prompt + `TOOLS` (golden text), the pure helpers on a fixed input table (`checks/characterize.py`),
 and `checks/replay.py`: real `Agent.run()` with scripted model replies and a fake browser built on
-`fixtures/`, recording every side-panel event, browser call, AI request and state field.
+`fixtures/`, recording every side-panel event, browser call, AI request and state field. `checks/tokens.py` runs the same
+scenarios and prints what each one sends to the agent model (characters: system / tools / older messages /
+newest message, and an estimate in tokens) – a golden file too, so a change's token cost shows in the diff.
 
 Extension (no build step — plain JS, ES modules):
 1. `chrome://extensions` → enable Developer mode → **Load unpacked** → select `extension/`.
@@ -82,7 +84,7 @@ The agent is split by what each part does; extension files mirror the same names
 Every real request to an AI model – including rate-limit/broken-reply retries and switches to another
 model – is saved as an `LlmCall` row by `_try_model` in `llm/client.py`: the exact messages sent
 (any image data redacted to `[image ~N KB]`), tool names, the reply (text + tool calls), the provider's
-prompt/completion/total/reasoning token counts, duration and status. Which task/step a call belongs to
+prompt/completion/total/reasoning/cached token counts, duration and status. Which task/step a call belongs to
 comes from a `ContextVar` (`report.set_task` in `Agent.run()`, `set_step` per loop step), so `ask_ai`'s
 signature must stay `(messages, tools, preferred, on_note, boost)` (`checks/replay.py`
 fakes it). `task_report()`/`task_report_markdown()` feed the side panel's **📊 Report** view
@@ -95,16 +97,16 @@ this install's recorded calls only (History rows and their saved totals stay; th
 
 The rules are category blocks. `ALWAYS` blocks (core, navigation with basic tools, dropdowns, filtered lists, answers,
 facts, safety) are always sent; a block about an optional tool group (`BY_GROUP`: forms, tabs, sheets, mouse, look,
-lists – same names and order as `TOOL_GROUPS`) is sent exactly when that group's tools are. `system_prompt(groups)`
+lists, media – same names and order as `TOOL_GROUPS`) is sent exactly when that group's tools are. `system_prompt(groups)`
 takes `Agent.tool_groups` (`None` = every block) and `Agent.refresh_system()` rebuilds `messages[0]` whenever
 `tool_groups` changes (in `run()`, when `page_groups()` adds one, and in `more_tools`) – the tool list changes at
 the same moment, so no extra prompt-cache miss. A rule must never name a tool that isn't sent: put a sentence that
-names a tool in that tool's group block. `checks/prompt_check.py` enforces this for all 64 group combinations (×2 for topics).
+names a tool in that tool's group block. `checks/prompt_check.py` enforces this for all 128 group combinations (×2 for topics).
 Besides tool groups there are **topic blocks** (`TOPICS` in `prompt.py`; today only `shopping`: the exact-product,
 versions-and-prices and listed-price rules inside the Facts section). `system_prompt(groups, topics)` sends one
 when the task's words (`task_topics`) or the page (`page_topics`: a currency sign + number) call for it; `Agent.topics`
-only grows during a chat, is all topics when the gate gave no answer (fail-open, like tool groups), and `loop.py` calls
-`refresh_system()` when it grows. A new topic needs entries in `TOPIC_WORDS` and `PAGE_WORDS` (checked by `prompt_check.py`).
+is chosen per task and only grows within one, and `loop.py` calls `refresh_system()` when it grows. With no gate
+answer (off, cooling down, failed) the task's words and the page still pick the groups and topics – not "all of them". A new topic needs entries in `TOPIC_WORDS` and `PAGE_WORDS` (checked by `prompt_check.py`).
 
 How the pieces fit:
 - **`TaskState`** (`agent/state.py`) holds everything about the task in progress and the page it's on
@@ -113,7 +115,7 @@ How the pieces fit:
   each `run()` – never replaced, because a message answering `ask_user` continues the same task (goal,
   plan, notes, `seen`, `actions` kept). Connection-level things stay on `Agent`: callbacks (`browser`,
   `ui`, `confirm`, `plan_review`), the chat (`messages`, `page_views`, `screen_reads`),
-  `tool_groups` (which tool groups are sent – `TOOL_GROUPS` in `tools/schemas.py`: Basic always, others picked by the router, added by `page_groups()` or the `more_tools` tool; they only grow during a chat), `dev_mode`, `trace`, `tokens`, `task_id`, `model`, `last_task`, `last_status`.
+  `tool_groups` (which tool groups are sent – `TOOL_GROUPS` in `tools/schemas.py`: Basic always, others picked by the router or the task's words (`task_groups`), added by `page_groups()` or the `more_tools` tool; chosen afresh for each new task, growing only within one), `dev_mode`, `trace`, `tokens`, `task_id`, `model`, `last_task`, `last_status`.
 - **Sync checks are plain functions over the state**: `check_facts(state, summary)`,
   `wrong_element(state, n, label)`, `check_progress(state, name, changed)`, … – testable without an Agent.
 - **Methods that need the browser, the user or the chat are mixins** (`ToolsMixin`, `GuardrailsMixin`,
@@ -146,8 +148,12 @@ Key mechanics worth knowing before touching the loop (they live in the layer mod
   the page's *layout* changed (`layout()` strips typed values before comparing) and a later queued step
   references an element number — because numbers may have shifted.
 - **Token trimming** (`memory/transcript.py`): only the newest page view / screen read is
-  kept in full in `messages`; older ones are replaced with a short placeholder (`OLD_PAGE`, `OLD_SCREEN`). `state.notes` (from the `note` tool) are what survive long-term and get
-  re-injected via `header()` (`context/header.py`) on every page view.
+  kept in full in `messages`; older ones are replaced with a short placeholder (`OLD_PAGE`, `OLD_SCREEN`). When a new
+  page view arrives, older tool results keep only their first line (`shrink_old_results`, `brief`), except the newest
+  `MAX_KEPT` fact results (`keep_fact`: a `find_text` hit, a sheet answer, `get_records`). A new task (not an answer to
+  `ask_user`) starts from a digest of the chat's earlier tasks (`forget_old_tasks`, entries from `remember_task` in
+  `end_task`), so a request's size doesn't grow with the chat. `state.notes` (from the `note` tool) are what survive
+  long-term and get re-injected via `header()` (`context/header.py`) on every page view.
 - **Stuck/repeat detection** (`guardrails/progress.py`): `check_progress` (5 non-progress steps → nudge) and `check_repeat`
   (same op+args 3× in 6 steps with no page change → nudge) inject warning text into the tool result
   rather than failing — the model is expected to self-correct. `check_loop` keeps a short trail of
@@ -197,6 +203,13 @@ Key mechanics worth knowing before touching the loop (they live in the layer mod
 - **Fact check**: before a `done`, `check_facts()` (`verification/facts.py`) rejects the summary once if
   it contains a 3+ digit number that never appeared in anything read this task (`state.seen`); a second
   rejection is allowed through with a caveat appended.
+- **A plain-text answer**: a reply with no tool call normally gets the `NUDGE` reminder once. Not when it comes
+  right after this turn's own actions (`state.actions[turn_start:]`) and `reads_as_answer()` (`output/text_reply.py`:
+  a statement – no "I'll …", no question, no JSON) says it is the answer: then it is taken as `done` at once, after
+  ui_state → claims → filters → facts.
+- **Navigation waits for the page to settle**: `open_url`, `go_back`, `reload` and `new_tab` use `waitForPage`
+  (`extension/tools/operations.js`): tab loaded, then `settle` until the DOM is quiet (≤3 s). Without it the first view
+  of a site that fills itself in after loading (YouTube) was half-built and the next step was refused as "changed".
 - **Known gap (kept as-is, pinned by `checks/replay.py`)**: a plain-text `done({...})` reply runs
   ui_state → filters → facts but not `check_claims`, and plain-text replies skip the plan-approval gate (only matters
   after an Update, since an Approve/Reject happens before the first agent call);

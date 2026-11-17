@@ -20,11 +20,21 @@ WRONG_PAGE = ("\n⚠️ This page's title doesn't mention {} – it may be a dif
 _NUMBER = re.compile(r"\d[\d,]*(?:\.\d+)?")
 
 
+_MULTIPLE = re.compile(r"(\d+)x")  # "2x", "10x": a speed or zoom at least as often as a model name
+
+
+def _said_as_multiple(word, text):
+    """'2x' is also written '2.0x' or '2 times' ("playing at 2.0× speed" does say 2x)."""
+    multiple = _MULTIPLE.fullmatch(word)
+    return bool(multiple and re.search(rf"(?<![\d.]){multiple.group(1)}(?:\.0+)?\s*(?:x|times)\b", text))
+
+
 def missing_words(task, text):
     """Model words from the task (letters + digits: 16e, s24, 256gb) that the text doesn't mention."""
-    flat = re.sub(r"[^a-z0-9]", "", text.lower())  # "256 GB", "Apple-iPhone-17e" -> "256gb", "appleiphone17e"
+    text = text.lower().replace("×", "x")  # the multiplication sign is how models write "2x"
+    flat = re.sub(r"[^a-z0-9]", "", text)  # "256 GB", "Apple-iPhone-17e" -> "256gb", "appleiphone17e"
     words = {w for w in re.findall(r"[a-z0-9]+", task.lower()) if re.search(r"\d", w) and re.search(r"[a-z]", w)}
-    return sorted(w for w in words if w not in flat)
+    return sorted(w for w in words if w not in flat and not _said_as_multiple(w, text))
 
 
 def missing_models(task, note):

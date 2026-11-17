@@ -107,9 +107,11 @@ def _words(text):
     return tuple(w[:-1] if len(w) > 3 and w.endswith("s") else w for w in re.findall(r"[a-z0-9]+", (text or "").lower()))
 
 
-# A task that is only "open one named place": "open agents", "go to the settings page".
+# A task that is only "open one named place": "open agents", "go to the settings page" – or only one named
+# click: "select italiano", "click on pricing".
 _OPEN_TASK = re.compile(
-    r"^\s*(?:please\s+)?(?:open|go\s+to|goto|navigate\s+to|take\s+me\s+to|show(?:\s+me)?)\s+"
+    r"^\s*(?:please\s+)?(?:open|go\s+to|goto|navigate\s+to|take\s+me\s+to|show(?:\s+me)?|"
+    r"click(?:\s+on)?|select|choose|press|tap(?:\s+on)?)\s+"
     r"(?:the\s+|my\s+)?(.+?)(?:\s+(?:page|tab|section|screen))?\s*[.!]?\s*$", re.I)
 # More to do after opening it ("open agents and create one"): the AI has to carry on, so no shortcut.
 _MORE_TO_DO = re.compile(r"\b(?:and|then|after|also|search|find|create|add|type|click|with)\b|[,;]", re.I)
@@ -124,6 +126,19 @@ def opened_what_asked(task, clicked):
         return False
     target = _words(match.group(1))
     return 0 < len(target) <= MAX_TARGET_WORDS and target == _words(_full_name(clicked))
+
+
+def opened_site_asked(task, url, title, elements=""):
+    """True if the whole task was "open X" and the page now open is X: every word of X is in its address
+    (host and path – not the ?query, which may only carry where a sign-in page returns to) or its title.
+    Not while the page asks for a password: then signing in is still to do. After such an open_url
+    there's nothing left to decide, so no model call is spent on saying "done"."""
+    match = _OPEN_TASK.match(task or "")
+    if not match or _MORE_TO_DO.search(match.group(1)) or "input password" in (elements or ""):
+        return False
+    target = _words(match.group(1))
+    place = set(_words((url or "").split("#")[0].split("?")[0])) | set(_words(title))
+    return 0 < len(target) <= MAX_TARGET_WORDS and all(word in place for word in target)
 
 
 def same_page(url1, url2):

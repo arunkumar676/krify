@@ -3,6 +3,24 @@
 import json
 import re
 
+# A plain-text reply that is still narrating – what it will do next, or a question – is not an answer.
+_NOT_AN_ANSWER = re.compile(
+    r"\b(i'?ll|will|i'?m going to|i am going to|needs? to|i should|i must|i have to|i can now|i'?m about to|"
+    r"let me|let'?s|next|now i|then i|first i|going to|about to|trying to|try to|attempt\w*|proceed\w*|continu\w*|"
+    r"opening|clicking|typing|searching|selecting|navigating|scrolling|looking for|checking|waiting|loading|"
+    r"one moment|please wait|working on|step \d)\b|\?\s*$|[{}\[\]`]|<\|", re.I)
+MIN_ANSWER_WORDS = 4
+MAX_ANSWER_CHARS = 1500
+
+
+def reads_as_answer(text):
+    """True if a plain-text reply reads as the finished task's answer – a statement, not a plan for the next
+    step, a question, JSON or model noise. The loop accepts it as `done` only right after the task's own
+    actions (and still runs every check on it); anything else gets the "call an operation" reminder."""
+    text = (text or "").strip()
+    return (MIN_ANSWER_WORDS <= len(text.split()) and len(text) <= MAX_ANSWER_CHARS
+            and not _NOT_AN_ANSWER.search(text))
+
 
 def clean_text_reply(text):
     """The model sometimes writes done({...}) / ask_user({...}) as plain text. Pull out the message.

@@ -84,6 +84,8 @@ def record_call(model, provider, attempt, messages, tools, extra, boost, duratio
             row.prompt_tokens, row.completion_tokens, row.total_tokens = u.prompt_tokens, u.completion_tokens, u.total_tokens
             details = getattr(u, "completion_tokens_details", None)
             row.reasoning_tokens = getattr(details, "reasoning_tokens", None)
+            # Groq (and some OpenRouter providers) say how much of the prompt came from their cache.
+            row.cached_tokens = getattr(getattr(u, "prompt_tokens_details", None), "cached_tokens", None)
         choice = response.choices[0]
         row.response_json = json.dumps(
             {
@@ -147,7 +149,7 @@ def _call_dict(c):
         "boost": c.boost, "status": c.status, "error": c.error,
         "duration_ms": c.duration_ms, "created_at": c.created_at.replace(tzinfo=datetime.timezone.utc).isoformat(),
         "prompt_tokens": c.prompt_tokens, "completion_tokens": c.completion_tokens,
-        "total_tokens": c.total_tokens, "reasoning_tokens": c.reasoning_tokens,
+        "total_tokens": c.total_tokens, "reasoning_tokens": c.reasoning_tokens, "cached_tokens": c.cached_tokens,
         "message_count": c.message_count, "request_chars": c.request_chars, "sent_by_role": dict(sent),
         "request": request,  # None once pruned
         "response": json.loads(c.response_json) if c.response_json else None,
@@ -184,6 +186,7 @@ def task_report(task_id, client=None):
             "calls": len(rows), "ok": sum(r.status == "ok" for r in rows), "failed": sum(r.status != "ok" for r in rows),
             "prompt_tokens": _sum(rows, "prompt_tokens"), "completion_tokens": _sum(rows, "completion_tokens"),
             "total_tokens": _sum(rows, "total_tokens"), "reasoning_tokens": _sum(rows, "reasoning_tokens"),
+            "cached_tokens": _sum(rows, "cached_tokens"),
             "tokens_unknown": sum(r.status == "ok" and r.total_tokens is None for r in rows),
             "duration_ms": _sum(rows, "duration_ms"),
         },
@@ -211,7 +214,8 @@ def task_report_markdown(report):
         "## Totals", "",
         f"- LLM calls: {tot['calls']} ({tot['ok']} ok, {tot['failed']} failed)",
         f"- Tokens: {_n(tot['total_tokens'])} total = {_n(tot['prompt_tokens'])} sent + {_n(tot['completion_tokens'])} received"
-        + (f" ({_n(tot['reasoning_tokens'])} of the received were reasoning)" if tot["reasoning_tokens"] else ""),
+        + (f" ({_n(tot['reasoning_tokens'])} of the received were reasoning)" if tot["reasoning_tokens"] else "")
+        + (f"; {_n(tot['cached_tokens'])} of the sent came from the provider's prompt cache" if tot["cached_tokens"] else ""),
         f"- Time spent waiting for models: {tot['duration_ms'] / 1000:.1f}s", "",
         "## By model", "", "| Model | Calls | Failed | Sent | Received | Total |", "|---|---|---|---|---|---|",
     ]
@@ -223,7 +227,8 @@ def task_report_markdown(report):
         lines += [
             "", f"### #{c['seq']} · {where} · {c['model']} · {c['status']}"
             + (f" (retry {c['attempt']})" if c["attempt"] else ""),
-            f"Sent {_n(c['prompt_tokens'])} tokens · received {_n(c['completion_tokens'])} · {c['duration_ms']} ms"
+            f"Sent {_n(c['prompt_tokens'])} tokens" + (f" ({_n(c['cached_tokens'])} cached)" if c["cached_tokens"] else "")
+            + f" · received {_n(c['completion_tokens'])} · {c['duration_ms']} ms"
             + (f" · error: {c['error']}" if c["error"] else ""),
         ]
         if not c["request"]:

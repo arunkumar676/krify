@@ -1748,6 +1748,26 @@ if (!window.__krify) {
         ...(of ? { of } : {}),
       });
     }
+    // A row that looks like the cards around it but has nothing numbered in it (below the screen in a
+    // scrolling list, or simply not clickable) is a card too – otherwise its cells arrive as loose
+    // text lines while its neighbours arrive as one ▸ line. Only in full mode (the only one with text),
+    // and only next to a real card: never every repeated block of the page.
+    if (full) {
+      for (const node of [...cardIds.keys()]) {
+        const parent = node.parentElement;
+        if (!parent) continue;
+        const likes = itemKeys(node);
+        for (const kid of parent.children) {
+          if (kid === node || cardIds.has(kid) || kid.querySelector("[data-krify-id]") || kid.closest("[data-krify-id]")) continue;
+          if (!itemKeys(kid).some((k) => likes.includes(k)) || !(kid.textContent || "").trim() || (kid.textContent || "").length >= 3000) continue;
+          if (!isRendered(kid)) continue;
+          const chain = chainOf(kid);
+          if (chain.some((n) => MENU_KINDS.has(kindOf(n).kind))) continue;
+          cardIds.set(kid, cards.length);
+          cards.push({ node: kid, els: [] });
+        }
+      }
+    }
     // Full mode: the page's own text, as blocks placed among the elements (see pageTextBlocks).
     const texts = full ? pageTextBlocks(placeOf, chainOf, cardIds, fieldLabels, growBox) : [];
     // Card summaries cost a few DOM reads each: on-screen cards always, all of them in full mode.
@@ -1757,6 +1777,12 @@ if (!window.__krify) {
       // line instead of a summary that would repeat the same cell text.
       const self = card.els.find((n) => n.el === card.node && isClickableRow(n.el));
       if (self) return { title: "", price: "", rating: "", badges: [], summarised: false, row: self.id };
+      if (!card.els.length) {
+        // A row with nothing numbered in it: its cells, "Amit Verma | AV | +1684 9000000013 | …" (as rowLabel does for a <tr>).
+        const cells = card.node.tagName === "TR" ? rowCells(card.node) : [...card.node.children];
+        const title = cells.map((cell) => keep(cell.innerText, 40)).filter((t) => /[\p{L}\p{N}]/u.test(t)).join(" | ");
+        return { title: title || keep(card.node.innerText, 80), price: "", rating: "", badges: [], summarised: true };
+      }
       const visible = elements.some((e) => e.c === i && e.pos === 0);
       if ((!visible && !full) || (summaries >= MAX_CARD_SUMMARIES && !full)) return { title: "", price: "", rating: "", badges: [], summarised: false };
       summaries += 1;

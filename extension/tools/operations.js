@@ -168,6 +168,15 @@ async function waitForLoad(tabId) {
   }
 }
 
+// After a navigation: "loaded" isn't "ready". Sites like YouTube show a bare skeleton first and fill it
+// in afterwards (its search box is named "search_query" until then), so the first look saw a half-built
+// page and the AI's next step was refused ("[3] has changed since you looked"). Wait until the page
+// stops changing (at most 3 s) before anyone reads it.
+async function waitForPage(tabId) {
+  await waitForLoad(tabId);
+  await callInPage("settle", [400, 3000]).catch(() => {}); // (a protected page can't be watched: skip)
+}
+
 // The "Show animations" switch in the side panel (on unless turned off).
 async function showCursor() {
   const { showCursor = true } = await chrome.storage.local.get("showCursor");
@@ -488,19 +497,19 @@ export const operations = {
     if (!/^https?:\/\//i.test(url)) url = `https://${url}`;
     const tab = await currentTab();
     await chrome.tabs.update(tab.id, { url });
-    await waitForLoad(tab.id);
+    await waitForPage(tab.id);
     return `Opened ${url}`;
   },
   async go_back() {
     const tab = await currentTab();
     await chrome.tabs.goBack(tab.id);
-    await waitForLoad(tab.id);
+    await waitForPage(tab.id);
     return "Went back";
   },
   async reload() {
     const tab = await currentTab();
     await chrome.tabs.reload(tab.id);
-    await waitForLoad(tab.id);
+    await waitForPage(tab.id);
     return "Reloaded the page";
   },
 
@@ -513,7 +522,7 @@ export const operations = {
     openedByKrify.add(tab.id);
     await setWorkingIn(current.id, false);
     agentTabId = tab.id;
-    await waitForLoad(tab.id);
+    await waitForPage(tab.id);
     return `Opened ${url} in new tab ${krifyTabs.length}`;
   },
   async switch_tab({ tab }) {

@@ -68,6 +68,7 @@ class LlmCall(SQLModel, table=True):
     completion_tokens: int | None = None
     total_tokens: int | None = None
     reasoning_tokens: int | None = None
+    cached_tokens: int | None = None  # of prompt_tokens: served from the provider's prompt cache (cheaper there)
     message_count: int = 0
     request_chars: int = 0
     request_json: str = ""  # messages + tools + extra settings, screenshots redacted
@@ -104,6 +105,8 @@ def _add_missing_columns():
         for name in ("prompt_tokens", "completion_tokens", "calls"):
             if name not in columns:
                 conn.exec_driver_sql(f"ALTER TABLE task ADD COLUMN {name} INTEGER NOT NULL DEFAULT 0")
+        if "cached_tokens" not in {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(llmcall)")}:
+            conn.exec_driver_sql("ALTER TABLE llmcall ADD COLUMN cached_tokens INTEGER")
 
 
 _add_missing_columns()

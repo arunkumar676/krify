@@ -13,14 +13,15 @@ IMG = "data:image/png;base64," + "A" * 4096
 TOOLS = [{"type": "function", "function": {"name": "click", "parameters": {}}}]
 
 
-def completion(prompt, out, content="hi", tool=None):
+def completion(prompt, out, content="hi", tool=None, cached=None):
     message = {"role": "assistant", "content": content}
     if tool:
         message["tool_calls"] = [{"id": "c1", "type": "function", "function": {"name": tool, "arguments": "{}"}}]
     return ChatCompletion.model_validate({
         "id": "x", "object": "chat.completion", "created": 0, "model": "m",
         "choices": [{"index": 0, "finish_reason": "stop", "message": message}],
-        "usage": {"prompt_tokens": prompt, "completion_tokens": out, "total_tokens": prompt + out},
+        "usage": {"prompt_tokens": prompt, "completion_tokens": out, "total_tokens": prompt + out,
+                  **({"prompt_tokens_details": {"cached_tokens": cached}} if cached is not None else {})},
     })
 
 
@@ -36,7 +37,7 @@ report.set_task(task)
 call(completion(10, 2, content="plan"), tools=None)  # planner
 report.set_step(1)
 call(status="rate_limit", model="groq:a")
-call(completion(100, 20, tool="click"), model="gemini:b", attempt=0,
+call(completion(100, 20, tool="click", cached=64), model="gemini:b", attempt=0,
      messages=[{"role": "user", "content": [{"type": "text", "text": "look"}, {"type": "image_url", "image_url": {"url": IMG}}]}])
 
 r = report.task_report(task, "client-1")
@@ -44,6 +45,7 @@ t = r["totals"]
 assert (t["calls"], t["ok"], t["failed"]) == (3, 2, 1), t
 assert (t["prompt_tokens"], t["completion_tokens"], t["total_tokens"]) == (110, 22, 132), t
 assert [c["seq"] for c in r["calls"]] == [1, 2, 3]
+assert t["cached_tokens"] == 64 and [c["cached_tokens"] for c in r["calls"]] == [None, None, 64], "cached tokens"
 assert [c["purpose"] for c in r["calls"]] == ["planner", "agent_step", "agent_step"]
 assert r["calls"][0]["step"] is None and r["calls"][1]["step"] == 1
 assert r["by_model"]["groq:a"]["failed"] == 1 and r["by_model"]["gemini:b"]["total_tokens"] == 120
@@ -53,6 +55,7 @@ dump = json.dumps(r)
 assert IMG not in dump and "[image ~4 KB]" in dump, "screenshot must be redacted"
 md = report.task_report_markdown(r)
 assert "LLM calls: 3 (2 ok, 1 failed)" in md and "[image ~4 KB]" in md and "boom" in md
+assert "Sent 100 tokens (64 cached)" in md and "64 of the sent came from" in md
 print("ok: totals, order, redaction, markdown")
 
 assert report.task_report(task, "client-2") is None, "another client must not read it"

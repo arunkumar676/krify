@@ -67,6 +67,9 @@ class OutputMixin:
     def end_task(self, status, summary):
         """Save how the task ended (done / ask / stopped / error) in the history."""
         self.last_status = status
+        if self.in_agent and status != "ask":  # ("ask": the task goes on with the user's answer)
+            self.remember_task(status, summary)
+        self.in_agent = False
         if self.task_id:
             calls, sent, received = report.totals(self.task_id)
             history.finish_task(self.task_id, status, summary, self.tokens, self.model, calls, sent, received)

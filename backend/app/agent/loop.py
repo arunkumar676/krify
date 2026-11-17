@@ -9,8 +9,8 @@ from app.agent.state import TaskState
 from app.config import MAX_STEPS
 from app.context.element_list import element_label, layout, merge_elements
 from app.context.pageview import get_records
-from app.tools.schemas import ALL_GROUPS, GROUP_ORDER, TOOL_GROUPS, task_groups, tools_for
-from app.context.prompt import TOPICS, page_topics, system_prompt, task_topics, where_line
+from app.tools.schemas import GROUP_ORDER, TOOL_GROUPS, task_groups, tools_for
+from app.context.prompt import page_topics, system_prompt, task_topics, where_line
 from app.context.sites import is_sheet
 from app.context.view import ContextMixin
 from app.guardrails import safety
@@ -30,7 +30,7 @@ from app.llm import report
 from app.llm.client import ask_ai, skip_model
 from app.memory.transcript import MemoryMixin
 from app.output.answer import OutputMixin, preview
-from app.output.text_reply import clean_text_reply
+from app.output.text_reply import clean_text_reply, reads_as_answer
 from app.tools.actions import ToolsMixin
 from app.tools.describe import describe
 from app.tools.ops import (
@@ -45,7 +45,7 @@ from app.tools.ops import (
     _args_of,
     uses_element,
 )
-from app.verification.changes import change_lines, click_result, opened_what_asked, same_page
+from app.verification.changes import change_lines, click_result, opened_site_asked, opened_what_asked, same_page
 from app.verification.claims import check_claims, check_handoff
 from app.verification.facts import WRONG_PAGE, WRONG_PRODUCT, check_facts, missing_models, missing_words
 from app.verification.filters import FILTER_HINT, check_filters, filter_dropdowns
@@ -72,12 +72,13 @@ class Agent(ToolsMixin, GuardrailsMixin, ContextMixin, MemoryMixin, OutputMixin)
         self.state = TaskState()  # the task in progress and the page it's on (agent/state.py)
         # Sheets-only tools are sent only once a Google Sheet has been open (then always, since the
         # chat history may hold calls to them, and a call to a tool not sent is rejected by the API).
-        # Tool groups sent to the model (tools/schemas.py TOOL_GROUPS): None until the first task; only grow
-        # during a chat (its history may hold calls to any of them). router_groups: what the gate picked.
+        # Tool groups sent to the model (tools/schemas.py TOOL_GROUPS): None until the first task, chosen
+        # afresh for each new task (the earlier tasks' tool calls are gone from the chat by then) and only
+        # growing during one (its history may hold calls to any of them). router_groups: what the gate picked.
         self.tool_groups = None
         self.router_groups = None
         # Prompt topics sent (context/prompt.py TOPICS, e.g. the shopping rules): None until the first task, then
-        # only grow, like tool groups.
+        # per task, like tool groups.
         self.topics = None
         self.dev_mode = False  # debug trace (tools used + what they found) appended to the answer
         self.trace = []  # this task's trace, built only while dev_mode is on
@@ -98,6 +99,10 @@ class Agent(ToolsMixin, GuardrailsMixin, ContextMixin, MemoryMixin, OutputMixin)
         self.last_page = None
         self.screen_reads = {}  # site -> its newest read_text result (older ones are trimmed)
         self.notes_at_last_read = 0  # len(state.notes) as of the last screen read – for the unnoted-read nudge
+        self.kept = []  # (message, its full text): newest fact results kept in full (memory/transcript.py)
+        self.view_at = None  # where the newest page view sits in messages
+        self.past = []  # (task, status, summary) of this chat's finished tasks – the next task's digest
+        self.in_agent = False  # the running message reached the agent loop (the gate didn't answer it)
         self.tokens = 0
         self.last_task = ""  # previous task, so the planner understands follow-ups
         self.last_status = ""  # how the previous task ended ("ask" = the next message is an answer)
@@ -117,6 +122,8 @@ class Agent(ToolsMixin, GuardrailsMixin, ContextMixin, MemoryMixin, OutputMixin)
             groups.add("lists")
         if "(hover" in view or ", hover" in view:
             groups.add("mouse")
+        if "call inspect" in view:  # the "same label" hint tells the AI to: it must have the tool
+            groups.add("look")
         if "[Tabs]" in view:
             groups.add("tabs")
         if re.search(r"youtube\.com/(watch|shorts)|vimeo\.com/\d|/learn/lecture/|netflix\.com/watch|hotstar\.com", url):
@@ -164,12 +171,14 @@ class Agent(ToolsMixin, GuardrailsMixin, ContextMixin, MemoryMixin, OutputMixin)
         report.set_task(self.task_id)
         if not continuing and await self.try_gate(task):  # chat / general knowledge: no agent needed
             return
+        self.in_agent = True
+        if not continuing:
+            self.forget_old_tasks()  # earlier tasks → a short digest: this task pays only for itself
         if not continuing or self.tool_groups is None:
-            wanted = ALL_GROUPS if self.router_groups is None else self.router_groups
-            self.tool_groups = (self.tool_groups or set()) | {"basic"} | set(wanted) | task_groups(task)
-            # (No gate answer = unknown task: every topic's rules are sent, as with the tool groups.)
-            wanted_topics = set(TOPICS) if self.router_groups is None else task_topics(task)
-            self.topics = (self.topics or set()) | wanted_topics
+            # No gate answer (off, cooling down, failed): the task's own words and the page pick the groups,
+            # and the AI can ask for one with more_tools – sending every group cost ~1,500 tokens a request.
+            self.tool_groups = {"basic"} | set(self.router_groups or ()) | task_groups(task)
+            self.topics = task_topics(task)
         self.refresh_system()
         self.notes_at_last_read = 0
         nudged = False
@@ -230,7 +239,11 @@ class Agent(ToolsMixin, GuardrailsMixin, ContextMixin, MemoryMixin, OutputMixin)
             if not reply.tool_calls:  # plain text instead of an operation
                 self.messages.append({"role": "assistant", "content": reply.content or ""})
                 kind, text, clear = clean_text_reply(reply.content)
-                if not clear and not nudged:
+                # A plain sentence right after this turn's actions that reads as the answer IS the answer:
+                # asking for a done call only got the same words back, a whole request later (8.6k tokens
+                # on YouTube). It gets every check the done tool gets.
+                answered = (not clear and bool(self.state.actions[self.state.turn_start:]) and reads_as_answer(text))
+                if not clear and not answered and not nudged:
                     # Might be nonsense (weak models do this). Ask once for a proper operation.
                     self.messages.append({"role": "user", "content": NUDGE})
                     nudged = True
@@ -240,6 +253,10 @@ class Agent(ToolsMixin, GuardrailsMixin, ContextMixin, MemoryMixin, OutputMixin)
                     text = "I finished, but my answer came out garbled. Please ask again."
                 if kind == "done" and (rejection := check_ui_state(self.state)):
                     await self.ui("step", "🔍 Checking the page isn't showing an error before finishing")
+                    self.messages.append({"role": "user", "content": rejection})
+                    continue
+                if answered and (rejection := check_claims(self.state, text)):
+                    await self.ui("step", "🔍 Claim check: Krify said it did something it didn't – sent back")
                     self.messages.append({"role": "user", "content": rejection})
                     continue
                 if kind == "done" and (rejection := check_filters(self.state, text)):
@@ -376,7 +393,9 @@ class Agent(ToolsMixin, GuardrailsMixin, ContextMixin, MemoryMixin, OutputMixin)
                     result = get_records(self.state.records, str(args.get("list", "")), str(args.get("search", "")),
                                          args.get("start", 0))
                     self.state.seen.append(result)
-                    self.messages.append({**tool_msg, "content": result})
+                    tool_msg["content"] = result
+                    self.messages.append(tool_msg)
+                    self.keep_fact(tool_msg)
                     check_progress(self.state, name, False)
                 elif name in READ_OPS:
                     on_sheet = name in SHEET_OPS | {"read_text"} and is_sheet(self.state.current_url)
@@ -415,13 +434,19 @@ class Agent(ToolsMixin, GuardrailsMixin, ContextMixin, MemoryMixin, OutputMixin)
                         # It scrolled to the match: show the page there, so the elements next to it have numbers.
                         page = await self.page_view()
                         prev_page = page
-                        self.add_with_page(tool_msg, f"{result}\n(Save facts you'll need later with note.)", page)
+                        found = f"{result}\n(Save facts you'll need later with note.)"
+                        self.add_with_page(tool_msg, found, page)
+                        self.keep_fact(tool_msg, found)
                     elif name in ("read_text", "find_text"):
                         if name == "read_text":
                             self.state.last_read = str(result)
                             if not on_sheet and (models := missing_words(self.state.product_text, f"{self.state.current_title} {self.state.current_url}")):
                                 result = f"{result}{WRONG_PAGE.format(', '.join(models))}"
                         self.add_screen_read(tool_msg, f"{result}\n(Save facts you'll need later with note.)")
+                    elif name in SHEET_OPS and not str(result).startswith("Error"):
+                        tool_msg["content"] = str(result)
+                        self.messages.append(tool_msg)
+                        self.keep_fact(tool_msg)
                     else:
                         self.messages.append({**tool_msg, "content": str(result)})
                     if name in ("find_elements", "inspect"):
@@ -456,9 +481,12 @@ class Agent(ToolsMixin, GuardrailsMixin, ContextMixin, MemoryMixin, OutputMixin)
                     if not failed and same_page(before[0], self.state.current_url) and (diff := change_lines(self.state.page_changes)):
                         log.info("  %s", diff.replace("\n", "\n    "))
                         result = f"{result}\n{diff}"
-                    if (name == "click" and not failed and before[0] != self.state.current_url
-                            and not blocking_status(self.state.page_status) and opened_what_asked(self.state.task_text, clicked)):
-                        # "open agents" + clicked "Agents" + a new page opened: that was the whole task.
+                    if (not failed and before[0] != self.state.current_url and not blocking_status(self.state.page_status)
+                            and (opened_what_asked(self.state.task_text, clicked) if name == "click" else
+                                 name == "open_url" and opened_site_asked(self.state.task_text, self.state.current_url,
+                                                                           self.state.current_title, self.state.elements))):
+                        # "open agents" + clicked "Agents" + a new page opened: that was the whole task. So was
+                        # "open youtube" + open_url landing on YouTube.
                         # Asking the AI again only made it doubt and click around (6 extra steps on Asana).
                         opened = self.state.current_title or self.state.current_url
                         self.state.seen.append(opened)

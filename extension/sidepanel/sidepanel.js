@@ -527,7 +527,8 @@ function callBlock(c) {
   const box = el("details");
   if (c.status !== "ok") box.className = "failed";
   const where = c.purpose === "planner" || c.purpose === "router" ? c.purpose : `step ${c.step}`;
-  const tokens = c.status === "ok" ? `${fmtN(c.prompt_tokens)} in / ${fmtN(c.completion_tokens)} out` : c.status;
+  const cached = c.cached_tokens ? ` (${fmtN(c.cached_tokens)} cached)` : "";
+  const tokens = c.status === "ok" ? `${fmtN(c.prompt_tokens)} in${cached} / ${fmtN(c.completion_tokens)} out` : c.status;
   box.append(el("summary", `#${c.seq} ${where} · ${c.model.split(":")[1] || c.model} · ${tokens} · ${(c.duration_ms / 1000).toFixed(1)}s`));
   if (c.error) box.append(el("div", c.error, "muted"));
   if (!c.request) {
@@ -570,6 +571,7 @@ function showReport(msg) {
     [fmtN(t.completion_tokens), "tokens received"],
     [fmtN(t.total_tokens), "tokens total"],
     [fmtN(t.reasoning_tokens), "of received: reasoning"],
+    [fmtN(t.cached_tokens || 0), "of sent: from the provider's cache"],
     [`${(t.duration_ms / 1000).toFixed(1)}s`, "waiting for models"],
   ].forEach(([v, label]) => {
     const card = el("div", null, "report-card");

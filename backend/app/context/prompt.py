@@ -52,6 +52,9 @@ MOUSE = """- Menus that open on mouse-over: hover.
 # look: inspect
 LOOK = """- Similar elements, no clue which goes with which (repeated "Add to cart"): inspect with filter="all" and ref=the element to see the heading/price around it."""
 
+# media: the video tool
+MEDIA = """- A video's play, pause, speed, jump to a time or mute: call video – it sets the player directly and is checked. Don't click through the player's own buttons or its settings menu for these, even if your plan says to."""
+
 # lists: get_records (a structured-view line, so it is only sent with the structured view)
 RECORDS = """- "(+N more items in this list … get_records)" = a long list cut short (your task's items are kept): call get_records with a search word, or start=, for the rest – don't scroll, and don't confuse it with the site's own next page."""
 
@@ -103,6 +106,7 @@ PAGE_FORMAT = """Reading the page view – the page as laid out, top to bottom, 
 BY_GROUP = {"forms": FORMS, "tabs": TABS, "sheets": SHEETS, "mouse": MOUSE, "look": LOOK}
 if STRUCTURED_VIEW:
     BY_GROUP["lists"] = RECORDS
+BY_GROUP["media"] = MEDIA
 # Always sent: the start of the "Rules:" list (CORE has the heading, the rest continue it).
 ALWAYS = [CORE, NAVIGATION, DROPDOWNS, LISTS, ANSWERS]
 
