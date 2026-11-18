@@ -98,6 +98,21 @@ def check(name, args, elements, last_typed_line="", url=""):
     return None
 
 
+# "Add to cart"-type buttons: a second one in the same task may put the item in the cart twice.
+ADD_TO_CART = r"add to (cart|bag|basket|trolley)"
+
+
+def cart_again(name, args, elements, actions):
+    """A reason to ask the user when this click would add to the cart AGAIN: an earlier click in this
+    task (actions = state.actions, successful steps only) already pressed an "Add to cart" button. The
+    first add is free (the task asked for it); a page that answers late made the AI click again and add
+    the item twice. → 'Adding to cart again' or None."""
+    if name != "click" or not _find(ADD_TO_CART, visible_text(element_line(elements, args.get("element")))):
+        return None
+    done = any(op == "click" and re.search(ADD_TO_CART, str(result), re.I) for op, _, result in actions)
+    return "Adding to cart again (it was already added in this task)" if done else None
+
+
 def _enter_risk(elements, typed_line, target=None):
     """Enter sends the field's form. `target` (from the page, if it could tell): the field, its form's
     default button and whether that form has a password box – judged like clicking that button."""

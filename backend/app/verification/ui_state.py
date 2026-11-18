@@ -44,3 +44,22 @@ def check_ui_state(state):
         f"REJECTED – not sent to the user. The page is showing: \"{problems}\". Make sure this "
         "isn't an error before calling done – read it, fix the problem, or call ask_user."
     )
+
+
+TOAST_MAX = 300  # characters of one toast/popup message kept in the page's status
+
+
+def toast_problems(changes):
+    """Problem messages in the text an action brought (content.js watchDiff "texts"): a toast or popup such
+    as Amazon's "Sorry, there was a problem … limit of 1 per customer". They are often not live regions, so
+    the page's status never shows them. → list of messages (each cut to TOAST_MAX), maybe empty."""
+    texts = (((changes or {}) if isinstance(changes, dict) else {}).get("texts") or {}).get("shown") or []
+    return [t if len(t) <= TOAST_MAX else t[:TOAST_MAX] + "…" for t in texts if is_problem(t)]
+
+
+def add_toasts(status, changes):
+    """The page's status with the action's problem toasts added, so check_ui_state sees them before a done."""
+    toasts = [t.replace(" | ", " – ") for t in toast_problems(changes)]  # one message, not split at " | "
+    toasts = [t for t in toasts if t not in (status or "")]
+    return " | ".join(part for part in [status or "", *toasts] if part)
+

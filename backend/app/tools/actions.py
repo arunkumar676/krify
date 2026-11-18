@@ -21,6 +21,7 @@ from app.tools import sheets
 from app.tools.describe import describe
 from app.tools.ops import ACTION_OPS, ELEMENT_FIELDS, MAX_BATCH, uses_element
 from app.verification.changes import change_lines, click_result, same_page
+from app.verification.ui_state import add_toasts
 
 log = logging.getLogger("krify")
 
@@ -88,7 +89,7 @@ class ToolsMixin:
         if refusal := required_empty(self.state, name, args):
             await self.ui("step", "📝 Required fields still empty – filling those first")
             return refusal, "refused"
-        reason = safety.check(name, args, self.state.elements, self.state.last_typed_line, self.state.current_url)
+        reason = safety.check(name, args, self.state.elements, self.state.last_typed_line, self.state.current_url)             or safety.cart_again(name, args, self.state.elements, self.state.actions)
         if reason == "Editing" and self.state.edit_allowed:
             reason = None  # editing this document was already allowed in this task
         if reason and not await self.ask_permission(reason, name, args):
@@ -150,6 +151,7 @@ class ToolsMixin:
             if not result.startswith("Error") and same_page(before[0], self.state.current_url) and (diff := change_lines(self.state.page_changes)):
                 log.info("  %s", diff.replace("\n", "\n    "))
                 result = f"{result}\n{diff}"
+                self.state.page_status = add_toasts(self.state.page_status, self.state.page_changes)
             if not_sent := form_not_sent(op, args, label, self.state.page_status):
                 report.append(f"{n}. {result}{not_sent} – stopped here.")
                 break

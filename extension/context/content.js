@@ -1426,6 +1426,7 @@ if (!window.__krify) {
 
   let clickedButton = null; // the element Krify just clicked, while settle() may still wait for it
   const BUSY_WAIT_MS = 8000;
+  const LATE_MS = 2000; // how long a page may take to show an action's result (see getPageModel)
 
   // ---------- what changed since the last look (the AI gets + / - / ~ lines) ----------
   // After every page model the watch starts over: it remembers each numbered element's line (by the
@@ -1815,7 +1816,7 @@ if (!window.__krify) {
     const h1 = deepAll("h1, [role=heading][aria-level='1']").find(isRendered);
     const results = window === top ? resultCount() : "";
     const changes = start === 0 ? watchDiff(elements) : null;
-    if (start === 0) watchRestart(elements);
+    if (start === 0 && restart) watchRestart(elements);
     return {
       changes,
       page: {
@@ -2305,8 +2306,25 @@ if (!window.__krify) {
 
     // The whole page as structured data (sections → cards → elements, with accessibility states):
     // see buildPageModel(). The server (pageview.py) decides how much of it the AI sees.
-    getPageModel(start = 0, max = MODEL_MAX) {
-      return buildPageModel(start, max);
+    // After an action that shows no change YET, give the page up to LATE_MS to answer before saying
+    // "nothing changed": shops update a cart count or open an "Added to cart" panel a moment after the
+    // click (Amazon ~1 s), and the AI would otherwise click again. A change that's already there costs
+    // no wait; a click that really does nothing costs LATE_MS.
+    async getPageModel(start = 0, max = MODEL_MAX) {
+      const acted = start === 0 && watch.snap && watch.marked && watch.marked !== "scroll";
+      if (!acted) return buildPageModel(start, max);
+      const none = (c) => c && ["added", "changed", "removed", "texts"].every((k) => !c[k]?.shown?.length);
+      const until = Date.now() + LATE_MS;
+      let model = buildPageModel(start, max, false);
+      while (none(model.changes) && Date.now() < until) {
+        const seen = watch.after.size;
+        while (watch.after.size === seen && Date.now() < until) await sleep(150);
+        if (watch.after.size === seen) break; // nothing moved at all: it really did nothing
+        await sleep(300); // let the change finish (a count, then the panel around it)
+        model = buildPageModel(start, max, false);
+      }
+      watchRestart(model.elements);
+      return model;
     },
 
     // Krify is about to act: page changes from now on are the action's (see watchDiff).
@@ -3269,8 +3287,23 @@ if (!window.__krify) {
     const start = Date.now();
     let disabledSince = null;
     let why = "hidden";
+    let rescrolls = 0; // "off screen" after bringIntoView: a smooth scroll the page cut short, a lazy list
     while (Date.now() - start < timeoutMs) {
       if (!el.isConnected) throw new Error(`[${id}] was removed from the page while waiting – get the elements again.`);
+      // Its middle is outside the window (bringIntoView's smooth scroll was cut short by the page, a lazy
+      // list moved it): scroll there ourselves, instantly, up to twice – the AI can't aim a scroll better.
+      const t = target.getBoundingClientRect();
+      const cx = t.left + t.width / 2, cy = t.top + t.height / 2;
+      if (rescrolls < 2 && (t.width || t.height) && (cy < 0 || cy > innerHeight || cx < 0 || cx > innerWidth)) {
+        rescrolls++;
+        target.scrollIntoView({ block: "center", inline: "nearest", behavior: "instant" });
+        const n = target.getBoundingClientRect();
+        if (n.top + n.height / 2 < 0 || n.top + n.height / 2 > innerHeight) {
+          window.scrollBy({ top: n.top + n.height / 2 - innerHeight / 2, behavior: "instant" });
+        }
+        await waitStable(target, 400);
+        continue;
+      }
       // Disabled: give it a moment (it may enable itself after the last input), then say so plainly.
       if (isDisabled(el)) {
         disabledSince ??= Date.now();
