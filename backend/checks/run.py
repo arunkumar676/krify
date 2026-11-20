@@ -20,9 +20,13 @@ JOBS = [  # (name, module, extra env)
     ("replay_sv1", "checks.replay", {"STRUCTURED_VIEW": "1"}),
     ("replay_sv0", "checks.replay", {"STRUCTURED_VIEW": "0"}),
     ("tokens", "checks.tokens", {"STRUCTURED_VIEW": "1"}),  # what each scenario costs to send
+    # VIEW_MODE=hybrid (context/delta.py): the same scenarios plus the hybrid-only ones, and what they cost
+    ("replay_hybrid", "checks.replay", {"STRUCTURED_VIEW": "1", "VIEW_MODE": "hybrid"}),
+    ("tokens_hybrid", "checks.tokens", {"STRUCTURED_VIEW": "1", "VIEW_MODE": "hybrid"}),
 ]
 ASSERT_JOBS = [("llm_report", "checks.llm_report_check"),
-               ("prompt_groups", "checks.prompt_check")]  # must exit 0; no golden file
+               ("prompt_groups", "checks.prompt_check"),
+               ("view_delta", "checks.delta_check")]  # must exit 0; no golden file
 
 
 def main():

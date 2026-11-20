@@ -21,6 +21,7 @@ from openai.types.chat import ChatCompletionMessage
 import app.llm.client as client
 
 VERBOSE = os.getenv("REPLAY_VERBOSE") == "1"
+HYBRID = os.getenv("VIEW_MODE") == "hybrid"  # the hybrid-only scenarios run, and hybrid's fields are printed
 SCENARIO = None  # the Scenario being run
 
 
@@ -165,6 +166,16 @@ def pages():
         "cartwarn": {"url": "https://www.amazon.in/gp/cart/view.html", "title": "Amazon.in Shopping Cart",
                      "model": fixture("amazon_search", status=f"{BANNER} | Payment failed – try another card"),
                      "text": "Shopping Cart. 1 item. Subtotal ₹699."},
+        # Same address as another page, a few lines different (VIEW_MODE=hybrid scenarios).
+        "formnum": {"url": "https://crm.example/activities/new", "title": "Add Activity",
+                    "model": fixture("add_activity_form", status="Draft saved – reference 987654"),
+                    "text": "Add Activity. Draft saved, reference 987654."},
+        "form2": {"url": "https://crm.example/activities/new", "title": "Add Activity", "model": fixture("login_dialog"),
+                  "text": "Sign in."},
+        "fullshop_b": {"url": "https://www.amazon.in/s?k=wireless+mouse", "title": "Amazon.in : wireless mouse",
+                       "model": fixture("amazon_search", full=True, status=BANNER), "text": SHOP_TEXT},
+        "fullshop_c": {"url": "https://www.amazon.in/s?k=wireless+mouse", "title": "Amazon.in : wireless mouse",
+                       "model": fixture("login_dialog", full=True), "text": "Sign in. Enter a valid email address."},
         "sheet": {"url": "https://docs.google.com/spreadsheets/d/abc/edit#gid=0", "title": "Students - Google Sheets",
                   "model": fixture("clickable_rows"), "text": "", "csv": CSV},
     }
@@ -797,16 +808,93 @@ def topics_from_task():
     ])
 
 
+def hybrid_scenario(fn):
+    """Only run with VIEW_MODE=hybrid, so the other golden files stay byte-identical."""
+    if HYBRID:
+        SCENARIOS.append(fn)
+    return fn
+
+
+@hybrid_scenario
+def hybrid_delta_and_stale_number():
+    """A click changes a few lines of the same page: the AI gets those lines, not the page. Then it clicks a
+    number whose label is not that element's: refused, like with a full view. A repeat that changes nothing
+    is "unchanged"; going back to the first view says the earlier changes no longer apply."""
+    return Scenario("hybrid_delta_and_stale_number", "form", ["add the activity form now please"], plans=[""],
+                    moves={("click", 3): "formerr", ("click", 1): "form"}, replies=[
+        tool("click", element=3, label="Add Activity"),
+        tool("click", element=3, label="Save Activity"),  # [3] is "Add Activity": stale/wrong label
+        tool("click", element=3, label="Add Activity"),  # same page again: unchanged
+        tool("click", element=1, label="Search subject, contact"),  # back to the first view
+        tool("done", summary="The form is open."),
+    ])
+
+
+@hybrid_scenario
+def hybrid_unseen_number():
+    """A number shown only on a page in the middle of a batch is never sent to the AI: citing it in the answer
+    fails the fact check (in full mode every page view counts as read, so it would pass)."""
+    return Scenario("hybrid_unseen_number", "form", ["try the activity form now please"], plans=[""],
+                    moves={("click", 3): "formnum", ("click", 1): "form"}, replies=[
+        tool("batch", steps=[{"op": "click", "element": 3, "label": "Add Activity"},
+                             {"op": "click", "element": 1, "label": "Search subject, contact"}]),
+        tool("done", summary="The draft was saved with reference 987654."),
+        tool("done", summary="The activity form is open again."),
+    ])
+
+
+@hybrid_scenario
+def hybrid_layout_moved_in_batch():
+    """A batch whose first step swaps the page for a different layout: the rest is skipped and the AI gets the
+    whole new page, not a delta."""
+    return Scenario("hybrid_layout_moved_in_batch", "form", ["try the activity form now please"], plans=[""],
+                    moves={("click", 3): "form2"}, replies=[
+        tool("batch", steps=[{"op": "click", "element": 3, "label": "Add Activity"},
+                             {"op": "click", "element": 1, "label": "Search subject, contact"}]),
+        tool("done", summary="A sign-in box opened."),
+        tool("done", summary="A sign-in box opened."),
+    ])
+
+
+@hybrid_scenario
+def hybrid_page_text_once():
+    """Unrestricted mode: the page's text comes with the first view of the page; the next view of the same page
+    says so instead of repeating it – a small change is a delta, and a big one (a different layout at the same
+    address) is the whole view with that line in place of the text."""
+    return Scenario("hybrid_page_text_once", "fullshop", ["what is on this page please"], plans=[""],
+                    moves={("click", 7): "fullshop_b", ("click", 1): "fullshop_c"}, replies=[
+        tool("click", element=7, label="Fresh"),
+        tool("click", element=1, label="Amazon.in"),
+        tool("done", summary="A sign-in box opened."),
+        tool("done", summary="A sign-in box opened."),
+    ])
+
+
+@hybrid_scenario
+def hybrid_deltas_then_refresh():
+    """After MAX_DELTAS views in a row sent as changed lines, the next one is the whole page again."""
+    flips = [tool("click", element=3, label="Add Activity"), tool("click", element=2, label="Dummy"),
+             tool("click", element=3, label="Add Activity"), tool("click", element=2, label="Dummy"),
+             tool("click", element=3, label="Add Activity")]
+    return Scenario("hybrid_deltas_then_refresh", "form", ["try the activity form now please"], plans=[""],
+                    moves={("click", 3): "formerr", ("click", 2): "formnum"},
+                    replies=flips + [tool("done", summary="The form shows errors.")] * 2)
+
+
 # ---------- running ----------
 
-SKIP = {"browser", "ui", "confirm", "plan_review", "messages", "page_views", "screen_reads", "state", "kept"}
+# What VIEW_MODE=hybrid adds to Agent/TaskState: with it off these don't exist as far as the golden files go, so
+# they stay byte-identical. Transient bulk (the last full view, the delta messages) is never printed.
+HYBRID_FIELDS = {"view_url", "deltas", "last_header", "text_urls"}
+SKIP = {"browser", "ui", "confirm", "plan_review", "messages", "page_views", "screen_reads", "state", "kept",
+        "view_base", "delta_msgs", "pending_seen"} | (set() if HYBRID else HYBRID_FIELDS)
 
 
 def fields(agent):
     """Every Agent field, with TaskState's fields (if any) flattened in – the same set either way."""
     out = {k: v for k, v in vars(agent).items() if k not in SKIP}
     if (state := getattr(agent, "state", None)) is not None:
-        out.update({f.name: getattr(state, f.name) for f in dataclasses.fields(state)})
+        out.update({f.name: getattr(state, f.name) for f in dataclasses.fields(state) if f.name not in SKIP})
     out["_page_views"] = [t for _, t in agent.page_views]
     out["_screen_reads"] = list(agent.screen_reads)
     out["_kept"] = [t for _, t in agent.kept]

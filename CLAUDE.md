@@ -211,6 +211,18 @@ Key mechanics worth knowing before touching the loop (they live in the layer mod
   `reads_as_answer()` says it is a statement (→ done). "I will…/Let me…/Next…", `[n]` and code-like text are always
   asked again. **Known gap (pinned by `checks/replay.py`)**: plain-text replies skip the plan-approval gate (only
   matters after an Update, since an Approve/Reject happens before the first agent call).
+- **View mode (`VIEW_MODE`, default `full`)**: `hybrid` sends a page that differs from the last *full* view in a few lines as
+  just those lines (`context/delta.py`, used by `add_with_page` in `memory/transcript.py`): `[Page unchanged…]`, a
+  `[Layout unchanged – only the lines below differ…]` delta, or `[The page is back to the last full page view…]`. The AI keeps
+  holding that full view, and each delta is against it (a newer delta supersedes the older ones). Element numbers are
+  re-assigned from scratch every view, so the delta checks itself: a shifted number changes many lines, the diff is too big,
+  and the full view goes out instead. Always full: first view of a task, address changed, a pop-up opened/closed, a failed step
+  or stopped batch, an explicit `get_elements`, and after `MAX_DELTAS` deltas in a row. Also in hybrid: the Unrestricted
+  `[Page text]` goes out once per address (`state.text_urls`), and `state.seen` (the fact check) only gets what the AI was
+  actually sent (`pending_seen` → `count_seen`), so a number on a page that was never sent can't pass the fact check.
+  Off by default because it doesn't shrink a request (the full view stays in it): it mainly keeps the chat prefix stable for
+  provider prompt caching. `checks/run.py` runs the replay/tokens jobs once more with it on (`replay_hybrid`, `tokens_hybrid`,
+  incl. hybrid-only scenarios) and `checks/delta_check.py` asserts the delta rules.
 - **Navigation waits for the page to settle**: `open_url`, `go_back`, `reload` and `new_tab` use `waitForPage`
   (`extension/tools/operations.js`): tab loaded, then `settle` until the DOM is quiet (≤3 s). Without it the first view
   of a site that fills itself in after loading (YouTube) was half-built and the next step was refused as "changed".

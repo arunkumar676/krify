@@ -2,8 +2,9 @@
 
 import re
 
-from app.config import STRUCTURED_VIEW
+from app.config import STRUCTURED_VIEW, VIEW_MODE
 from app.context import pageview
+from app.context.delta import PAGE_TEXT_REPEAT
 from app.context.element_list import ambiguity_hint
 from app.context.sites import is_sheet
 from app.context.understand import understand
@@ -14,6 +15,8 @@ SHEET_HINT = "[Google Sheet] Call read_text first to see the columns, then sheet
 PAGE_TEXT = ("\n[Page text] Unrestricted mode: all text on the page, top to bottom (paragraphs, tables, "
              "details) – no need to call read_text for this page.\n{}")
 
+HYBRID = VIEW_MODE == "hybrid"  # the Unrestricted page text goes out once per page, not with every view
+
 _STATUS_LINE = re.compile(r"^\[Status\] (.*)$", re.MULTILINE)
 
 
@@ -23,13 +26,14 @@ class ContextMixin:
     Mixed into Agent (agent/loop.py): uses its connection (browser, ui, confirm, messages, …), its
     TaskState (self.state) and the other layers' methods through self."""
 
-    async def look(self):
+    async def look(self, skip_text=()):
         """Read the page and render the view the AI gets, WITHOUT touching any agent state – so the
         side panel's "AI view" button can show it any time. → (view text, page info, flat element
         list, status line, hint, the bare view without hint/header lines, the open dropdown list
         (field name, [option labels]) or None, the form checklist or None, Unrestricted on?).
         Structured (sections → items → elements, see pageview.py) or the old flat element list,
-        depending on STRUCTURED_VIEW."""
+        depending on STRUCTURED_VIEW. skip_text: addresses whose Unrestricted page text the AI already
+        has – the view says so instead of repeating it."""
         info = await self.browser("get_page_info", {})
         open_list = form = None
         full = inline_text = False
@@ -48,7 +52,9 @@ class ContextMixin:
         # Unrestricted mode it's sent too, uncut. Not on Sheets: their text is a canvas, read as CSV.
         text = f"{shown}\n{hint}" if hint else shown
         # (Not needed when the extension already sent the text among the elements – inline_text.)
-        if full and not inline_text and not is_sheet(info.get("url", "")):
+        if full and not inline_text and not is_sheet(info.get("url", "")) and info.get("url", "") in skip_text:
+            text += PAGE_TEXT_REPEAT  # nothing was read now, so it isn't added to `shown` (the fact check's)
+        elif full and not inline_text and not is_sheet(info.get("url", "")):
             page_text = await self.browser_quiet("read_text", {"scope": "page"})
             if isinstance(page_text, str) and not page_text.startswith("(no text"):
                 page_text = pageview.clean_page_text(page_text, shown)  # not what the view already says
@@ -65,16 +71,18 @@ class ContextMixin:
         """The page view for the next message, recording what the safety/fact checks need."""
         try:
             (text, info, elements, self.state.page_status, hint, shown, self.state.open_list, self.state.form,
-             self.state.unrestricted) = await self.look()
+             self.state.unrestricted) = await self.look(self.state.text_urls if HYBRID else ())
         except Exception as err:
             return f"[Current page] (can't read it: {err})"
         # The safety and fact checks get the flat list of EVERY collected element, never just the
         # shortened view; item lines (titles, prices) count as read for the fact check.
-        if STRUCTURED_VIEW:
-            self.state.seen.append(shown)
+        read = ([shown] if STRUCTURED_VIEW else []) + [elements]
+        if HYBRID:  # counted as read only once (and as far as) the AI is sent it: add_with_page → count_seen
+            self.pending_seen = (text, read)
+        else:
+            self.state.seen.extend(read)
         self.state.elements = elements
         self.state.view_text = text
-        self.state.seen.append(elements)
         self.state.current_url = info.get("url", "")
         self.state.current_title = str(info.get("title") or "")
         if hint:

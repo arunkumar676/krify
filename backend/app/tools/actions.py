@@ -174,7 +174,9 @@ class ToolsMixin:
                 report.append("Only the first 5 steps were done.")
         if not steps:
             report.append("No steps given.")
-        self.add_with_page(tool_msg, "\n".join(report), page or await self.page_view())
+        # A step that failed or stopped the batch: the AI gets the whole page, not just the changed lines.
+        rough = any(" – stopped here." in r or "FAILED" in r or r.startswith(("Stopped", "Only the first")) for r in report)
+        self.add_with_page(tool_msg, "\n".join(report), page or await self.page_view(), full=rough)
         return ran
 
     async def live_cell(self, ref):

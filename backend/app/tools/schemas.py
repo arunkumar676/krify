@@ -17,7 +17,7 @@ URL = {"type": "string", "description": "Full URL"}
 TEXT = {"type": "string"}
 # Sent with every element number: Krify checks [element] still is that element (numbers change with
 # every page view) and refuses the step if it's something else now.
-LABEL = {"type": "string", "description": "Its quoted text in the latest view"}
+LABEL = {"type": "string", "description": "Its quoted text"}
 
 TOOLS = [
     _tool("read_text", "Read on-screen text (prices, facts). scope=page: more than one screen (from the current "
@@ -27,12 +27,12 @@ TOOLS = [
           "ref=one element's area; filter=\"all\" adds non-clickable context.",
           {"ref": ELEMENT, "filter": {"type": "string", "enum": ["interactive", "all"]},
            "depth": {"type": "integer"}}),
-    _tool("find_elements", "Find an element by its visible text when it's not in the list. Matches synonyms "
-          "(\"sign out\" finds \"Logout\"); if nothing matches, try another word. Returns [id] lines "
-          "you can click/type on.",
+    _tool("find_elements", "Find an element by its visible text when it isn't listed. Matches synonyms "
+          "(\"sign out\" finds \"Logout\"); none found: try another word. Returns [id] lines "
+          "to click/type on.",
           {"query": TEXT}, ["query"]),
-    _tool("find_text", "Search the WHOLE page for a phrase/fact (any text, no length limit), jump to it "
-          "and read around it; you get the page view there too. Same query again = the next match.",
+    _tool("find_text", "Search the WHOLE page for a phrase/fact, jump to it and read around it "
+          "(the page view there comes too). Same query again = the next match.",
           {"query": TEXT}, ["query"]),
     _tool("sheet_query", "Google Sheets: one SQL SELECT (DuckDB) on table sheet; quote column names, e.g. "
           "SELECT \"First Name\", \"Math Score\" FROM sheet WHERE \"Math Score\" = (SELECT MAX(\"Math Score\") FROM sheet)",

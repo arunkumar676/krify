@@ -97,6 +97,13 @@ class Agent(ToolsMixin, GuardrailsMixin, ContextMixin, MemoryMixin, OutputMixin)
         self.messages = [{"role": "system", "content": system_prompt()}]
         self.page_views = []  # (message, text_before_page_view) – trimmed later to save tokens
         self.last_page = None
+        # VIEW_MODE=hybrid (context/delta.py, memory/transcript.py forget_view): what a small page change is measured from
+        self.view_base = None  # the last FULL page view sent
+        self.view_url = ""  # the address it was of
+        self.deltas = 0  # views since then sent as changed lines only
+        self.delta_msgs = []  # the messages that carried them
+        self.last_header = None  # the [Your task]/[Your notes] header the AI last got
+        self.pending_seen = None  # (page, texts) of the last page view: counted as read once it is sent
         self.screen_reads = {}  # site -> its newest read_text result (older ones are trimmed)
         self.notes_at_last_read = 0  # len(state.notes) as of the last screen read – for the unnoted-read nudge
         self.kept = []  # (message, its full text): newest fact results kept in full (memory/transcript.py)
@@ -428,7 +435,7 @@ class Agent(ToolsMixin, GuardrailsMixin, ContextMixin, MemoryMixin, OutputMixin)
                         self.trace.append(f"{label} → {preview(str(result))}")
                     if name == "get_elements":
                         self.state.elements = str(result)
-                        self.add_with_page(tool_msg, "Elements:", result)
+                        self.add_with_page(tool_msg, "Elements:", result, full=True)  # an explicit refresh
                     elif name == "find_elements":
                         self.state.elements = merge_elements(self.state.elements, str(result))
                         self.messages.append({**tool_msg, "content": str(result)})
@@ -517,7 +524,7 @@ class Agent(ToolsMixin, GuardrailsMixin, ContextMixin, MemoryMixin, OutputMixin)
                     if more:
                         batch_stopped = BATCH_LIMIT if actions_done >= MAX_BATCH else (STEP_FAILED if failed else PAGE_MOVED)
                     # Show the AI the page after the last action, so it can check the result.
-                    self.add_with_page(tool_msg, result, page)
+                    self.add_with_page(tool_msg, result, page, full=failed)
                     if self.state.loop_question:
                         await self.stop_looping()
                         finished = True

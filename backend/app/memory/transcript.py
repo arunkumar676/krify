@@ -2,11 +2,16 @@
 screen read per site and the newest few fact results stay in full; older tool results shrink to one line,
 and earlier tasks to a short digest."""
 
+from app.config import VIEW_MODE
+from app.context.delta import MAX_DELTAS, PAGE_TEXT_FULL, REVERTED, UNCHANGED, same_view, view_delta
 from app.context.header import header
 from app.context.sites import site_of
 
+HYBRID = VIEW_MODE == "hybrid"  # context/delta.py: a small page change is sent as its changed lines
+
 OLD_PAGE = "\n[older page view removed to save space]"
 OLD_SCREEN = "[older screen text removed to save space – use your notes]"
+OLD_DELTA = " […] [newer changes below]"  # an earlier delta, replaced by the next one (which also holds its lines)
 MAX_READ_SITES = 3  # newest page text is kept for this many sites
 BRIEF_CHARS = 160  # an older tool result keeps its first line, at most this long
 TRIMMED = " […]"  # marks a result that was cut short
@@ -76,6 +81,16 @@ class MemoryMixin:
         self.kept = []
         self.view_at = None
         self.past = []
+        self.forget_view()
+
+    def forget_view(self):
+        """Nothing sent so far counts as the AI's last full view: the next page view goes out in full."""
+        self.view_base = None  # the last FULL page view sent: what a delta is the difference from
+        self.view_url = ""
+        self.deltas = 0  # views since then sent as a delta
+        self.delta_msgs = []  # the messages that carried them
+        self.last_header = None  # the header the AI last got (hybrid sends it again only when it changed)
+        self.pending_seen = None  # (page, [texts]) from the last page_view(), counted as read once it is sent
 
     def forget_old_tasks(self):
         """A new task: the earlier tasks' messages become one digest message, so a request costs what this
@@ -85,6 +100,7 @@ class MemoryMixin:
             self.messages.append({"role": "user", "content": digest(self.past)})
         self.page_views = []
         self.last_page = None  # the first page view of the task is always sent in full
+        self.forget_view()
         self.screen_reads = {}
         self.kept = []
         self.view_at = None
@@ -143,8 +159,55 @@ class MemoryMixin:
                         self.messages.append({"role": "tool", "tool_call_id": call["id"], "content": "Stopped by the user."})
                 break
 
-    def add_with_page(self, message, text, page):
-        """Add a message that ends with a page view. Only the newest page view is kept in full."""
+    def add_with_page(self, message, text, page, full=False):
+        """Add a message that ends with a page view. Only the newest page view is kept in full.
+        VIEW_MODE=hybrid: a page that differs from the last full view in a few lines is sent as those
+        lines (context/delta.py) – unless `full` (a failed step, an explicit refresh), the address changed,
+        or MAX_DELTAS views in a row went out as deltas."""
+        if not HYBRID:
+            return self._add_page(message, text, page)
+        header_now = header(self.state)
+        resend = header_now != self.last_header  # the AI still holds the one it was sent last
+        delta = None
+        if self.last_page is not None and same_view(page, self.last_page):
+            delta = UNCHANGED
+        elif (not full and self.view_base is not None and self.deltas < MAX_DELTAS
+                and self.state.current_url == self.view_url):
+            delta = view_delta(self.view_base, page)
+            if delta == UNCHANGED:  # back to the full view the AI holds, after changes it was sent since
+                delta = REVERTED
+        if delta is None:
+            return self._add_page(message, text, page)
+        head = f"\n\n{header_now}" if resend else ""
+        self.last_header = header_now
+        message["content"] = f"{text}{head}\n{delta}"
+        if delta != UNCHANGED:
+            spared = {id(m) for m, _ in self.kept}
+            for old in self.delta_msgs:  # a new delta holds the earlier ones' lines too (same view), a revert voids them
+                if id(old) not in spared and not old["content"].endswith(OLD_DELTA):
+                    old["content"] = brief(old["content"]).removesuffix(TRIMMED) + OLD_DELTA
+            self.last_page = page
+            if delta == REVERTED:
+                self.delta_msgs = []
+            else:
+                self.delta_msgs.append(message)
+                self.deltas += 1
+                self.count_seen(page, delta)
+        self.messages.append(message)
+
+    def count_seen(self, page, sent):
+        """Hybrid: the fact check counts as read what the AI was sent – the full view (what page_view() collected,
+        its flat element list included), or just the delta's lines. A page view that was never sent
+        (a step in the middle of a batch) counts for nothing."""
+        pending, self.pending_seen = self.pending_seen, None
+        if sent is None:
+            if pending and pending[0] == page:
+                self.state.seen.extend(pending[1])
+        else:
+            self.state.seen.append(sent)
+
+    def _add_page(self, message, text, page):
+        """The whole page view goes out: older ones shrink, and this one becomes the one a delta is against."""
         if page == self.last_page:  # nothing changed: don't send the same list again
             message["content"] = f"{text}\n\n{header(self.state)}\n[Page unchanged since the last view.]"
             self.messages.append(message)
@@ -165,3 +228,9 @@ class MemoryMixin:
         self.view_at = len(self.messages) - 1
         self.page_views = [(message, text)]
         self.last_page = page
+        if HYBRID:
+            self.view_base, self.view_url, self.deltas, self.delta_msgs = page, self.state.current_url, 0, []
+            self.last_header = header(self.state)
+            self.count_seen(page, None)
+            if PAGE_TEXT_FULL in page:  # this page's text went out with the view: later views of it only say so
+                self.state.text_urls.add(self.state.current_url)

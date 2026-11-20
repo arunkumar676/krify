@@ -27,6 +27,7 @@ class TaskState:
     actions: list = field(default_factory=list)  # (op, args, result) that really ran – checked against "I have …" claims
     form_edit: dict | None = None  # {url, name}: a form Krify started filling and hasn't submitted yet
     leave_warned: set = field(default_factory=set)  # steps that would leave that form, refused once already
+    text_urls: set = field(default_factory=set)  # addresses whose Unrestricted page text the AI got (VIEW_MODE=hybrid)
 
     # ---- This run: reset every time the user sends a message.
     turn_start: int = 0  # len(actions) when the user's latest message came in
@@ -77,6 +78,7 @@ class TaskState:
             self.actions = []
             self.seen = [task]  # numbers the user gave count as known
             self.form_edit, self.leave_warned = None, set()
+            self.text_urls = set()
         self.idle_steps = 0
         self.last_read = ""
         self.note_warnings = set()

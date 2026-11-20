@@ -53,6 +53,11 @@ MAX_STEPS = int(os.getenv("MAX_STEPS", "25"))  # safety limit per task
 # Structured page view (sections → items → elements with states, built by agent/pageview.py from
 # the extension's get_page_model). 0 = the old flat element list (get_elements).
 STRUCTURED_VIEW = os.getenv("STRUCTURED_VIEW", "1") == "1"
+# How much of the page the AI is sent after a step (context/delta.py, memory/transcript.py add_with_page):
+# "full" = the whole view whenever the page changed at all; "hybrid" = only the changed lines when the page
+# changed a little (the full view otherwise), the Unrestricted page text once per page instead of every step,
+# and `state.seen` (what the fact check counts as read) only holds what the AI was actually sent.
+VIEW_MODE = os.getenv("VIEW_MODE", "full").strip().lower()
 # Cheap-model gate in front of the agent (context/router.py): one small tool-less call decides whether
 # the message needs the browser agent; if not (chat, general knowledge) the cheap model answers itself.
 # 0 = every message goes straight to the agent. ROUTER_MODEL picks the cheap model (default: the first
