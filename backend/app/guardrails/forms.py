@@ -17,12 +17,11 @@ FORM_NOT_SENT = ("\nNOT saved – the form shows errors: {}. Fill those fields (
 # form_not_sent then reports the site's own errors).
 REQUIRED_EMPTY = ("NOT clicked – required fields are still empty: {}. {} If you're sure they're already filled, "
                   "click it again.")
-FILL_ANY = ("This is a dummy/test request: fill each with any real option (or short placeholder text), one field "
-            "at a time, then save. Dropdown: select_option with a likely option – if it isn't there, the reply lists "
-            "the real ones.")
+FILL_ANY = ("This is a dummy/test request: fill each with any real option (or short placeholder text) – all of them "
+            "in one fill_form with submit. Dropdown: a likely option – if it isn't there, the reply lists the real ones.")
 ASK_ONCE = ("Use values from the user's request. For any the request doesn't give, call ask_user ONCE listing all "
             "of them with the options you saw (select_option with a guess lists a dropdown's real options), then fill "
-            "them and save.")
+            "them all in one fill_form with submit.")
 DUMMY = re.compile(r"\b(dummy|test|testing|sample|fake|placeholder|example|random|any)\b", re.I)
 
 

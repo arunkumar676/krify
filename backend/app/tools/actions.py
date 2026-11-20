@@ -1,7 +1,9 @@
 """Running browser actions for the AI: one step with its guards, a batch of steps, Google Sheets reads."""
 
+import asyncio
 import logging
 
+from app.context import pageview
 from app.context.element_list import _line_key, element_label, layout
 from app.context.sites import is_sheet
 from app.guardrails import safety
@@ -19,9 +21,21 @@ from app.guardrails.progress import (
 )
 from app.tools import sheets
 from app.tools.describe import describe
+from app.tools.form_fill import (
+    MAX_FIELDS,
+    WAIT_SECONDS,
+    WAIT_TRIES,
+    after_submit,
+    find_field,
+    form_errors,
+    form_fields,
+    step_for,
+    submit_button,
+    value_ok,
+)
 from app.tools.ops import ACTION_OPS, ELEMENT_FIELDS, MAX_BATCH, uses_element
 from app.verification.changes import change_lines, click_result, same_page
-from app.verification.ui_state import add_toasts
+from app.verification.ui_state import add_toasts, blocking_status
 
 log = logging.getLogger("krify")
 
@@ -180,6 +194,148 @@ class ToolsMixin:
         rough = any(" – stopped here." in r or "FAILED" in r or r.startswith(("Stopped", "Only the first")) for r in report)
         self.add_with_page(tool_msg, "\n".join(report), page or await self.page_view(), full=rough)
         return ran
+
+    async def fill_form(self, tool_msg, args):
+        """The fill_form tool: fill every field the AI listed – no AI call in between – then read the form back
+        and check each one. Only when every check passes (values shown, no required field empty, no error on the
+        page) does it press the form's submit button (the safety Allow/Block prompt still applies), and then
+        it reads the page again: a clear success ends the task with no further AI call (unless then_done is
+        false). Anything else goes back to the AI once, as one short report plus the page.
+        Returns (actions run, task finished)."""
+        items = [i for i in (args.get("fields") or []) if isinstance(i, dict) and str(i.get("field") or "").strip()]
+        items = items[:MAX_FIELDS]
+        submit = args.get("submit")
+        submit_text = submit.strip() if isinstance(submit, str) else ""
+        wants_submit = bool(submit_text) or submit is True
+        if not items:
+            self.messages.append({**tool_msg, "content": "Error: no fields given. fields = [{field: the name shown in "
+                                                         "[Form], value: what to put in it}]."})
+            return 0, False
+        await self.ui("step", f"📝 Filling {len(items)} field{'s' if len(items) != 1 else ''} at once"
+                              + (" and submitting if all is right" if wants_submit else ""))
+        prev, ran, stopped = self.last_page, 0, ""
+        outcome = []  # one dict per field: name, value, id, kind, error
+        for n, item in enumerate(items):
+            name = str(item["field"]).strip()
+            value = "" if item.get("value") is None else str(item["value"]).strip()
+            entry = {"name": name, "value": value, "id": None, "kind": "text", "error": ""}
+            outcome.append(entry)
+            if n:
+                await self.page_view()  # the page after the last step: numbers may have moved
+            taken = {str(o["id"]) for o in outcome if o["id"] is not None}
+            found = find_field(self.state, name, taken)
+            for _ in range(WAIT_TRIES):  # a dropdown that opens only after an earlier choice (State after Country)
+                if not (found and found[1] and found[1].get("disabled")):
+                    break
+                await asyncio.sleep(WAIT_SECONDS)
+                await self.page_view()
+                found = find_field(self.state, name, taken)
+            if not found:
+                entry["error"] = "no field with that name on the page"
+                continue
+            entry["id"], field, entry["kind"] = found
+            if field and field.get("disabled"):
+                entry["error"] = "still disabled (it opens after an earlier field is chosen)"
+                continue
+            op, step = step_for(self.state, entry["id"], field, entry["kind"], value)
+            if op is None:
+                entry["error"] = step
+                continue
+            if op == "skip":
+                continue
+            result, status = await self.do_action(op, step)
+            if status == "blocked":
+                entry["error"] = "blocked by you"
+                stopped = f"Stopped at {name}: blocked by the user – the fields after it were not filled."
+                break
+            if status != "ok" or result.startswith("Error"):
+                entry["error"] = result[:300]
+                continue
+            ran += 1
+
+        # Read the form back and check every field – in code, not by the AI.
+        page = await self.page_view()
+        report, bad = [], 0
+        fresh = {str(f.get("id")): f for f in form_fields(self.state)}
+        for entry in outcome:
+            line = safety.element_line(self.state.elements, entry["id"]) if entry["id"] is not None else ""
+            secret = "password" in line or (fresh.get(str(entry["id"])) or {}).get("value") == "••••"
+            shown_value = "••••" if secret else entry["value"]
+            if entry["error"]:
+                bad += 1
+                report.append(f'✗ {entry["name"]} = "{shown_value}": {entry["error"]}')
+                continue
+            if entry["id"] is None:  # not reached (stopped earlier)
+                bad += 1
+                report.append(f'✗ {entry["name"]}: not filled')
+                continue
+            field = fresh.get(str(entry["id"]))
+            if value_ok(field, entry["kind"], entry["value"], line):
+                report.append(f'✓ {entry["name"]} = "{shown_value}"')
+            else:
+                bad += 1
+                now = "••••" if secret else ((field or {}).get("value") or "")
+                report.append(f'✗ {entry["name"]}: shows "{now}", not "{shown_value}"')
+        missing = pageview.missing_required(self.state.form)
+        problems = blocking_status(self.state.page_status)
+        errors = form_errors(self.state)
+        if missing:
+            report.append(f"Required and still empty: {', '.join(missing)}")
+        if errors or problems:
+            report.append(f"The page shows: {'; '.join(errors) or problems}")
+        all_ok = not stopped and not bad and not missing and not errors and not problems
+        await self.ui("step", f"✅ All {len(outcome)} fields filled and checked" if all_ok
+                      else "📝 Form check:\n" + "\n".join(report))
+        if stopped:
+            report.append(stopped)
+
+        if wants_submit and all_ok:
+            button = submit_button(self.state, submit_text)
+            line = safety.element_line(self.state.elements, button) if button is not None else ""
+            if button is None:
+                named = f' "{submit_text}"' if submit_text else ""
+                report.append(f"Not submitted: no submit button{named} found – click the form's own Save/Submit button.")
+            elif "disabled" in line:
+                report.append(f"Not submitted: [{button}] {line} is disabled – something is still missing.")
+            else:
+                before_url, before_form = self.state.current_url, self.state.form
+                label = element_label(self.state.elements, button)
+                result, status = await self.do_action("click", {"element": button, "label": label})
+                if status != "ok" or result.startswith("Error"):
+                    report.append(f'Not submitted ("{label}"): {result[:300]}')
+                else:
+                    ran += 1
+                    page = await self.page_view()
+                    self.state.page_status = add_toasts(self.state.page_status, self.state.page_changes)
+                    verdict, said = after_submit(before_url, before_form, self.state, blocking_status(self.state.page_status))
+                    if diff := change_lines(self.state.page_changes):
+                        result = f"{result}\n{diff}"
+                    if verdict == "ok" and args.get("then_done", True) is not False:
+                        name = (before_form or {}).get("name") or label
+                        summary = (f'Done – filled {len(outcome)} field{"s" if len(outcome) != 1 else ""} and submitted '
+                                   f'"{name}".' + (f' The page says: "{said}"' if said else ""))
+                        self.messages.append({**tool_msg, "content": "\n".join(report) + f"\nSubmitted with \"{label}\" – "
+                                                                     "the page confirms it. The task is finished."})
+                        check_progress(self.state, "fill_form", True)
+                        await self.finish("done", summary, verify=False)
+                        return ran, True
+                    if verdict == "ok":
+                        report.append(f'Submitted with "{label}" – it went through{f": {said}" if said else ""}. '
+                                      "Go on with the next step of your plan.")
+                    elif verdict == "failed":
+                        report.append(f'Clicked "{label}", but NOT saved – the page shows: {said}. Fix those fields '
+                                      "(fill_form again with just them, and submit), or ask_user.")
+                    else:
+                        report.append(f'Clicked "{label}". The page doesn\'t clearly say it worked – look at it, then '
+                                      "call done or fix what's wrong.\n" + result)
+        elif wants_submit:
+            report.append("Not submitted, because of the ✗ / missing / error lines above: fix only those (fill_form "
+                          "with just them, and submit), or ask_user for what's missing.")
+        elif all_ok:
+            report.append("All fields filled and checked. Not submitted (no submit asked).")
+        check_progress(self.state, "fill_form", page != prev)
+        self.add_with_page(tool_msg, "\n".join(report), page, full=True)
+        return ran, False
 
     async def live_cell(self, ref):
         """One cell that's selected right now: read it from the formula bar – instant, and right

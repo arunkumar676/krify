@@ -74,6 +74,14 @@ TOOLS = [
           "press_key, hover, scroll or wait. You see the page after the last step.",
           {"steps": {"type": "array", "items": {"type": "object"}}},
           ["steps"]),
+    _tool("fill_form", "Fill a whole form in ONE call once you have every value: Krify fills each field (text, "
+          "dropdown, checkbox/radio), checks them all, and only if all is right clicks submit – you hear back only "
+          "if something is wrong. field = its name as in [Form].",
+          {"fields": {"type": "array", "items": {"type": "object", "properties": {"field": TEXT, "value": TEXT},
+                                                  "required": ["field", "value"]}},
+           "submit": {"type": "string", "description": "Its submit button's text (e.g. \"Save Activity\"); omit to fill only"},
+           "then_done": {"type": "boolean", "description": "false if the task goes on after submitting"}},
+          ["fields"]),
     _tool("plan", "Write/update your checklist; start finished steps with ✔. done_when: a new finish "
           "check, only when the site turned out different from what you planned.",
           {"steps": {"type": "array", "items": TEXT}, "done_when": TEXT}, ["steps"]),
@@ -83,7 +91,7 @@ TOOLS = [
           "play, pause, speed (value e.g. 1.25), seek (value e.g. 3:05, 90, +10, -10), mute, unmute, status.",
           {"action": {"type": "string", "enum": ["play", "pause", "speed", "seek", "mute", "unmute", "status"]},
            "value": TEXT}, ["action"]),
-    _tool("more_tools", "Add tools you need but don't have: forms (batch), tabs (new/switch/close tab), sheets "
+    _tool("more_tools", "Add tools you need but don't have: forms (fill_form, batch), tabs (new/switch/close tab), sheets "
           "(sheet_query, read_cells, go_to_cell, type_here), mouse (hover, drag), look (inspect), lists (get_records), "
           "media (video).",
           {"group": {"type": "string", "enum": ["forms", "tabs", "sheets", "mouse", "look", "lists", "media"]}}, ["group"]),
@@ -101,7 +109,7 @@ TOOLS = [
 TOOL_GROUPS = {
     "basic": ["open_url", "go_back", "reload", "click", "type", "select_option", "scroll", "press_key", "wait",
               "read_text", "find_text", "find_elements", "plan", "note", "ask_user", "done", "more_tools"],
-    "forms": ["batch"],
+    "forms": ["fill_form", "batch"],
     "tabs": ["new_tab", "switch_tab", "close_tab"],
     "sheets": ["sheet_query", "read_cells", "go_to_cell", "type_here"],
     "mouse": ["hover", "click_at", "drag"],

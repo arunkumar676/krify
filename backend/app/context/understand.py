@@ -31,6 +31,9 @@ Reply with ONLY this JSON, nothing else:
   Current page is a Google Sheet: read_text to see the columns, then sheet_query (SQL) for the answer.
   A video on the page (play, pause, speed, seek, mute): ONE step with the video tool, e.g. "Set the video
   speed to 2x with the video tool" – never plan the player's menus (Settings › Playback speed).
+  Filling a form: ONE step for all its fields and the submit, e.g. "Fill Full Name, Email and Phone with
+  fill_form and submit" (missing values: a step before it to ask the user for all of them at once) – never
+  one step per field.
 - done_when: how to tell the task is finished, as something visible (e.g. "both prices are noted from
   real pages"). Going to / opening a page: just that page being open (its title or URL, or its menu item
   marked current/selected) – don't require content you only assume that page has.

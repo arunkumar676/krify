@@ -13,6 +13,7 @@ import dataclasses
 import hashlib
 import itertools
 import json
+import re
 import os
 import sys
 
@@ -407,6 +408,53 @@ def form_batch():
         reply(call("click", element=5, label="More actions"), raw("wait", "{bad json"),
               call("done", summary="Saved.")),
         tool("done", summary="Saved the activity."),
+    ])
+
+
+CONTACTS = ["Anu", "Ravi"]
+
+
+def form_fill(browser, args, name):
+    """type / select_option on the form page that really changes the form (fill_form reads it back)."""
+    page = browser.page["model"]["pages"][0]
+    n, value = args.get("element"), str(args.get("text") if name == "type" else args.get("option"))
+    if name == "select_option" and n == 4 and value not in CONTACTS:
+        return f'Error: no option "{value}" in this dropdown. Its options: {", ".join(CONTACTS)}.'
+    for f in (page.get("form") or {}).get("fields") or []:
+        if f["id"] == n:
+            f.update(filled=True, value=value)
+        if name == "select_option" and n == 5 and f["id"] == 6:
+            f["disabled"] = False  # Activity Type opens once a channel is chosen
+    for e in page["elements"]:
+        if e["id"] == n and name == "type":
+            e["text"] = re.sub(r' \(value: "[^"]*"\)$', "", e["text"]) + f' (value: "{value}")'
+        if name == "select_option" and n == 5 and e["id"] == 6:
+            e["states"] = [s for s in e["states"] if s != "disabled"]
+    return f"Done: {name}."
+
+
+FORM_HANDLERS = {"type": lambda b, a: form_fill(b, a, "type"), "select_option": lambda b, a: form_fill(b, a, "select_option")}
+
+
+@scenario
+def fill_form_submits():
+    # Every field in one call, the dependent dropdown after its parent, the check, the submit: one AI call in all.
+    return Scenario("fill_form_submits", "form", ["add an activity: subject Call Acme, contact Anu, channel Phone, type Follow-up"],
+                    plans=["not json"], handlers=FORM_HANDLERS, moves={("click", 16): "list"}, replies=[
+        tool("fill_form", fields=[{"field": "Subject", "value": "Call Acme"}, {"field": "Contact", "value": "Anu"},
+                                  {"field": "Channel", "value": "Phone"}, {"field": "Activity Type", "value": "Follow-up"}],
+             submit="Save Activity"),
+    ])
+
+
+@scenario
+def fill_form_problems():
+    # A dropdown miss and an unknown field: nothing is submitted, the AI gets one report with only the problems.
+    return Scenario("fill_form_problems", "form", ["add an activity for contact Nobody, priority high"],
+                    plans=["not json"], handlers=FORM_HANDLERS, moves={("click", 16): "list"}, replies=[
+        tool("fill_form", fields=[{"field": "Contact", "value": "Nobody"}, {"field": "Priority", "value": "High"},
+                                  {"field": "Channel", "value": "Phone"}], submit="Save Activity"),
+        tool("ask_user", question="Nobody isn't a contact here (Anu, Ravi) and there is no Priority field. Which contact?"),
     ])
 
 

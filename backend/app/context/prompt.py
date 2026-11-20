@@ -39,6 +39,7 @@ DROPDOWNS = """- Dropdowns (a select, or a "clickable" field like "Select a cont
 
 # forms: the [Form] line and batch.
 FORMS = """- [Form] line: Required fields (✓ filled / ✗ empty) and Optional ones. Fill each Required ✗ from the request (dummy/test: any option or short placeholder); if values are missing, ask_user ONCE for all of them, with the options you saw. Optional: only what the user mentioned, never ask. Leave ✓ alone. Don't Save with a Required ✗.
+- Once you have all the values: ONE fill_form with every field (names as in [Form]) and submit = the form's Save/Submit button – not one field per step. It fills, checks and submits; fix only the ✗ lines it reports.
 - Save before leaving a form (links, menus, sidebar); then check ⚠ ALERTS for "Form error".
 - batch: never include a dropdown option's number (options appear only once the list is open)."""
 

@@ -182,6 +182,13 @@ Key mechanics worth knowing before touching the loop (they live in the layer mod
   `options`/`items` prop (current fiber, ≤3 components up) without opening anything. Non-React sites
   fall back to the options `pickInCustomDropdown` saw when it last opened that dropdown (`seenOptions`).
   Either way the line reads `dropdown "…" (options: a, b, …, +N more)`.
+- **Whole forms in one call (`fill_form`, forms group)**: the AI sends every field by its [Form] name plus the
+  submit button's text; `ToolsMixin.fill_form` (`tools/actions.py`, pure helpers in `tools/form_fill.py`) finds each
+  field by name on a fresh page view (numbers may shift), fills it through `do_action` (all guards and Allow/Block
+  still apply; a disabled dependent dropdown is retried briefly), then reads the form back and checks every value
+  in code. Submit is clicked only if all are ✓, no required field is empty and the page shows no error; a clear
+  success after it ends the task with no further AI call (`then_done=false` to go on). Anything else goes back to
+  the AI as one ✓/✗ report plus the page. The planner plans a form as one step (`understand.py`).
 - **Answer format**: the prompt and the `done` tool ask for a one-line answer, then 3+ items as
   `- item` / `1. item` lines; `formatText()` in `sidepanel.js` (escape first) renders those as lists.
 - **Plan approval**: the planner (`make_plan`) always writes a plan, but the user only has to approve it when

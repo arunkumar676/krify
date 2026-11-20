@@ -295,7 +295,7 @@ class Agent(ToolsMixin, GuardrailsMixin, ContextMixin, MemoryMixin, OutputMixin)
             # Batch: several actions in one reply (e.g. filling a form). The page is shown after the
             # last one; the batch stops early if the page changed (element numbers may have moved).
             calls = reply.tool_calls
-            action_count = sum(c.function.name in ACTION_OPS | {"batch"} for c in calls)
+            action_count = sum(c.function.name in ACTION_OPS | {"batch", "fill_form"} for c in calls)
             if action_count > 1:
                 await self.ui("step", f"📦 {min(action_count, MAX_BATCH)} steps at once")
             actions_done = 0
@@ -312,7 +312,7 @@ class Agent(ToolsMixin, GuardrailsMixin, ContextMixin, MemoryMixin, OutputMixin)
 
                 if finished:
                     self.messages.append({**tool_msg, "content": "Skipped."})
-                elif name in ACTION_OPS | {"batch", "done"} and self.state.plan and not self.state.plan_approved:
+                elif name in ACTION_OPS | {"batch", "fill_form", "done"} and self.state.plan and not self.state.plan_approved:
                     self.messages.append({**tool_msg, "content": PLAN_NOT_APPROVED})
                     check_progress(self.state, name, False)
                 elif name in ACTION_OPS and batch_stopped:
@@ -463,6 +463,12 @@ class Agent(ToolsMixin, GuardrailsMixin, ContextMixin, MemoryMixin, OutputMixin)
                         self.messages.append({**tool_msg, "content": str(result)})
                     if name in ("find_elements", "inspect"):
                         self.state.boost_next = True  # it already flagged this page as unclear – help it decide
+                elif name == "fill_form":  # every field, the check and the submit – no AI call in between
+                    ran, finished = await self.fill_form(tool_msg, args)
+                    actions_done += ran
+                    if not finished and self.state.loop_question:
+                        await self.stop_looping()
+                        finished = True
                 elif name == "batch":
                     actions_done += await self.run_batch(tool_msg, args.get("steps"))
                     if self.state.loop_question:
