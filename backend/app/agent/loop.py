@@ -49,7 +49,7 @@ from app.verification.changes import change_lines, click_result, opened_site_ask
 from app.verification.claims import check_claims, check_handoff
 from app.verification.facts import WRONG_PAGE, WRONG_PRODUCT, check_facts, missing_models, missing_words
 from app.verification.filters import FILTER_HINT, check_filters, filter_dropdowns
-from app.verification.ui_state import blocking_status, check_ui_state
+from app.verification.ui_state import add_toasts, blocking_status, check_ui_state
 
 log = logging.getLogger("krify")
 
@@ -493,6 +493,7 @@ class Agent(ToolsMixin, GuardrailsMixin, ContextMixin, MemoryMixin, OutputMixin)
                     if not failed and same_page(before[0], self.state.current_url) and (diff := change_lines(self.state.page_changes)):
                         log.info("  %s", diff.replace("\n", "\n    "))
                         result = f"{result}\n{diff}"
+                        self.state.page_status = add_toasts(self.state.page_status, self.state.page_changes)
                     if (not failed and before[0] != self.state.current_url and not blocking_status(self.state.page_status)
                             and (opened_what_asked(self.state.task_text, clicked) if name == "click" else
                                  name == "open_url" and opened_site_asked(self.state.task_text, self.state.current_url,

@@ -10,6 +10,8 @@ things (a toggle closed again), or nothing ('' – nothing clear to say).
 import re
 from collections import Counter
 
+from app.verification.ui_state import toast_problems
+
 _LINE = re.compile(r"^\[\d+\]\s+(.*)$")
 # 'input text "Search" (value: "mouse")' -> 'input text "Search"': the role and label only, so a typed
 # value, (empty) or (checked) doesn't count as a new element. Lines without a label are kept whole.
@@ -153,7 +155,9 @@ def change_lines(changes):
     if not isinstance(changes, dict):
         return ""
     lines = []
-    for key, sign in (("added", "+"), ("changed", "~"), ("removed", "-"), ("texts", "+ text:")):
+    # Most telling first: what changed ("1 item in cart" → "2 items in cart") is usually what the action
+    # did; new and gone elements next; free text (often a re-drawn header or menu) last.
+    for key, sign in (("changed", "~"), ("added", "+"), ("removed", "-"), ("texts", "+ text:")):
         part = changes.get(key) or {}
         shown = part.get("shown") or []
         lines += [f"{sign} {line}" if key != "texts" else f'{sign} "{line}"' for line in shown]
@@ -161,7 +165,9 @@ def change_lines(changes):
             lines.append(f"{sign} (+{part['more']} more)")
     if not lines:
         return "Page changes after your action: none (nothing on the page changed)."
-    return "Page changes after your action (+ new, ~ changed, - gone):\n" + "\n".join(lines)
+    # A problem message the page showed (a toast or popup: "Sorry, there was a problem") goes on top.
+    warn = "".join(f'⚠ The page answered: "{t}" – read it before going on.\n' for t in toast_problems(changes))
+    return warn + "Page changes after your action (~ changed, + new, - gone):\n" + "\n".join(lines)
 
 
 def click_result(before, after, clicked, title="", open_list=None):
